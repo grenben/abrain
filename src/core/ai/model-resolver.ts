@@ -6,6 +6,8 @@ import type { ParsedModelId, Recipe, TouchpointKind, ChatTouchpoint, EmbeddingTo
 import { getRecipe, RECIPES } from './recipes/index.ts';
 import { AIConfigError } from './errors.ts';
 import { renderCanonicalMigrationCommands } from './defaults.ts';
+import { codexCli } from './recipes/codex-cli.ts';
+import { privateCodexEnabled } from './private-codex.ts';
 
 /**
  * Split "openai:text-embedding-3-large" or "openai/text-embedding-3-large"
@@ -63,7 +65,10 @@ export function parseModelId(id: string): ParsedModelId {
  */
 export function resolveRecipe(modelId: string): { parsed: ParsedModelId; recipe: Recipe } {
   const parsed = parseModelId(modelId);
-  const recipe = getRecipe(parsed.providerId);
+  // Staged private-only provider: deliberately absent from the public registry.
+  const recipe = parsed.providerId === 'codex-cli' && privateCodexEnabled()
+    ? codexCli
+    : getRecipe(parsed.providerId);
   if (!recipe) {
     throw new AIConfigError(
       `Unknown provider: "${parsed.providerId}"`,

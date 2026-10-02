@@ -33,7 +33,7 @@ import { z } from 'zod';
 
 import { DEFAULT_CHARS_PER_TOKEN, DEFAULT_SAFETY_FACTOR, embedRequestMaxInputTokens, planEmbedRequests, rerankRequestMaxInputTokens, truncateEmbedInputs } from './embed-batch-plan.ts';
 export { splitByTokenBudget, capBatchItems, NO_BATCH_CAP_SUB_BATCH_ITEMS } from './embed-batch-plan.ts';
-import { BudgetTracker, type BudgetKind } from '../budget/budget-tracker.ts';
+import { BudgetExhausted, BudgetTracker } from '../budget/budget-tracker.ts';
 import { failedCallUsage, recordOnTracker } from './budget-record.ts';
 import type {
   AIGatewayConfig,
@@ -67,6 +67,8 @@ import { mergedProviderEnv } from './provider-env.ts';
 import { buildGatewayConfig, foldNativeBaseUrlsFromFilePlane } from './build-gateway-config.ts';
 import { invokeAI, sdkInvocationUsage, responseInvocationUsage, hasAIInvocationGuard, isAIInvocationPolicyError } from './invocation-guard.ts';
 import { createGuardedGeneration, chatInvocation } from './guarded-generation.ts';
+import { isPrivateCodexModel, isQualifiedModelId, prefixWithProviderFrom } from './private-codex.ts';
+import { instantiateCliLanguageModel } from './providers/cli-language-model-factory.ts';
 const guardedGeneration = createGuardedGeneration(() => DEFAULT_MAX_OUTPUT_TOKENS);
 
 // ---- Gateway-wide AI-HTTP timeout (v0.42.20.0, #1762/#1775) ----
@@ -572,8 +574,9 @@ export async function reconfigureGatewayWithEngine(engine: BrainEngine): Promise
   // the existing provider prefix from cfg so the gateway keeps routing to
   // the right recipe. If the resolved string already contains a `:`, it
   // came from a `provider:model` override and we use it as-is.
-  const expansionFull = newExpansion.includes(':') ? newExpansion : prefixWithProviderFrom(cfg.expansion_model ?? DEFAULT_EXPANSION_MODEL, newExpansion);
-  const chatFull = newChat.includes(':') ? newChat : prefixWithProviderFrom(cfg.chat_model ?? DEFAULT_CHAT_MODEL, newChat);
+  const providers = listRecipes().map(recipe => recipe.id);
+  const expansionFull = isQualifiedModelId(newExpansion, providers) ? newExpansion : prefixWithProviderFrom(cfg.expansion_model ?? DEFAULT_EXPANSION_MODEL, newExpansion);
+  const chatFull = isQualifiedModelId(newChat, providers) ? newChat : prefixWithProviderFrom(cfg.chat_model ?? DEFAULT_CHAT_MODEL, newChat);
 
   _config = { ...cfg, expansion_model: expansionFull, chat_model: chatFull };
   setGatewayModelSource('expansion', expansionFull, gatewayModelSource('expansion', expansionDetailed, expansionEffective));
@@ -583,11 +586,13 @@ export async function reconfigureGatewayWithEngine(engine: BrainEngine): Promise
   return _config;
 }
 
-/** Carry over the provider prefix from `original` when `bare` lacks one. */
-function prefixWithProviderFrom(original: string, bare: string): string {
-  const colon = original.indexOf(':');
-  if (colon === -1) return bare;
-  return `${original.slice(0, colon)}:${bare}`;
+function refuseUnpricedPrivateCodex(tracker: BudgetTracker, modelId: string): void {
+  const cap = tracker.cap;
+  if (cap === undefined) return;
+  throw new BudgetExhausted(
+    `BudgetTracker: private Codex model "${modelId}" has unknown cost and unbounded output; refusing under a finite hard budget.`,
+    { reason: 'no_pricing', spent: tracker.totalSpent, cap, modelId },
+  );
 }
 
 /**
@@ -2272,15 +2277,8 @@ function instantiateExpansion(recipe: Recipe, modelId: string, cfg: AIGatewayCon
       const baseURL = resolveNativeBaseUrl('anthropic', cfg);
       return createAnthropic({ apiKey, ...(baseURL ? { baseURL } : {}) }).languageModel(modelId);
     }
-    case 'claude-cli': {
-      // The CLI handles its own auth (OAuth session); spawn the subprocess
-      // directly via the same LanguageModelV2 implementation chat uses. There
-      // is no separate expansion path because claude-cli does not declare a
-      // separate expansion touchpoint — but routing here keeps the switch
-      // exhaustive and lets a future expansion touchpoint use the same code.
-      const { ClaudeCliLanguageModel } = require('./providers/claude-cli-language-model.ts');
-      return new ClaudeCliLanguageModel(modelId);
-    }
+    case 'claude-cli':
+    case 'codex-cli': return instantiateCliLanguageModel(recipe.implementation, modelId);
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
       const auth = applyResolveAuth(recipe, cfg, 'expansion');
@@ -2389,6 +2387,9 @@ export async function expand(query: string): Promise<string[]> {
 
   try {
     const requestedModelId = getExpansionModel();
+    if (tracker && isPrivateCodexModel(requestedModelId)) {
+      refuseUnpricedPrivateCodex(tracker, requestedModelId);
+    }
     const { model, recipe, modelId } = await resolveExpansionProvider(requestedModelId);
     const modelLabel = `${recipe.id}:${modelId}`;
     const recordExpansionUsage = (usage: unknown, countsAsCall: boolean): void =>
@@ -2425,7 +2426,7 @@ export async function expand(query: string): Promise<string[]> {
       return parseExpansionResponse(textResult.text) ?? [];
     };
 
-    if (recipe.implementation === 'claude-cli') {
+    if (recipe.implementation === 'claude-cli' || recipe.implementation === 'codex-cli') {
       // claude-cli is NOT structured-output capable, despite being a 'native'
       // tier recipe. ClaudeCliLanguageModel.doGenerate ignores
       // `options.responseFormat` entirely (it renders prompt → `claude
@@ -2527,6 +2528,7 @@ export async function expand(query: string): Promise<string[]> {
     });
     return all;
   } catch (err) {
+    if (err instanceof BudgetExhausted) throw err;
     if (isAIInvocationPolicyError(err)) throw err;
     // Expansion is best-effort: on failure, fall back to the original query alone.
     const normalized = normalizeAIError(err, 'expand');
@@ -3165,15 +3167,8 @@ function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig):
       const baseURL = resolveNativeBaseUrl('anthropic', cfg);
       return createAnthropic({ apiKey, ...(baseURL ? { baseURL } : {}) }).languageModel(modelId);
     }
-    case 'claude-cli': {
-      // The CLI handles its own auth (OAuth session managed by `claude`
-      // login). Subprocess-based LanguageModelV2 dispatches via the recipe
-      // path so per-call routing works: `claude-cli:claude-sonnet-4-6` lands
-      // here, while sibling `litellm:gpt-5.4` continues through the
-      // openai-compatible path below. No env-var switch, no global flag.
-      const { ClaudeCliLanguageModel } = require('./providers/claude-cli-language-model.ts');
-      return new ClaudeCliLanguageModel(modelId);
-    }
+    case 'claude-cli':
+    case 'codex-cli': return instantiateCliLanguageModel(recipe.implementation, modelId);
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
       const auth = applyResolveAuth(recipe, cfg, 'chat');
@@ -3380,9 +3375,20 @@ export function toAISDKTools(tools: ChatToolDef[] | undefined): Record<string, a
   }, {} as Record<string, any>);
 }
 
+function assertPrivateCodexResponseSchema(model: string, responseSchema: ChatOpts['responseSchema']): void {
+  if (isPrivateCodexModel(model) && responseSchema) throw new AIConfigError('Codex CLI does not support responseSchema.');
+}
+
+function reserveChatBudget(tracker: BudgetTracker | null, modelId: string, estimatedInputTokens: number, maxOutputTokens: number): void {
+  if (!tracker) return;
+  if (isPrivateCodexModel(modelId)) refuseUnpricedPrivateCodex(tracker, modelId);
+  tracker.reserve({ modelId, estimatedInputTokens, maxOutputTokens, kind: 'chat', label: 'gateway.chat' });
+}
+
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const tracker = __budgetStore.getStore() ?? null;
   const modelStrEarly = opts.model ?? getChatModel();
+  assertPrivateCodexResponseSchema(modelStrEarly, opts.responseSchema);
 
   // Guardrail seam: classify ONLY the latest user message before provider
   // inference. Observe-only / fail-open; no-op without a registered guardrail.
@@ -3408,15 +3414,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   // runtime, or no_pricing (when cap is set). Pre-resolution model id is
   // fine here — resolveChatProvider would map aliases the same way for the
   // cost lookup. record() below uses the real result.model.
-  if (tracker) {
-    tracker.reserve({
-      modelId: modelStrEarly,
-      estimatedInputTokens,
-      maxOutputTokens,
-      kind: 'chat' as BudgetKind,
-      label: 'gateway.chat',
-    });
-  }
+  reserveChatBudget(tracker, modelStrEarly, estimatedInputTokens, maxOutputTokens);
 
   // Test seam: when a test transport is installed, route through it without
   // touching provider resolution, AI SDK, or any network. See

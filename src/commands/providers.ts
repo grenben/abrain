@@ -13,6 +13,7 @@ import { loadConfig } from '../core/config.ts';
 import { AIConfigError, AITransientError } from '../core/ai/errors.ts';
 import { lookupEmbeddingPrice } from '../core/embedding-pricing.ts';
 import type { Recipe } from '../core/ai/types.ts';
+import { splitProviderModelId } from '../core/model-id.ts';
 
 const SCHEMA_VERSION = 1;
 
@@ -187,10 +188,25 @@ async function runTest(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  const parsePublicModel = (model: string): { providerId: string; modelId: string } => {
+    const parsed = splitProviderModelId(model);
+    const providerId = parsed.provider?.trim().toLowerCase() ?? '';
+    const modelId = parsed.model.trim();
+    // Check the public catalog rather than treating getRecipe as an access
+    // check: the gateway also knows private recipes that this CLI must refuse.
+    if (providerId && listRecipes().some(recipe => recipe.id === providerId)) {
+      return { providerId, modelId };
+    }
+    console.error(`Model provider '${providerId || modelId}' is not available through public providers. Run \`gbrain providers list\` to see supported providers.`);
+    process.exit(1);
+    throw new Error('unreachable');
+  };
+
   // If --model passed, override gateway for this test (touchpoint-aware).
   if (modelArg) {
-    const [providerId, ...modelParts] = modelArg.split(':');
-    const modelId = modelParts.join(':');
+    const parsedModel = parsePublicModel(modelArg);
+    const { providerId, modelId } = parsedModel;
+    const normalizedModelArg = `${providerId}:${modelId}`;
     const recipe = getRecipe(providerId);
 
     // codex finding #10: when `--model` is passed, the user is probing a
@@ -226,6 +242,9 @@ async function runTest(args: string[]): Promise<void> {
       }
     } catch { /* loadConfig throws when no brain configured — first-time install path; the no-config branch above handles it. */ }
 
+    // Keep `providers test` constrained to the same public provider catalog as
+    // list/env/explain. In particular, never let a private gateway capability
+    // turn an explicit model into a public smoke-test target.
     // Reuse the SAME resolver the production path uses (buildGatewayConfig —
     // also used by cli.ts#connectEngine and init-embed-check.ts) so the probe
     // sees the identical base_urls / provider_chat_options / folded API keys
@@ -240,17 +259,39 @@ async function runTest(args: string[]): Promise<void> {
       const dims = recipe?.touchpoints.embedding?.default_dims ?? 1536;
       configureGateway({
         ...baseGatewayConfig,
-        embedding_model: modelArg,
+        embedding_model: normalizedModelArg,
         embedding_identity_unverified: false,
         embedding_dimensions: dims,
       });
     } else {
       configureGateway({
         ...baseGatewayConfig,
-        chat_model: modelArg,
+        chat_model: normalizedModelArg,
       });
     }
-    void modelId; // intentionally unused but preserved for readability
+  } else {
+    // An omitted --model still tests the configured model. Validate it before
+    // asking the gateway about availability (which may probe private adapters).
+    let cfg: ReturnType<typeof loadConfig> | null = null;
+    try { cfg = loadConfig(); } catch { /* No brain/configured model. */ }
+    const configuredModel = tpArg === 'embedding' ? cfg?.embedding_model : cfg?.chat_model;
+    if (configuredModel) {
+      const { providerId, modelId } = parsePublicModel(configuredModel);
+      const normalizedModel = `${providerId}:${modelId}`;
+      const recipe = getRecipe(providerId);
+      if (tpArg === 'embedding') {
+        const baseGatewayConfig = cfg ? buildGatewayConfig(cfg) : { env: { ...process.env } };
+        configureGateway({
+          ...baseGatewayConfig,
+          embedding_model: normalizedModel,
+          embedding_identity_unverified: false,
+          embedding_dimensions: recipe?.touchpoints.embedding?.default_dims ?? 1536,
+        });
+      } else {
+        const baseGatewayConfig = cfg ? buildGatewayConfig(cfg) : { env: { ...process.env } };
+        configureGateway({ ...baseGatewayConfig, chat_model: normalizedModel });
+      }
+    }
   }
 
   if (!gwIsAvailable(tpArg)) {

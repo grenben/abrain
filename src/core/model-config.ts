@@ -28,6 +28,7 @@ import { loadConfig } from './config.ts';
 import { mergedProviderEnv } from './ai/provider-env.ts';
 import { RECIPES } from './ai/recipes/index.ts';
 import { latestOpenAITiers, rankOpenAIChatModels } from './ai/openai-latest.ts';
+import { isPrivateCodexModel } from './ai/private-codex.ts';
 
 export type ModelTier = 'utility' | 'reasoning' | 'deep' | 'subagent';
 
@@ -267,6 +268,11 @@ function resolveEffectiveModelForTier(
     const fullPin = rawPin === 'gpt'
       ? discoveredOrStaticOpenAITier('deep')
       : DEFAULT_ALIASES[rawPin] ?? rawPin;
+    // Codex is deliberately absent from RECIPES and has no API key. Preserve
+    // explicit private pins so the gateway can either route them under the
+    // trusted gate or fail closed when that gate is absent; never silently
+    // replace an operator's Codex choice with a public paid default.
+    if (isPrivateCodexModel(fullPin)) return { model: fullPin, source: 'file_pin' };
     if (providerKeyReady(fullPin, merged)) return { model: fullPin, source: 'file_pin' };
     if (!_unservablePinWarningsEmitted.has(fullPin)) {
       _unservablePinWarningsEmitted.add(fullPin);
