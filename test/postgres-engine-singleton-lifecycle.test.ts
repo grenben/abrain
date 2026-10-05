@@ -85,6 +85,15 @@ describe('module-singleton ownership under concurrent connects', () => {
     expect(db.getConnection()).toBe(pool);
     expect(await dialedAfterSettling()).toBe(1);
   });
+
+  test('a managed target is refused while a URL singleton candidate is in flight', async () => {
+    settle(db.connect({ database_url: url }));
+    await expect(db.connect({
+      engine: 'postgres',
+      managed_postgres: { manager_id: 'gbrain-managed-postgres', cluster_id: '00000000-0000-4000-8000-000000000001' },
+    })).rejects.toThrow('Managed PostgreSQL pool could not be constructed or verified.');
+    expect(db.getConnection()).toBeDefined();
+  });
 });
 
 describe('db.disconnect()', () => {

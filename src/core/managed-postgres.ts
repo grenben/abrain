@@ -7,6 +7,7 @@ import { configDir as defaultConfigDir } from './config.ts';
 import { acquireLifecycleLock, assertPrivateFile, atomicWriteOwnedFile, canonicalPath, captureInitializationReceipt, createOwner, ensurePrivateDir, managedPaths, matchesInitializationOrManaged, readCredentials, readInitializationReceipt, readOwner, validateExistingManagedAncestry, validateManagedDirectories, writeInitializationReceipt, writeOwner, type InitializationReceipt, type ManagedPaths, type OwnerMetadata } from './managed-postgres/ownership.ts';
 import { HOMEBREW_SAFE_ENV, inspectPackages, planPackageImpact, REQUIRED_FORMULAE, type PackageDeps, type PackageImpact, type PackageReport } from './managed-postgres/packages.ts';
 import { ProcessCancelledError, ProcessTerminationUnconfirmedError, runProcess, type ProcessResult, type ProcessRunner } from './managed-postgres/process.ts';
+import { MANAGED_IDENTITY_QUERY, renderManagedPostgresConfig, verifyManagedPostgresLiveIdentity, type LiveIdentity } from './managed-postgres/identity.ts';
 
 export type ManagedClassification = 'absent' | 'packages_missing' | 'packages_incompatible' | 'allocated' | 'partial' | 'ownership_unknown' | 'stopped' | 'port_collision' | 'startup_failure' | 'auth_failure' | 'wrong_server' | 'missing_extension' | 'schema_incomplete' | 'ready';
 export interface ManagedContext {
@@ -91,7 +92,6 @@ async function allocatePort(ctx: ManagedContext): Promise<number> {
   for (const port of [55432, 55433, 55435, 55436, 55437, 55438]) if (!(await portInUse(ctx, port))) return port;
   throw new Error('No available managed PostgreSQL port was found.');
 }
-function configLiteral(value: string): string { return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`; }
 function writeRuntimeSocketMarker(ctx: ManagedContext, socket: string, owner: OwnerMetadata, uid: number): void {
   if (socket === owner.rootPath + '/socket') { durable(ctx, () => ensurePrivateDir(socket, uid)); return; }
   durable(ctx, () => ensurePrivateDir(socket, uid));
@@ -102,12 +102,7 @@ function writeRuntimeSocketMarker(ctx: ManagedContext, socket: string, owner: Ow
   } else durable(ctx, () => writeSecret(marker, `${owner.managerId}:${owner.clusterId}:${uid}`));
 }
 function clusterConfigText(owner: OwnerMetadata, paths: ManagedPaths): { config: string; hba: string } {
-  const config = join(paths.data, 'postgresql.conf'), hba = join(paths.data, 'pg_hba.conf');
-  return { config: [
-    `listen_addresses = '127.0.0.1'`, `port = ${owner.port}`, `unix_socket_directories = ${configLiteral(owner.socketPath)}`,
-    "unix_socket_permissions = 0700", "password_encryption = 'scram-sha-256'", `hba_file = ${configLiteral(hba)}`,
-    `logging_collector = on`, `log_directory = ${configLiteral(paths.log)}`, "log_filename = 'postgresql.log'", 'log_file_mode = 0600', 'ssl = off', 'max_connections = 20', '',
-  ].join('\n'), hba: 'local all all scram-sha-256\nhost all all 127.0.0.1/32 scram-sha-256\nhost all all 0.0.0.0/0 reject\nhost all all ::/0 reject\nhost replication all 0.0.0.0/0 reject\nhost replication all ::/0 reject\n' };
+  return renderManagedPostgresConfig(owner, paths);
 }
 function validateAllocatedConfigState(paths: ManagedPaths, receipt: InitializationReceipt, managed: { config: string; hba: string }, uid: number): void {
   if (!matchesInitializationOrManaged(join(paths.data, 'postgresql.conf'), uid, receipt.sha256.postgresqlConf, managed.config) ||
@@ -144,8 +139,6 @@ function psqlArgs(owner: OwnerMetadata, database: string, sql: string): string[]
 async function sql(ctx: ManagedContext, owner: OwnerMetadata, paths: ManagedPaths, database: string, statement: string): Promise<ProcessResult> {
   return runtime(ctx).runner(join(owner.binaryPrefix, 'bin', 'psql'), psqlArgs(owner, database, statement), { timeoutMs: 8_000, outputLimit: 64 * 1024, env: commandEnv(ctx, join(paths.root, 'pgpass')) });
 }
-interface LiveIdentity { data_directory: string; server_version_num: number; port: number; database: string; role: string; system_identifier: string; listen_addresses: string; socket_directories: string; config_file: string; hba_file: string; password_encryption: string; }
-const IDENTITY_QUERY = `SELECT json_build_object('data_directory',current_setting('data_directory'),'server_version_num',current_setting('server_version_num')::int,'port',current_setting('port')::int,'database',current_database(),'role',current_user,'system_identifier',(SELECT system_identifier::text FROM pg_control_system()),'listen_addresses',current_setting('listen_addresses'),'socket_directories',current_setting('unix_socket_directories'),'config_file',current_setting('config_file'),'hba_file',current_setting('hba_file'),'password_encryption',current_setting('password_encryption'))::text`;
 const EXTENSIONS_QUERY = `SELECT COALESCE(json_agg(extname ORDER BY extname),'[]'::json)::text FROM pg_extension WHERE extname IN ('pg_trgm','pgcrypto','vector')`;
 const VECTOR_OPERATION = `SELECT '[1,2,3]'::vector <-> '[1,2,3]'::vector`;
 function classifyIdentity(result: ProcessResult, owner: OwnerMetadata, paths: ManagedPaths): ManagedClassification | LiveIdentity {
@@ -157,15 +150,10 @@ function classifyIdentity(result: ProcessResult, owner: OwnerMetadata, paths: Ma
   }
   let value: unknown;
   try { value = JSON.parse(result.stdout.toString('utf8').trim()); } catch { return 'wrong_server'; }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'wrong_server';
-  const live = value as Partial<LiveIdentity>;
-  const strings: Array<keyof LiveIdentity> = ['data_directory', 'database', 'role', 'system_identifier', 'listen_addresses', 'socket_directories', 'config_file', 'hba_file', 'password_encryption'];
-  if (strings.some(key => typeof live[key] !== 'string' || !live[key]!.trim()) || typeof live.server_version_num !== 'number' || !Number.isFinite(live.server_version_num) || !Number.isInteger(live.server_version_num) || typeof live.port !== 'number' || !Number.isFinite(live.port) || !Number.isInteger(live.port)) return 'wrong_server';
-  if (live.data_directory !== owner.dataPath || live.server_version_num < 170000 || live.server_version_num >= 180000 || live.port !== owner.port || live.database !== 'postgres' || live.role !== owner.role || live.system_identifier !== owner.systemIdentifier || live.listen_addresses !== '127.0.0.1' || live.socket_directories !== owner.socketPath || live.config_file !== join(paths.data, 'postgresql.conf') || live.hba_file !== join(paths.data, 'pg_hba.conf') || live.password_encryption !== 'scram-sha-256') return 'wrong_server';
-  return live as LiveIdentity;
+  return verifyManagedPostgresLiveIdentity(value, owner, paths, 'postgres') ?? 'wrong_server';
 }
 async function liveProof(ctx: ManagedContext, owner: OwnerMetadata, paths: ManagedPaths, requireCapabilities = true): Promise<ManagedClassification> {
-  const identity = classifyIdentity(await sql(ctx, owner, paths, 'postgres', IDENTITY_QUERY), owner, paths);
+  const identity = classifyIdentity(await sql(ctx, owner, paths, 'postgres', MANAGED_IDENTITY_QUERY), owner, paths);
   if (typeof identity === 'string') return identity;
   if (!requireCapabilities) return 'ready';
   const extensionResult = await sql(ctx, owner, paths, owner.database, EXTENSIONS_QUERY);

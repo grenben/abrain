@@ -5,9 +5,18 @@ import { applyPostgresForwardReferenceBootstrap } from './engine-sql/bootstrap.t
 import type { BrainEngine } from './engine.ts';
 import { verifySchema } from './schema-verify.ts';
 import { isRetryableConnError } from './retry-matcher.ts';
+import { normalizeEngineTarget } from './engine-target.ts';
+import { configDir } from './config.ts';
+import { createManagedPostgresCandidate, ManagedPostgresPoolError } from './managed-postgres-pool.ts';
+import { resolveManagedPostgresConnection } from './managed-postgres/connection.ts';
+import { ManagedPostgresSingleton } from './managed-postgres-singleton.ts';
 
 let sql: ReturnType<typeof postgres> | null = null;
 let connectedUrl: string | null = null;
+const managedSingleton = new ManagedPostgresSingleton<ReturnType<typeof postgres>>(
+  () => new ManagedPostgresPoolError(),
+  endPoolBounded,
+);
 
 /**
  * #1972: hard upper bound (seconds) on a single pool `.end()` drain. postgres.js
@@ -241,14 +250,15 @@ export async function setSessionDefaults(_sql: ReturnType<typeof postgres>): Pro
 }
 
 export function getConnection(): ReturnType<typeof postgres> {
-  if (!sql) {
+  const connection = sql ?? managedSingleton.getPool();
+  if (!connection) {
     throw new GBrainError(
       'No database connection',
       'connect() has not been called',
       'Run gbrain init --supabase or gbrain init --url <connection_string>',
     );
   }
-  return sql;
+  return connection;
 }
 
 /**
@@ -266,6 +276,21 @@ export function getConnection(): ReturnType<typeof postgres> {
  * Back-compat: callers that ignore the return value are unaffected.
  */
 export async function connect(config: EngineConfig): Promise<boolean> {
+  const target = normalizeEngineTarget(config);
+  if (target.kind === 'postgres-managed') {
+    const identity = `postgres-managed:v1:${target.managed_postgres.manager_id}:${target.managed_postgres.cluster_id}`;
+    if (sql) throw new ManagedPostgresPoolError();
+    const options = buildPoolOptions();
+    return managedSingleton.connect(identity, async () => {
+      return createManagedPostgresCandidate(config, options, {
+          resolve: resolveManagedPostgresConnection,
+          create: postgres,
+          end: endPoolBounded,
+          configDir,
+        });
+    });
+  }
+  if (managedSingleton.isBusy()) throw new ManagedPostgresPoolError();
   if (sql) {
     // Warn if a different URL is passed — the old connection is still in use
     if (config.database_url && connectedUrl && config.database_url !== connectedUrl) {
@@ -274,7 +299,7 @@ export async function connect(config: EngineConfig): Promise<boolean> {
     return false; // joined an existing singleton — caller is a borrower
   }
 
-  const url = config.database_url;
+  const url = target.kind === 'postgres-url' ? target.database_url : undefined;
   if (!url) {
     throw new GBrainError(
       'No database URL',
@@ -286,22 +311,7 @@ export async function connect(config: EngineConfig): Promise<boolean> {
   try {
     const prepare = resolvePrepare(url);
     const timeouts = resolveSessionTimeouts();
-    const opts: Record<string, unknown> = {
-      max: resolvePoolSize(),
-      idle_timeout: 20,
-      connect_timeout: 10,
-      // Explicit (matches the postgres.js implicit default; GBRAIN_POOL_MAX_LIFETIME_S overrides).
-      max_lifetime: resolveMaxLifetimeSeconds(),
-      types: {
-        // Register pgvector type
-        bigint: postgres.BigInt,
-      },
-      // Silence postgres NOTICE-level messages by default ("relation already
-      // exists, skipping" floods stdout under idempotent CREATE statements
-      // during migrations + initSchema, and breaks stdout-parsing callers like
-      // `gbrain jobs submit --json | ...`). Opt back in with GBRAIN_PG_NOTICES=1.
-      onnotice: process.env.GBRAIN_PG_NOTICES === '1' ? undefined : () => {},
-    };
+    const opts = buildPoolOptions();
     if (Object.keys(timeouts).length > 0) {
       opts.connection = timeouts;
     }
@@ -334,6 +344,12 @@ export async function connect(config: EngineConfig): Promise<boolean> {
 }
 
 export async function disconnect(): Promise<void> {
+  // Detach both singleton modes synchronously before any await.
+  const s = sql;
+  sql = null;
+  connectedUrl = null;
+  const managedClose = managedSingleton.disconnect();
+  // Invalidate a managed proof synchronously, before the audit import yields.
   // v0.41.25.0 (#1570) — instrument every disconnect call site so v0.41.26
   // can identify the caller that's nulling the module singleton mid-cycle.
   // Best-effort: audit failure must never block the actual disconnect.
@@ -349,10 +365,19 @@ export async function disconnect(): Promise<void> {
   // concurrent module connect() can't observe a non-null `sql` mid-teardown and
   // join a pool that's already closing. Mirrors the v0.41.8.0 PGLite-disconnect
   // snapshot+early-null pattern.
-  const s = sql;
-  sql = null;
-  connectedUrl = null;
-  if (s) await endPoolBounded(s);
+  await Promise.all([s ? endPoolBounded(s) : Promise.resolve(), managedClose]);
+}
+
+function buildPoolOptions(): Record<string, unknown> {
+  const timeouts = resolveSessionTimeouts();
+  const options: Record<string, unknown> = {
+    max: resolvePoolSize(), idle_timeout: 20, connect_timeout: 10,
+    max_lifetime: resolveMaxLifetimeSeconds(),
+    types: { bigint: postgres.BigInt },
+    onnotice: process.env.GBRAIN_PG_NOTICES === '1' ? undefined : () => {},
+  };
+  if (Object.keys(timeouts).length) options.connection = timeouts;
+  return options;
 }
 
 export async function initSchema(): Promise<void> {
