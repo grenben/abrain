@@ -16,6 +16,26 @@ import { assertLegacySkillFilesystemWrite } from './writer-guard.ts';
 import { readPrivateText } from '../harness/credentials.ts';
 import { harnessAdapter } from '../harness/registry.ts';
 import { OperationError } from '../ops/contract.ts';
+import { normalizeEngineTarget } from '../engine-target.ts';
+import {
+  assertNoManagedPostgresTarget,
+  ManagedPostgresUnsupportedError,
+  MANAGED_POSTGRES_UNSUPPORTED_MESSAGE,
+} from '../managed-postgres-unsupported.ts';
+
+function sameConfiguredTarget(a: GBrainConfig, b: GBrainConfig): boolean {
+  return JSON.stringify(normalizeEngineTarget(a)) === JSON.stringify(normalizeEngineTarget(b)) &&
+    a.engine === b.engine && a.database_url === b.database_url && a.database_path === b.database_path;
+}
+
+function managedPostgresRefusalPlan() {
+  return {
+    status: 'pending', reason: 'managed_postgres_unsupported', native: 'unverified',
+    legacy_copy_written: false,
+    migration: { owned_unchanged: [] as string[], modified: [] as string[], missing: [] as string[], ownership: 'unverified' },
+    next_action: MANAGED_POSTGRES_UNSUPPORTED_MESSAGE,
+  };
+}
 
 async function bindBridgeTarget(engine: BrainEngine, brainId: string, adapter: string, root: string, follow: boolean): Promise<LocalRegistration> {
   const registration = JSON.parse(readPrivateText(confinedPath(configDir(), `persistence/${brainId}.cli.json`), 65536)) as LocalRegistration;
@@ -73,6 +93,13 @@ export async function sharedBrainBridgePlan(options: {
   dest?: string;
   statePath?: string;
 }) {
+  if (options.config) {
+    try { assertNoManagedPostgresTarget(options.config, 'bridge-install'); }
+    catch (error) {
+      if (error instanceof ManagedPostgresUnsupportedError) return managedPostgresRefusalPlan();
+      throw error;
+    }
+  }
   let active = !!options.config?.remote_mcp;
   let unavailable = false;
   if (!active && options.engine) {
@@ -127,6 +154,7 @@ export async function installSharedBrainBridge(options: {
   dryRun?: boolean;
   statePath?: string;
 }) {
+  assertNoManagedPostgresTarget(options.config ?? { engine: 'postgres' }, 'bridge-install');
   const plan = await sharedBrainBridgePlan(options);
   if (!plan) return options.policy ? {
     status: 'pending', reason: options.policy === 'follow' ? 'shared_content_migration_required' : 'memory_only', native: 'unverified', legacy_copy_written: false,
@@ -142,7 +170,7 @@ export async function installSharedBrainBridge(options: {
   const home = dirname(configDir());
   const stored = readFileConfigState(join(configDir(), 'config.json'));
   if (resolveBrainId(null) !== 'host' || stored.kind !== 'present' || stored.config.engine !== config.engine ||
-    stored.config.database_url !== config.database_url || stored.config.database_path !== config.database_path) {
+    !sameConfiguredTarget(stored.config, config)) {
     return pending('bound_connection_required', 'The selected brain depends on ambient routing. Use an installation-bound connection instead of creating a launcher that could select another brain.');
   }
   const source = await resolveSourceWithTier(engine, null);
@@ -233,3 +261,5 @@ export async function installSharedBrainBridge(options: {
     return pending('shared_enrollment_unavailable', 'Memory and unrelated files are preserved. Verify local writer authority, follow policy and the owned router/cache, then retry; native activation is unverified.');
   } finally { lock.release(); }
 }
+
+export const __testing = { sameConfiguredTarget };

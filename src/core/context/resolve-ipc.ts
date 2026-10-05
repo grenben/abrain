@@ -59,6 +59,7 @@ import {
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { configDir } from '../config.ts';
+import { managedPostgresIdentity, normalizeEngineTarget } from '../engine-target.ts';
 import { claimLocalIpcBinding, isWindowsIpcPipe, localIpcSocketPath, prepareLocalIpcPath, unixSocketProbeState } from './ipc-path.ts';
 import type { EntityCandidate } from './entity-salience.ts';
 import type { WindowTurn } from './entity-salience.ts';
@@ -336,6 +337,7 @@ export interface IpcPathConfig {
   engine?: 'postgres' | 'pglite';
   database_path?: string;
   database_url?: string;
+  managed_postgres?: unknown;
 }
 
 /**
@@ -358,6 +360,11 @@ export interface IpcPathConfig {
  */
 export function resolveSocketPathForConfig(cfg: IpcPathConfig | null | undefined, kind: 'resolve' | 'persistence' = 'resolve'): string | null {
   if (!cfg) return null;
+  if (cfg.managed_postgres !== undefined) {
+    const target = normalizeEngineTarget(cfg as Parameters<typeof normalizeEngineTarget>[0]);
+    if (target.kind !== 'postgres-managed') return null;
+    return localIpcSocketPath(join(ipcRunDir(), `${kind}-${hash12(managedPostgresIdentity(target.managed_postgres))}.sock`));
+  }
   if (cfg.engine === 'pglite' && cfg.database_path) return localIpcSocketPath(join(cfg.database_path, `.gbrain-${kind}.sock`));
   if (cfg.engine === 'postgres' && cfg.database_url) {
     return localIpcSocketPath(join(ipcRunDir(), `${kind}-${hash12(cfg.database_url)}.sock`));
@@ -372,6 +379,11 @@ export function resolveSocketPathForConfig(cfg: IpcPathConfig | null | undefined
  */
 export function ipcSecretPathForConfig(cfg: IpcPathConfig | null | undefined): string | null {
   if (!cfg) return null;
+  if (cfg.managed_postgres !== undefined) {
+    const target = normalizeEngineTarget(cfg as Parameters<typeof normalizeEngineTarget>[0]);
+    if (target.kind !== 'postgres-managed') return null;
+    return join(ipcRunDir(), `secret-${hash12(managedPostgresIdentity(target.managed_postgres))}`);
+  }
   if (cfg.engine === 'pglite' && cfg.database_path) return ipcSecretPath(cfg.database_path);
   if (cfg.engine === 'postgres' && cfg.database_url) {
     return join(ipcRunDir(), `secret-${hash12(cfg.database_url)}`);

@@ -42,6 +42,11 @@ afterEach(() => {
 });
 
 describe('parseAddArgs', () => {
+  test('managed PostgreSQL mount arguments use the shared refusal', () => {
+    expect(() => parseAddArgs(['m', '--managed-postgres', '01234567-89ab-cdef-0123-456789abcdef']))
+      .toThrow('Managed PostgreSQL references are not supported by this workflow yet; no changes were made. Use an ordinary URL/PGLite target for this operation or wait for support.');
+  });
+
   test('minimal pglite add', () => {
     const parsed = parseAddArgs([
       'yc-media',

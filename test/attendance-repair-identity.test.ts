@@ -43,6 +43,14 @@ describe('attendance repair credential-free connection identity', () => {
     expect(attendanceRepairConnectionIdentity('other-brain', { engine: 'pglite', database_path: './brain.pglite' })).not.toBe(original);
   });
 
+  test('managed host identity is canonical, brain-bound, and independent of forbidden URL material', () => {
+    const reference = { manager_id: 'gbrain-managed-postgres' as const, cluster_id: '00000000-0000-4000-8000-000000000123' };
+    const first = attendanceRepairConnectionIdentity('host', { engine: 'postgres', managed_postgres: reference });
+    expect(first).toBe(attendanceRepairConnectionIdentity('host', { engine: 'postgres', managed_postgres: { ...reference } }));
+    expect(first).not.toBe(attendanceRepairConnectionIdentity('other-brain', { engine: 'postgres', managed_postgres: reference }));
+    expect(first).toBe(attendanceRepairHash(['host', { engine: 'postgres-managed', identity: 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000123' }]));
+  });
+
   test('multihost and IPv6 targets have distinct normalized identities without credential input', () => {
     const url = 'postgresql://first.example.invalid:5433,[2001:db8::1]:5434/brain_example';
     const original = attendanceRepairConnectionIdentity('host', { engine: 'postgres', database_url: url });

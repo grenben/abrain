@@ -8,6 +8,7 @@ import { loadConfig, isThinClient, toEngineConfig } from '../core/config.ts';
 import { createEngine } from '../core/engine-factory.ts';
 import { resolveBrainId } from '../core/brain-resolver.ts';
 import { loadMounts } from '../core/brain-registry.ts';
+import { managedPostgresIdentity, normalizeEngineTarget } from '../core/engine-target.ts';
 import { readRepairSidecar } from '../core/pglite-repair.ts';
 import { applyAttendanceRepair, previewAttendanceRepair, attendanceRepairHash, assertAttendanceRepairAuthority,
   validateAttendanceRepairScope, ATTENDANCE_REPAIR_LIMIT, type AttendanceRepairPreview,
@@ -30,6 +31,15 @@ export function attendanceRepairConnectionIdentity(brainId: string, connection: 
   if (connection.engine === 'pglite') {
     if (!connection.database_path || connection.database_path.includes('\0')) throw new Error('Attendance repair requires an explicit PGLite path');
     return attendanceRepairHash([brainId, { engine: 'pglite', path: resolve(connection.database_path) }]);
+  }
+  if (connection.managed_postgres !== undefined) {
+    try {
+      const target = normalizeEngineTarget(connection);
+      if (target.kind !== 'postgres-managed') throw new Error();
+      return attendanceRepairHash([brainId, { engine: 'postgres-managed', identity: managedPostgresIdentity(target.managed_postgres) }]);
+    } catch {
+      throw new Error('Attendance repair requires a supported explicit PostgreSQL endpoint and database');
+    }
   }
   try {
     if (connection.engine && connection.engine !== 'postgres') throw new Error();
@@ -172,7 +182,7 @@ export async function runAttendanceRepairCli(args: string[], brainFlag: string |
       throw new Error('Attendance repair cannot create a PGLite database');
     if (readRepairSidecar(connection.database_path).episodeStartedAt !== null)
       throw new Error('Resolve the existing PGLite repair episode before attendance preview');
-  } else if (!connection.database_url) throw new Error('Attendance repair requires an existing database URL');
+  } else if (!connection.database_url && !connection.managed_postgres) throw new Error('Attendance repair requires an existing database URL');
   const brainIdentity = attendanceRepairConnectionIdentity(brainId, connection);
   const engine = await createEngine(connection);
   const previousRepair = process.env.GBRAIN_PGLITE_WAL_REPAIR;

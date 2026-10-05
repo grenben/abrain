@@ -10,10 +10,11 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { withEnv } from './helpers/with-env.ts';
+import { EngineTargetError } from '../src/core/engine-target.ts';
 
 let home: string;
 const origHome = process.env.GBRAIN_HOME;
@@ -113,6 +114,43 @@ describe('register + read round trip', () => {
     expect(readdirSync(workerRegistryDir()).length).toBe(1);
     cleanup();
     expect(readdirSync(workerRegistryDir()).length).toBe(0);
+  });
+});
+
+describe('managed worker identity', () => {
+  test('separates managed clusters and keeps registry entries free of references', async () => {
+    const { currentBrainId, workerRegistryDir, registerWorker } = await reg();
+    const configFile = join(home, '.gbrain', 'config.json');
+    mkdirSync(join(home, '.gbrain'), { recursive: true });
+    const refA = { manager_id: 'gbrain-managed-postgres', cluster_id: '123e4567-e89b-42d3-a456-426614174000' };
+    const refB = { manager_id: 'gbrain-managed-postgres', cluster_id: '123e4567-e89b-42d3-a456-426614174001' };
+    writeFileSync(configFile, JSON.stringify({ engine: 'postgres', managed_postgres: refA }));
+    const idA = currentBrainId();
+    expect(idA).not.toContain(refA.cluster_id);
+    writeFileSync(configFile, JSON.stringify({ engine: 'postgres', managed_postgres: refB }));
+    const idB = currentBrainId();
+    expect(idB).not.toBe(idA);
+    mkdirSync(workerRegistryDir(), { recursive: true });
+    writeFileSync(join(workerRegistryDir(), `worker-${process.pid}.json`), JSON.stringify({
+      pid: process.pid, queue: 'managed', brain_id: idA, started_at: Date.now(), nice_requested: null, nice_effective: null,
+    }));
+    expect((await reg()).readWorkers(() => null)).toHaveLength(0);
+    writeFileSync(configFile, JSON.stringify({ engine: 'postgres', managed_postgres: refA }));
+    const cleanup = registerWorker({ pid: process.pid, queue: 'managed', nice_requested: null, nice_effective: null, started_at: Date.now() });
+    try {
+      const entry = JSON.stringify(JSON.parse(readFileSync(join(workerRegistryDir(), `worker-${process.pid}.json`), 'utf8')));
+      expect(entry).toContain(idA);
+      expect(entry).not.toContain(refA.cluster_id);
+    } finally { cleanup(); }
+  });
+
+  test('invalid managed identity fails before registry directory/file writes', async () => {
+    const { currentBrainId, registerWorker, workerRegistryDir } = await reg();
+    mkdirSync(join(home, '.gbrain'), { recursive: true });
+    writeFileSync(join(home, '.gbrain', 'config.json'), JSON.stringify({ engine: 'postgres', managed_postgres: { manager_id: 'bad', cluster_id: 'secret' } }));
+    expect(() => currentBrainId()).toThrow(EngineTargetError);
+    expect(() => registerWorker({ pid: process.pid, queue: 'bad', nice_requested: null, nice_effective: null, started_at: Date.now() })).toThrow(EngineTargetError);
+    expect(existsSync(workerRegistryDir())).toBe(false);
   });
 });
 

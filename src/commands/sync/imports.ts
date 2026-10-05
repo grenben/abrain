@@ -7,7 +7,8 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { AbortError } from '../../core/abort-check.ts';
 import { importCompanyBrainFile } from '../../core/company-brain/profile.ts';
-import { loadConfig } from '../../core/config.ts';
+import { loadConfig, toEngineConfig } from '../../core/config.ts';
+import { normalizeEngineTarget } from '../../core/engine-target.ts';
 import { serr } from '../../core/console-prefix.ts';
 import { createNoopPacer, createDbPacer, observed } from '../../core/db-pacer.ts';
 import type { DbPacer } from '../../core/db-pacer.ts';
@@ -42,6 +43,15 @@ type ImportContext = {
   progressAt: { last: number };
   progress: SyncProgress;
 };
+
+export function syncWorkerEngineConfig(config: ReturnType<typeof toEngineConfig>, poolSize: number) {
+  return { ...config, poolSize };
+}
+
+export function canUseSyncWorkerEngines(engineKind: BrainEngine['kind'], target: ReturnType<typeof normalizeEngineTarget> | null): boolean {
+  return engineKind === 'postgres' && (target?.kind === 'postgres-managed'
+    || (target?.kind === 'postgres-url' && !!target.database_url));
+}
 
 /** The add/modify drain. Returns a partial result when the run aborts. */
 export async function runImportsPhase(
@@ -380,10 +390,12 @@ async function drainImports(
     if (runParallel) {
       // A1 (v0.22.13): use engine.kind discriminator instead of config?.engine
       // string compare or constructor.name sniff. Q3: belt-and-suspenders fall
-      // back to serial when database_url is unset, so we never crash on a null
-      // assertion if config is missing.
+      // back to serial only when no Postgres target is configured. PGLite stays
+      // serial; a validated managed Postgres reference is worker-capable.
       const config = loadConfig();
-      if (engine.kind === 'pglite' || !config?.database_url) {
+      const engineConfig = config ? toEngineConfig(config) : null;
+      const target = engineConfig ? normalizeEngineTarget(engineConfig) : null;
+      if (!canUseSyncWorkerEngines(engine.kind, target)) {
         for (const path of importsToDo) {
           // v0.41.13.0 (T2 / D-V3-2): per-iteration abort check. PGLite
           // serial fallback inside the parallel branch (database_url unset).
@@ -398,7 +410,6 @@ async function drainImports(
         const { resolvePoolSize } = await import('../../core/db.ts');
         const workerPoolSize = Math.min(2, resolvePoolSize(2));
         const workerCount = Math.min(effectiveConcurrency, importsToDo.length);
-        const databaseUrl = config.database_url;
 
         // Q4 (v0.22.13): banner on stderr so stdout stays clean for --json.
         serr(`  Parallel sync: ${workerCount} workers for ${importsToDo.length} files`);
@@ -411,7 +422,7 @@ async function drainImports(
           // already-connected engines on any one failure.
           for (let i = 0; i < workerCount; i++) {
             const eng = new PostgresEngine();
-            await eng.connect({ database_url: databaseUrl, poolSize: workerPoolSize });
+            await eng.connect(syncWorkerEngineConfig(engineConfig!, workerPoolSize));
             workerEngines.push(eng);
           }
 

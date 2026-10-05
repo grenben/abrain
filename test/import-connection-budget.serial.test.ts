@@ -22,13 +22,15 @@ import type { BrainEngine } from '../src/core/engine.ts';
 
 let workerConnects = 0;
 let workerPoolSizes: number[] = [];
+let workerConfigs: Array<Record<string, unknown>> = [];
 
 mock.module('../src/core/postgres-engine.ts', () => ({
   PostgresEngine: class {
     readonly kind = 'postgres';
-    async connect(opts?: { poolSize?: number }): Promise<void> {
+    async connect(opts?: Record<string, unknown>): Promise<void> {
       workerConnects += 1;
-      workerPoolSizes.push(opts?.poolSize ?? -1);
+      workerPoolSizes.push(typeof opts?.poolSize === 'number' ? opts.poolSize : -1);
+      workerConfigs.push(opts ?? {});
     }
     async disconnect(): Promise<void> {}
   },
@@ -80,6 +82,7 @@ afterAll(() => {
 beforeEach(() => {
   workerConnects = 0;
   workerPoolSizes = [];
+  workerConfigs = [];
   delete process.env.GBRAIN_POOL_SIZE;
 });
 
@@ -214,4 +217,28 @@ test('PGLite bypasses the Postgres connection budget clamp', async () => {
 
   expect(workerConnects).toBe(0);
   expect(logs.some(line => line.includes('Using 3 parallel workers'))).toBe(true);
+});
+
+test('PGLite config with a Postgres parent falls back to serial without creating workers', async () => {
+  process.env.GBRAIN_MAX_CONNECTIONS = '40';
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ engine: 'pglite', database_path: join(root, 'brain.pglite') }));
+  await runImport(fakeEngine('postgres'), ['--no-embed', '--workers', '2', importDir]);
+  expect(workerConnects).toBe(0);
+  expect(workerConfigs).toEqual([]);
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ engine: 'postgres', database_url: 'postgresql://example.invalid/gbrain' }));
+});
+
+test('managed Postgres import workers receive the validated target and standard budget without URL/path fields', async () => {
+  process.env.GBRAIN_MAX_CONNECTIONS = '14';
+  const target = { manager_id: 'gbrain-managed-postgres', cluster_id: '00000000-0000-4000-8000-000000000123' };
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ engine: 'postgres', managed_postgres: target }));
+  await runImport(fakeEngine('postgres'), ['--no-embed', '--workers', '2', importDir]);
+  expect(workerConnects).toBe(2);
+  expect(workerPoolSizes).toEqual([2, 2]);
+  for (const workerConfig of workerConfigs) {
+    expect(workerConfig).toMatchObject({ engine: 'postgres', managed_postgres: target, poolSize: 2 });
+    expect(workerConfig.database_url).toBeUndefined();
+    expect(workerConfig.database_path).toBeUndefined();
+  }
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ engine: 'postgres', database_url: 'postgresql://example.invalid/gbrain' }));
 });

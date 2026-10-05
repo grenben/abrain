@@ -27,7 +27,7 @@ import {
   DEFAULT_BYTES_WARN,
 } from '../core/content-sanity.ts';
 import { loadOperatorLiterals } from '../core/content-sanity-literals.ts';
-import { loadConfig, loadConfigWithEngine, gbrainPath } from '../core/config.ts';
+import { loadConfig, loadConfigWithEngine, gbrainPath, toEngineConfig } from '../core/config.ts';
 import { isDurabilityHardened, commitWriteThroughFile } from '../core/brain-repo-durability.ts';
 import type { BrainEngine } from '../core/engine.ts';
 
@@ -394,17 +394,14 @@ async function resolveLintContentSanity(
     // configured. Avoids spinning up a fresh PGLite just to read 4 config
     // keys in a CI lint run that has no brain at all. Safe to create +
     // disconnect here because nothing else shares this process's singleton.
-    const hasEngineConfig = !!(base?.database_url || base?.database_path);
+    const hasEngineConfig = !!(base?.database_url || base?.database_path || base?.managed_postgres);
     if (hasEngineConfig) {
       try {
         const { createEngine } = await import('../core/engine-factory.ts');
-        const engine = await createEngine({
-          engine: base!.engine,
-          database_url: base!.database_url,
-          database_path: base!.database_path,
-        });
+        const engineConfig = toEngineConfig(base!);
+        const engine = await createEngine(engineConfig);
         try {
-          await engine.connect({});
+          await engine.connect(engineConfig);
           const lifted = await loadConfigWithEngine(engine, base);
           cs = lifted?.content_sanity ?? cs;
         } finally {

@@ -14,10 +14,29 @@ import { normalizeAlias } from '../src/core/search/alias-normalize.ts';
 import { resolveEntitiesToPointers } from '../src/core/context/retrieval-reflex.ts';
 import { extractCandidates } from '../src/core/context/entity-salience.ts';
 import { createGBrainContextEngine } from '../src/core/context-engine.ts';
-import { disposeReflex, lexicalArmsEnabled } from '../src/core/context/reflex.ts';
+import { disposeReflex, lexicalArmsEnabled, reflexPostgresTargetKey } from '../src/core/context/reflex.ts';
 import { TAKES_FENCE_BEGIN, TAKES_FENCE_END } from '../src/core/takes-fence.ts';
 
 let engine: PGLiteEngine;
+
+test('reflex engine cache keys distinguish normalized targets without exposing managed UUIDs', () => {
+  const config = (cluster_id: string) => ({ engine: 'postgres', managed_postgres: { manager_id: 'gbrain-managed-postgres', cluster_id } });
+  const managedA = reflexPostgresTargetKey(config('00000000-0000-4000-8000-000000000123') as never)!;
+  const managedSame = reflexPostgresTargetKey(config('00000000-0000-4000-8000-000000000123') as never)!;
+  const managedB = reflexPostgresTargetKey(config('00000000-0000-4000-8000-000000000124') as never)!;
+  expect(managedA).toBe(managedSame);
+  expect(managedA).not.toBe(managedB);
+  const url = 'postgresql://user:reflex-test-password@db.example.invalid/brain';
+  const urlKey = reflexPostgresTargetKey({ engine: 'postgres', database_url: url } as never)!;
+  const otherUrlKey = reflexPostgresTargetKey({ engine: 'postgres', database_url: 'postgresql://user:secret@other.example.invalid/brain' } as never)!;
+  const path = '/private/reflex-test/brain.pglite';
+  const pathKey = reflexPostgresTargetKey({ engine: 'pglite', database_path: path } as never)!;
+  for (const raw of ['00000000-0000-4000-8000-000000000123', url, 'reflex-test-password', path]) {
+    expect(`${managedA} ${urlKey} ${pathKey}`).not.toContain(raw);
+  }
+  expect(urlKey).not.toBe(otherUrlKey);
+  expect(urlKey).toMatch(/^reflex-target:v1:[a-f0-9]{64}$/);
+});
 
 async function seed(slug: string, title: string, body: string, source = 'default') {
   await engine.executeRaw(

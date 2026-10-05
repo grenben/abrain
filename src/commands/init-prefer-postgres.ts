@@ -43,6 +43,7 @@ import {
 } from '../core/docker-postgres.ts';
 import { redactPgUrl, redactUrlsInText } from '../core/url-redact.ts';
 import { classifyPgAccessError } from '../core/pg-access-classify.ts';
+import { assertNoManagedPostgresTarget } from '../core/managed-postgres-unsupported.ts';
 
 export interface PreferPostgresOpts {
   jsonOutput: boolean;
@@ -165,6 +166,7 @@ export async function runPreferPostgresLadder(o: PreferPostgresOpts): Promise<vo
   // and the PGLite floor overwrites config.json, orphaning the whole brain
   // because of an OUTAGE. Outages are db-repair's lane, not init's.
   const existing = loadConfigFileOnly();
+  assertNoManagedPostgresTarget(existing ?? {}, 'init-reinit');
   if (existing && (existing.engine || existing.database_url || existing.database_path || isThinClient(existing))) {
     console.error(
       '[prefer-postgres] a brain is already configured — refusing to re-run the ladder over it.\n' +

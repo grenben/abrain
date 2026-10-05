@@ -33,7 +33,9 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, appendFileSync } from 'node:fs';
-import { loadConfig, isEnvDisabled, type GBrainConfig } from '../config.ts';
+import { createHash } from 'node:crypto';
+import { loadConfig, isEnvDisabled, toEngineConfig, type GBrainConfig } from '../config.ts';
+import { managedPostgresIdentity, normalizeEngineTarget } from '../engine-target.ts';
 import type { BrainEngine } from '../engine.ts';
 import {
   extractCandidates,
@@ -340,6 +342,7 @@ async function resolve(
 }
 
 export function isPostgres(cfg: GBrainConfig | null): boolean {
+  if (cfg?.managed_postgres !== undefined) return true;
   if (cfg?.engine === 'postgres') return true;
   // engine unset but a database_url present → postgres (createEngine default).
   return !cfg?.engine && !!cfg?.database_url;
@@ -362,29 +365,49 @@ export async function getDirectPostgresEngine(cfg: GBrainConfig | null): Promise
 // connection-multiplication a per-session open would cause (Codex finding).
 let _pgEngine: BrainEngine | null = null;
 let _pgPending: Promise<BrainEngine | null> | null = null;
+let _pgTargetKey: string | null = null;
+let _pgPendingTargetKey: string | null = null;
 let _pgFailedUntil = 0; // cooldown so a transient connect failure doesn't storm
 
+export function reflexPostgresTargetKey(cfg: GBrainConfig): string | null {
+  try {
+    const target = normalizeEngineTarget(toEngineConfig(cfg));
+    const canonical = target.kind === 'postgres-managed'
+      ? `managed:${managedPostgresIdentity(target.managed_postgres)}`
+      : target.kind === 'postgres-url'
+        ? `postgres-url:${target.database_url ?? ''}`
+        : `pglite:${target.database_path ?? ''}`;
+    return `reflex-target:v1:${createHash('sha256').update(canonical).digest('hex')}`;
+  } catch {
+    return null;
+  }
+}
+
 async function getPostgresEngine(cfg: GBrainConfig | null): Promise<BrainEngine | null> {
-  if (_pgEngine) return _pgEngine;
+  if (!cfg) return null;
+  const targetKey = reflexPostgresTargetKey(cfg);
+  if (!targetKey) return null;
+  const engineConfig = toEngineConfig(cfg);
+  if (_pgEngine) return _pgTargetKey === targetKey ? _pgEngine : null;
   if (Date.now() < _pgFailedUntil) return null;
-  if (_pgPending) return _pgPending;
+  if (_pgPending) return _pgPendingTargetKey === targetKey ? _pgPending : null;
+  _pgPendingTargetKey = targetKey;
   _pgPending = (async () => {
     try {
       const { createEngine } = await import('../engine-factory.ts');
-      const engineConfig = {
-        engine: 'postgres' as const,
-        database_url: cfg?.database_url,
-        database_path: cfg?.database_path,
-      };
       const engine = await createEngine(engineConfig);
       await engine.connect(engineConfig);
       _pgEngine = engine;
+      _pgTargetKey = targetKey;
       return engine;
     } catch {
       _pgFailedUntil = Date.now() + 60_000; // 60s cooldown
       return null;
     } finally {
-      _pgPending = null;
+      if (_pgPendingTargetKey === targetKey) {
+        _pgPending = null;
+        _pgPendingTargetKey = null;
+      }
     }
   })();
   return _pgPending;
@@ -408,6 +431,8 @@ export async function disposeReflex(): Promise<void> {
   const e = _pgEngine;
   _pgEngine = null;
   _pgPending = null;
+  _pgTargetKey = null;
+  _pgPendingTargetKey = null;
   _pgFailedUntil = 0;
   if (e) {
     try { await e.disconnect(); } catch { /* noop */ }

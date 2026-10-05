@@ -13,6 +13,8 @@ import {
   type MountEntry,
 } from '../src/core/brain-registry.ts';
 import { GBrainError } from '../src/core/types.ts';
+import { ManagedPostgresUnsupportedError, MANAGED_POSTGRES_UNSUPPORTED_MESSAGE } from '../src/core/managed-postgres-unsupported.ts';
+import { __testing as registryTesting } from '../src/core/brain-registry.ts';
 
 /** Create a temp dir + write a mounts.json into it. Returns the path. */
 function tempMountsFile(contents: unknown): string {
@@ -94,6 +96,31 @@ describe('loadMounts — file-level parsing', () => {
 });
 
 describe('loadMounts — entry validation', () => {
+  test('managed mount fields are refused with the shared fixed error before projection', () => {
+    const uuid = '01234567-89ab-cdef-0123-456789abcdef';
+    const path = track(tempMountsFile({ version: 1, mounts: [{
+      id: 'managed', path: '/private/managed', engine: 'postgres',
+      managed_postgres: { manager_id: 'gbrain-managed-postgres', cluster_id: uuid },
+    }] }));
+    try { loadMounts(path); throw new Error('expected refusal'); }
+    catch (error) {
+      expect(error).toBeInstanceOf(ManagedPostgresUnsupportedError);
+      expect((error as Error).message).toBe(MANAGED_POSTGRES_UNSUPPORTED_MESSAGE);
+      expect((error as Error).message).not.toContain(uuid);
+      expect((error as Error).message).not.toContain('/private');
+    }
+    const malformed = { id: 'managed', path: '/private/managed', engine: 'postgres', managed_postgres: {} } as unknown as MountEntry;
+    expect(() => new BrainRegistry([malformed])).toThrow(ManagedPostgresUnsupportedError);
+    expect(() => registryTesting.mountToEngineConfig(malformed)).toThrow(ManagedPostgresUnsupportedError);
+  });
+
+  test('host engine projection retains its managed reference', () => {
+    const config = { engine: 'postgres', managed_postgres: {
+      manager_id: 'gbrain-managed-postgres', cluster_id: '01234567-89ab-cdef-0123-456789abcdef',
+    } } as unknown as import('../src/core/config.ts').GBrainConfig;
+    expect(registryTesting.hostToEngineConfig(config)).toEqual(config);
+  });
+
   test('accepts a minimal pglite entry', () => {
     const path = track(tempMountsFile({
       version: 1,
@@ -257,6 +284,46 @@ describe('BrainRegistry — resolution', () => {
 });
 
 describe('BrainRegistry — lazy init', () => {
+  test('mount boundary validates before gateway and configures gateway before ordinary engine connection', async () => {
+    const { __testing: cliTesting } = await import('../src/cli.ts');
+    const uuid = '01234567-89ab-cdef-0123-456789abcdef';
+    const maliciousPath = track(tempMountsFile({ version: 1, mounts: [{
+      id: 'managed', path: '/private/managed', engine: 'postgres',
+      managed_postgres: { manager_id: 'gbrain-managed-postgres', cluster_id: uuid },
+    }] }));
+    const maliciousEvents: string[] = [];
+    await expect(cliTesting.connectMountEngineBoundary('managed', {
+      loadRegistry: () => {
+        maliciousEvents.push('load-registry');
+        loadMounts(maliciousPath);
+        return { getBrain: async () => { maliciousEvents.push('connect'); return {}; } };
+      },
+      loadHostConfig: () => { maliciousEvents.push('load-config'); return { engine: 'pglite' }; },
+      configureGateway: () => { maliciousEvents.push('gateway'); },
+    })).rejects.toBeInstanceOf(ManagedPostgresUnsupportedError);
+    expect(maliciousEvents).toEqual(['load-registry']);
+
+    for (const [engine, dbField] of [
+      ['postgres', { database_url: 'postgresql://localhost/ordinary' }],
+      ['pglite', { database_path: '/tmp/ordinary' }],
+    ] as const) {
+      const ordinaryPath = track(tempMountsFile({ version: 1, mounts: [{
+        id: 'ordinary', path: '/tmp/ordinary-mount', engine, ...dbField,
+      }] }));
+      const events: string[] = [];
+      await cliTesting.connectMountEngineBoundary('ordinary', {
+        loadRegistry: () => {
+          events.push('load-registry');
+          const entries = loadMounts(ordinaryPath);
+          return { getBrain: async () => { events.push('connect'); return entries[0]; } };
+        },
+        loadHostConfig: () => { events.push('load-config'); return { engine: 'pglite' }; },
+        configureGateway: async () => { events.push('gateway'); },
+      });
+      expect(events).toEqual(['load-registry', 'load-config', 'gateway', 'connect']);
+    }
+  });
+
   test('getBrain does not connect until called', () => {
     const reg = new BrainRegistry([
       { id: 'lazy', path: '/tmp/lazy', engine: 'pglite', database_path: '/tmp/lazy/.pg', enabled: true },

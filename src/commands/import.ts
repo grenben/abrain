@@ -7,7 +7,8 @@ import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
 import { gitFirstCommitDates } from '../core/git-first-commit.ts';
 import { currentCompanyBrainSync, getCompanyBrainProfile, importCompanyBrainFile } from '../core/company-brain/profile.ts';
-import { loadConfig, gbrainPath } from '../core/config.ts';
+import { loadConfig, gbrainPath, toEngineConfig } from '../core/config.ts';
+import { normalizeEngineTarget } from '../core/engine-target.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import {
@@ -759,10 +760,14 @@ export async function runImport(
   try {
     if (actualWorkers > 1) {
       // v0.22.13 (PR #490 A1 + Q3): use engine.kind discriminator (not config.engine
-      // string sniff) and fall back to serial when database_url is unset. Both
-      // checks belt-and-suspenders so we never crash on a null assertion.
+      // string sniff) and fall back to serial only when no Postgres target is
+      // configured. PGLite remains serial; managed Postgres is worker-capable.
       const config = loadConfig();
-      if (engine.kind === 'pglite' || !config?.database_url) {
+      const engineConfig = config ? toEngineConfig(config) : null;
+      const target = engineConfig ? normalizeEngineTarget(engineConfig) : null;
+      const postgresTarget = target?.kind === 'postgres-managed'
+        || (target?.kind === 'postgres-url' && !!target.database_url);
+      if (engine.kind !== 'postgres' || !postgresTarget) {
         for (const file of files) {
           if (signal?.aborted) break;
           await processFile(engine, file);
@@ -774,7 +779,6 @@ export async function runImport(
         // controls the parent pool; GBRAIN_MAX_CONNECTIONS clamps the child
         // count above so the combined footprint stays within the operator's cap.
         const workerPoolSize = Math.min(2, resolvePoolSize(2));
-        const databaseUrl = config.database_url;
 
         // v0.22.13 (PR #490 A2): connect workers serially so a partial failure
         // leaves us with the connected ones already pushed onto workerEngines
@@ -785,7 +789,7 @@ export async function runImport(
           for (let i = 0; i < actualWorkers; i++) {
             if (signal?.aborted) break;
             const eng = new PostgresEngine();
-            await eng.connect({ database_url: databaseUrl, poolSize: workerPoolSize });
+            await eng.connect({ ...engineConfig!, poolSize: workerPoolSize });
             workerEngines.push(eng);
           }
 

@@ -19,6 +19,12 @@
 import { describe, test, expect } from 'bun:test';
 import { validateShellJobParams } from '../src/core/minions/handlers/shell-validate.ts';
 import { UnrecoverableError } from '../src/core/minions/types.ts';
+import { EngineTargetError } from '../src/core/engine-target.ts';
+import {
+  ManagedPostgresUnsupportedError,
+  MANAGED_POSTGRES_UNSUPPORTED_CODE,
+  MANAGED_POSTGRES_UNSUPPORTED_MESSAGE,
+} from '../src/core/managed-postgres-unsupported.ts';
 import type { GBrainConfig } from '../src/core/config.ts';
 
 const dbUrl = 'postgresql://test:test@localhost:5432/test';
@@ -160,6 +166,73 @@ describe('inherit — fail-fast on missing config value', () => {
       { cmd: 'echo', cwd: '/tmp', inherit: ['database_url'] },
       { config: { engine: 'postgres', database_url: '' } },
     )).toThrow(/worker has no database_url/);
+  });
+});
+
+describe('inherit — managed PostgreSQL subprocess boundary', () => {
+  const managedCfg = {
+    engine: 'postgres',
+    managed_postgres: {
+      manager_id: 'gbrain-managed-postgres',
+      cluster_id: '123e4567-e89b-12d3-a456-426614174000',
+    },
+    anthropic_api_key: 'sk-managed-config-test',
+  } as unknown as GBrainConfig;
+
+  test.each(['database_url', 'database_path', 'managed_postgres'] as const)(
+    'refuses forwarding %s with the shared redacted error',
+    (field) => {
+      const attackerValues = [
+        '123e4567-e89b-12d3-a456-426614174000',
+        '/private/attacker-managed-cluster',
+        'postgresql://attacker:secret@db.invalid/private',
+      ];
+      let error: unknown;
+      try {
+        validateShellJobParams(
+          { cmd: 'echo', cwd: '/tmp', inherit: [field] },
+          { config: managedCfg },
+        );
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(ManagedPostgresUnsupportedError);
+      expect((error as ManagedPostgresUnsupportedError).code).toBe(MANAGED_POSTGRES_UNSUPPORTED_CODE);
+      expect((error as Error).message).toBe(MANAGED_POSTGRES_UNSUPPORTED_MESSAGE);
+      for (const value of attackerValues) expect((error as Error).message).not.toContain(value);
+    },
+  );
+
+  test('malformed managed config retains EngineTargetError', () => {
+    const malformed = {
+      engine: 'postgres',
+      managed_postgres: { manager_id: 'attacker-manager', cluster_id: '/private/attacker-path' },
+    } as unknown as GBrainConfig;
+    expect(() => validateShellJobParams(
+      { cmd: 'echo', cwd: '/tmp', inherit: ['database_url'] },
+      { config: malformed },
+    )).toThrow(EngineTargetError);
+  });
+
+  test('unrelated API key inheritance remains available with managed config', () => {
+    const p = validateShellJobParams(
+      { cmd: 'echo', cwd: '/tmp', inherit: ['anthropic_api_key'] },
+      { config: managedCfg },
+    );
+    expect(p.inherit).toEqual(['anthropic_api_key']);
+  });
+
+  test('ordinary URL and PGLite locator inheritance remain available', () => {
+    const url = validateShellJobParams(
+      { cmd: 'echo', cwd: '/tmp', inherit: ['database_url'] },
+      { config: { engine: 'postgres', database_url: dbUrl } },
+    );
+    expect(url.inherit).toEqual(['database_url']);
+    const path = validateShellJobParams(
+      { cmd: 'echo', cwd: '/tmp', inherit: ['database_path'] },
+      { config: { engine: 'pglite', database_path: '/tmp/brain.db' } },
+    );
+    expect(path.inherit).toEqual(['database_path']);
   });
 });
 

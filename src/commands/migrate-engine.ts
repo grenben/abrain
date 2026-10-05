@@ -26,6 +26,7 @@ import { autopilotPausedMarkerPath, autopilotLockPath, markerHolderAlive, MIGRAT
 export { MIGRATE_PAUSE_MARKER_PREFIX };
 import { listLiveLocks } from '../core/db-lock.ts';
 import { queuePageProjection } from '../core/page-state/projections.ts';
+import { assertNoManagedPostgresTarget } from '../core/managed-postgres-unsupported.ts';
 
 interface MigrateOpts {
   targetEngine: 'postgres' | 'pglite';
@@ -778,11 +779,17 @@ export async function quiesceAutopilot(engine?: BrainEngine): Promise<(() => voi
   return resume;
 }
 
+function loadSupportedMigrationSourceConfig(): GBrainConfig | null {
+  const config = loadConfig();
+  if (config) assertNoManagedPostgresTarget(toEngineConfig(config), 'migration-source');
+  return config;
+}
+
 export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]): Promise<void> {
+  const config = loadSupportedMigrationSourceConfig();
+  const opts = parseArgs(args);
   await assertUnmanagedCanonicalWriter(sourceEngine, 'engine migration');
   await assertLegacyEngineMigration(sourceEngine);
-  const opts = parseArgs(args);
-  const config = loadConfig();
   if (!config) {
     console.error('No brain configured. Run: gbrain init');
     process.exit(1);

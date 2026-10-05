@@ -10,6 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,9 +27,14 @@ import {
   IPC_UNAVAILABLE,
 } from '../src/core/context/resolve-ipc.ts';
 import { withEnv } from './helpers/with-env.ts';
+import { EngineTargetError } from '../src/core/engine-target.ts';
+import { localIpcSocketPath } from '../src/core/context/ipc-path.ts';
 
 const URL_A = 'postgresql://user:hunter2@db.example.com:5432/brain_a';
 const URL_B = 'postgresql://user:hunter2@db.example.com:5432/brain_b';
+const MANAGED_A = { manager_id: 'gbrain-managed-postgres', cluster_id: '123e4567-e89b-42d3-a456-426614174000' };
+const MANAGED_B = { manager_id: 'gbrain-managed-postgres', cluster_id: '123e4567-e89b-42d3-a456-426614174001' };
+const hash12 = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 12);
 
 let tmp: string;
 
@@ -66,8 +72,9 @@ describe('resolveSocketPathForConfig (#4245)', () => {
     await inSandboxHome(() => {
       const p = resolveSocketPathForConfig({ engine: 'postgres', database_url: URL_A });
       expect(p).not.toBeNull();
-      expect(p!.startsWith(ipcRunDir())).toBe(true);
-      expect(p!).toMatch(/\/resolve-[0-9a-f]{12}\.sock$/);
+      const legacySocket = join(ipcRunDir(), `resolve-${hash12(URL_A)}.sock`);
+      expect(p).toBe(localIpcSocketPath(legacySocket));
+      expect(legacySocket).toMatch(/\/resolve-[0-9a-f]{12}\.sock$/);
       expect(p!).not.toContain('hunter2');
       // Deterministic: both ends (serve + hook) derive the identical path.
       expect(resolveSocketPathForConfig({ engine: 'postgres', database_url: URL_A })).toBe(p!);
@@ -88,8 +95,50 @@ describe('resolveSocketPathForConfig (#4245)', () => {
         database_path: leftover,
         database_url: URL_A,
       });
-      expect(p!.startsWith(ipcRunDir())).toBe(true);
+      expect(p).toBe(localIpcSocketPath(join(ipcRunDir(), `resolve-${hash12(URL_A)}.sock`)));
       expect(p!).not.toContain(leftover);
+    });
+  });
+
+  it('managed targets use canonical identity hashes for both private addresses', async () => {
+    await inSandboxHome(() => {
+      const cfg = { engine: 'postgres' as const, managed_postgres: MANAGED_A };
+      const socket = resolveSocketPathForConfig(cfg)!;
+      const secret = ipcSecretPathForConfig(cfg)!;
+      const identity = `postgres-managed:v1:${MANAGED_A.manager_id}:${MANAGED_A.cluster_id}`;
+      const legacySocket = join(ipcRunDir(), `resolve-${hash12(identity)}.sock`);
+      expect(socket).toBe(localIpcSocketPath(legacySocket));
+      expect(secret).toBe(join(ipcRunDir(), `secret-${hash12(identity)}`));
+      expect(legacySocket).toMatch(/\/resolve-[0-9a-f]{12}\.sock$/);
+      expect(secret).toMatch(/\/secret-[0-9a-f]{12}$/);
+      expect(resolveSocketPathForConfig(cfg)).toBe(socket);
+      expect(ipcSecretPathForConfig(cfg)).toBe(secret);
+      expect(socket).not.toContain(MANAGED_A.cluster_id);
+      expect(secret).not.toContain(MANAGED_A.cluster_id);
+      expect(resolveSocketPathForConfig({ engine: 'postgres', managed_postgres: MANAGED_B })).not.toBe(socket);
+      expect(ipcSecretPathForConfig({ engine: 'postgres', managed_postgres: MANAGED_B })).not.toBe(secret);
+      // Pure address derivation creates no run directory or secret file.
+      expect(() => statSync(ipcRunDir())).toThrow();
+    });
+  });
+
+  it('rejects invalid or contradictory managed targets before deriving an address', async () => {
+    await inSandboxHome(() => {
+      const invalid = () => resolveSocketPathForConfig({ engine: 'postgres', managed_postgres: { manager_id: 'bad', cluster_id: 'secret' } });
+      expect(invalid).toThrow(EngineTargetError);
+      let invalidError: unknown;
+      try { invalid(); } catch (error) { invalidError = error; }
+      expect(invalidError).toBeInstanceOf(EngineTargetError);
+      expect((invalidError as Error).message).not.toContain('secret');
+      expect((invalidError as Error).message).not.toContain('bad');
+
+      let contradictoryError: unknown;
+      try { ipcSecretPathForConfig({ engine: 'postgres', database_url: URL_A, managed_postgres: MANAGED_A }); }
+      catch (error) { contradictoryError = error; }
+      expect(contradictoryError).toBeInstanceOf(EngineTargetError);
+      expect((contradictoryError as Error).message).not.toContain(URL_A);
+      expect((contradictoryError as Error).message).not.toContain(MANAGED_A.cluster_id);
+      expect(() => statSync(ipcRunDir())).toThrow();
     });
   });
 });

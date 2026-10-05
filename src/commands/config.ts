@@ -11,6 +11,7 @@ import {
 
 import { redactPgUrl } from '../core/url-redact.ts';
 import { WRITER_ADMIN_LOCK_KEY } from '../core/persistence/admin-contract.ts';
+import { assertNoManagedPostgresTarget } from '../core/managed-postgres-unsupported.ts';
 
 // v0.36.x #892: sensitive config-key allowlist. The `show` path used a
 // loose `.includes('key')` check that also redacts (works); the `set` path
@@ -160,6 +161,10 @@ const CONFIG_SET_KNOWN_FLAGS = ['--force', '--coverage-override', '--yes'];
  * construction — dispatched BEFORE connectEngine via tryRunConfigEngineFree.
  */
 export async function handleDbPlaneRoutedKeys(key: string, value: string): Promise<boolean> {
+  if (isManagedTargetMutationKey(key)) {
+    const { loadConfigFileOnly } = await import('../core/config.ts');
+    assertNoManagedPostgresTarget(loadConfigFileOnly() ?? {}, 'config-target-mutation');
+  }
   if (key === 'engine') {
     console.error('[config] engine is INFERRED from database_url / database_path — it is never set directly.');
     console.error('[config] To move your data between engines:  gbrain migrate --to <supabase|pglite>');
@@ -211,27 +216,76 @@ export async function handleDbPlaneRoutedKeys(key: string, value: string): Promi
  * to change when the engine can't connect. Returns true when handled.
  */
 export async function tryRunConfigEngineFree(args: string[]): Promise<boolean> {
-  if (args[0] !== 'set') return false;
-  const key = args[1];
-  const value = args.slice(2).find((a) => !a.startsWith('-'));
-  if (!key || value === undefined) return false; // let the engine path print usage
-  if (key !== 'database_url' && key !== 'database_path' && key !== 'engine') return false;
-  return handleDbPlaneRoutedKeys(key, value);
+  const mutation = findConfigMutationTarget(args);
+  if (!mutation) return false;
+  await assertManagedTargetMutationAllowed(args);
+  if (mutation.action !== 'set') return false;
+  const value = mutation.positionals[2];
+  if (!mutation.target || value === undefined) return false; // let the engine path print usage
+  if (mutation.target !== 'database_url' && mutation.target !== 'database_path' && mutation.target !== 'engine') return false;
+  return handleDbPlaneRoutedKeys(mutation.target, value);
+}
+
+const MANAGED_TARGET_CONFIG_KEYS = [
+  'engine', 'database_url', 'database_path', 'managed_postgres', 'remote_mcp',
+  'thin_client', 'thin_client_url',
+] as const;
+
+function isManagedTargetMutationKey(key: string): boolean {
+  return MANAGED_TARGET_CONFIG_KEYS.some((candidate) => key === candidate || key.startsWith(`${candidate}.`));
+}
+
+function patternMatchesManagedTarget(prefix: string): boolean {
+  return MANAGED_TARGET_CONFIG_KEYS.some((candidate) =>
+    candidate.startsWith(prefix) || prefix.startsWith(`${candidate}.`));
+}
+
+const CONFIG_MUTATION_BOOLEAN_FLAGS = new Set([...CONFIG_SET_KNOWN_FLAGS, '--raw']);
+
+interface ConfigMutationTarget {
+  action: 'set' | 'unset';
+  target?: string;
+  pattern: boolean;
+  positionals: string[];
+}
+
+/** Find the mutation target without mistaking supported boolean flags for it. */
+function findConfigMutationTarget(args: string[]): ConfigMutationTarget | null {
+  const action = args[0];
+  if (action !== 'set' && action !== 'unset') return null;
+  const positionals = args.filter((arg, index) => index === 0 || !CONFIG_MUTATION_BOOLEAN_FLAGS.has(arg));
+  const patternAt = action === 'unset' ? args.indexOf('--pattern') : -1;
+  const pattern = patternAt >= 0;
+  const target = pattern
+    ? args.slice(patternAt + 1).find((arg) => !CONFIG_MUTATION_BOOLEAN_FLAGS.has(arg) && arg !== '--pattern')
+    : positionals[1];
+  return { action, target, pattern, positionals };
+}
+
+async function assertManagedTargetMutationAllowed(args: string[]): Promise<void> {
+  const mutation = findConfigMutationTarget(args);
+  if (!mutation?.target || !(mutation.pattern
+    ? patternMatchesManagedTarget(mutation.target)
+    : isManagedTargetMutationKey(mutation.target))) return;
+  const { loadConfigFileOnly } = await import('../core/config.ts');
+  assertNoManagedPostgresTarget(loadConfigFileOnly() ?? {}, 'config-target-mutation');
+}
+
+function assertWriterLockMutationAllowed(args: string[]): void {
+  const mutation = findConfigMutationTarget(args);
+  const target = mutation?.target;
+  if (!target || !(mutation?.pattern
+    ? WRITER_ADMIN_LOCK_KEY.startsWith(target)
+    : target === WRITER_ADMIN_LOCK_KEY)) return;
+  console.error(`[config] ${WRITER_ADMIN_LOCK_KEY} is reserved: only \`gbrain sources writer lock\` and \`gbrain sources writer unlock\` on the brain host change it.`);
+  console.error(`[config] ${mutation.pattern ? `The pattern "${target}" covers that key. Nothing was deleted.` : 'Nothing was written.'}`);
+  process.exit(1);
 }
 
 export async function runConfig(engine: BrainEngine, args: string[]) {
   const action = args[0];
-
-  // The writer admin lock is reserved for `gbrain sources writer lock|unlock`; --force is no escape.
-  if (action === 'set' || action === 'unset') {
-    const patternAt = action === 'unset' ? args.indexOf('--pattern') : -1;
-    const target = patternAt >= 0 ? args[patternAt + 1] : args.filter(a => a !== '--raw')[1];
-    if (target && (patternAt >= 0 ? WRITER_ADMIN_LOCK_KEY.startsWith(target) : target === WRITER_ADMIN_LOCK_KEY)) {
-      console.error(`[config] ${WRITER_ADMIN_LOCK_KEY} is reserved: only \`gbrain sources writer lock\` and \`gbrain sources writer unlock\` on the brain host change it.`);
-      console.error(`[config] ${patternAt >= 0 ? `The pattern "${target}" covers that key. Nothing was deleted.` : 'Nothing was written.'}`);
-      process.exit(1);
-    }
-  }
+  await assertManagedTargetMutationAllowed(args);
+  assertWriterLockMutationAllowed(args);
 
   if (action === 'show') {
     const config = loadConfig();
@@ -259,9 +313,9 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
   //   gbrain config unset <key>             — single-key delete
   //   gbrain config unset --pattern <pfx>   — prefix-bulk delete
   if (action === 'unset') {
-    const flagIdx = args.indexOf('--pattern');
-    if (flagIdx !== -1) {
-      const prefix = args[flagIdx + 1];
+    const mutation = findConfigMutationTarget(args);
+    if (mutation?.pattern) {
+      const prefix = mutation.target;
       if (!prefix || prefix.length === 0) {
         console.error('Usage: gbrain config unset --pattern <prefix>');
         process.exit(1);
@@ -310,7 +364,7 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
       return;
     }
 
-    const key = args[1];
+    const key = mutation?.target;
     if (!key) {
       console.error('Usage: gbrain config unset <key> | --pattern <prefix>');
       process.exit(1);
@@ -429,7 +483,10 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
   // #3943: `--raw` (get's redaction opt-out) may appear before the key, so
   // strip it from the positional scan rather than reading args[1] blindly.
   const rawFlag = args.includes('--raw');
-  const positionals = args.filter((a) => a !== '--raw');
+  const mutation = findConfigMutationTarget(args);
+  const positionals = mutation?.action === 'set'
+    ? mutation.positionals
+    : args.filter((a) => a !== '--raw');
   const key = positionals[1];
   const value = positionals[2];
 
@@ -503,7 +560,7 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
       console.error(`[config] Nothing was written.`);
       process.exit(1);
     }
-    const value = tail.find(a => !a.startsWith('-')) ?? args[2];
+    const value = positionals[2] ?? tail.find(a => !a.startsWith('-')) ?? args[2];
 
     // Bootstrap hook-lane keys are FILE-plane canonical: they are read by
     // engine-free processes (the harness hook children and the detached

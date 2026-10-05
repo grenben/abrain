@@ -36,6 +36,7 @@ import {
 import { findRepoRoot } from '../core/repo-root.ts';
 import { writeMountsCache, clearMountsCache } from '../core/mounts-cache.ts';
 import { GBrainError } from '../core/types.ts';
+import { ManagedPostgresUnsupportedError } from '../core/managed-postgres-unsupported.ts';
 
 function getMountsDir(): string { return join(homedir(), '.gbrain'); }
 // v0.40.3.0: GBRAIN_MOUNTS_PATH override exists for tests (libuv caches
@@ -103,6 +104,10 @@ function parseAddArgs(args: string[]): AddArgs {
 
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
+    if (a === '--managed-postgres' || a.startsWith('--managed-postgres=') ||
+      a === '--managed_postgres' || a.startsWith('--managed_postgres=')) {
+      throw new ManagedPostgresUnsupportedError('mount');
+    }
     const next = (flag: string): string => {
       const v = args[++i];
       if (!v) throw new GBrainError(`Missing value for ${flag}`, '', `Pass a value: ${flag} <value>`);

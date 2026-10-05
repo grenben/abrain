@@ -29,6 +29,7 @@ import {
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { gbrainPath, loadConfig } from '../config.ts';
+import { managedPostgresIdentity, normalizeEngineTarget } from '../engine-target.ts';
 import { getEffectiveNiceness } from './niceness.ts';
 
 /** On-disk shape of a `worker-<pid>.json` entry. */
@@ -65,12 +66,20 @@ export function workerRegistryDir(): string {
 export function currentBrainId(): string {
   try {
     const cfg = loadConfig();
-    const key = cfg?.database_url ?? cfg?.database_path ?? 'default';
+    // A managed reference is a complete target of its own. Validate it before
+    // hashing so contradictory/invalid configs cannot silently share the
+    // ordinary default registry identity.
+    const target = cfg?.managed_postgres !== undefined ? normalizeEngineTarget(cfg) : null;
+    const key = target?.kind === 'postgres-managed'
+      ? managedPostgresIdentity(target.managed_postgres)
+      : cfg?.database_url ?? cfg?.database_path ?? 'default';
     // Tiny non-crypto hash (djb2) — we only need a stable short discriminator.
     let h = 5381;
     for (let i = 0; i < key.length; i++) h = ((h << 5) + h + key.charCodeAt(i)) | 0;
     return (h >>> 0).toString(36);
-  } catch {
+  } catch (error) {
+    // Do not turn an invalid managed target into the default brain ID.
+    if (error instanceof Error && error.name === 'EngineTargetError') throw error;
     return 'default';
   }
 }

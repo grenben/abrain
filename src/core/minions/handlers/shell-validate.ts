@@ -34,6 +34,7 @@ import {
   resolveInheritValue,
 } from './shell-inherit.ts';
 import { loadConfig, type GBrainConfig } from '../../config.ts';
+import { assertNoManagedPostgresTarget } from '../../managed-postgres-unsupported.ts';
 
 /** Validated, narrowed shell-job params. */
 export interface ValidatedShellJobParams {
@@ -59,8 +60,9 @@ export interface ValidateShellJobOpts {
 
 /**
  * Validate raw shell-job submission `data`. Returns the narrowed shape on
- * success; throws `UnrecoverableError` with an operator-facing message on
- * every failure path. Validation errors are never retry-worthy.
+ * success; shape/value failures throw `UnrecoverableError`, while invalid or
+ * unsupported database targets retain their typed fail-closed errors.
+ * Validation errors are never retry-worthy.
  */
 export function validateShellJobParams(
   data: Record<string, unknown>,
@@ -150,6 +152,10 @@ export function validateShellJobParams(
   // unset env var and fails minutes later with a less precise error.
   if (inherit !== undefined && inherit.length > 0) {
     const cfg = opts.config !== undefined ? opts.config : loadConfig();
+    if (cfg && inherit.some((name) =>
+      name === 'database_url' || name === 'database_path' || name === 'managed_postgres')) {
+      assertNoManagedPostgresTarget(cfg, 'shell-process-forwarding');
+    }
     for (const name of inherit) {
       const value = resolveInheritValue(cfg, name);
       if (value === undefined) {

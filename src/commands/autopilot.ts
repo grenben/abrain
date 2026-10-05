@@ -24,6 +24,7 @@ import { join, dirname, isAbsolute, resolve as resolvePath } from 'path';
 import { execSync } from 'child_process';
 import type { BrainEngine } from '../core/engine.ts';
 import { loadConfig, saveConfig, gbrainPath as gbrainHomePath } from '../core/config.ts';
+export { autopilotEngineIdentity } from './autopilot-engine-identity.ts';
 import {
   classifyAutopilotLockHolder,
   type AutopilotLockProbeDeps,
@@ -1406,22 +1407,6 @@ export function uninstallDaemon() {
   // installed ('disabled' outranks 'not_installed' in the classifier).
   try { unlinkSync(autopilotDisabledMarkerPath()); } catch { /* not present */ }
   try { unlinkSync(autopilotPausedMarkerPath()); } catch { /* not present */ }
-}
-
-/**
- * The daemon's view of WHICH engine the file-plane config points at. Pure and
- * deliberately narrow: only the fields an engine migration flips participate,
- * so unrelated config edits (models, search knobs, spend gates) never trigger
- * a restart. Compared at boot vs every tick by the daemon loop.
- */
-export function autopilotEngineIdentity(
-  cfg: { engine?: string; database_url?: string; database_path?: string } | null,
-): string {
-  return JSON.stringify({
-    engine: cfg?.engine ?? 'pglite',
-    url: cfg?.database_url ?? null,
-    path: cfg?.database_path ?? null,
-  });
 }
 
 export type AutopilotState = 'not_installed' | 'disabled' | 'paused' | 'never_run' | 'stale' | 'fresh';

@@ -72,6 +72,7 @@ import {
 } from '../core/docker-postgres.ts';
 import { rewriteCooldownBlocked, writeReceipt } from '../core/db-repair-receipts.ts';
 import type { BrainEngine } from '../core/engine.ts';
+import { assertNoManagedPostgresTarget } from '../core/managed-postgres-unsupported.ts';
 
 class UnknownFlagError extends Error {}
 
@@ -338,6 +339,9 @@ export async function runDbRepair(args: string[], deps: DbRepairDeps = defaultDe
     printHelp();
     return 0;
   }
+  // Read the durable target before brain resolution, lock/history access, or
+  // any probe. Managed repair/start integration belongs to a later phase.
+  assertNoManagedPostgresTarget(loadConfigFileOnly() ?? {}, 'db-repair');
   if (opts.applyRewrites && !opts.yes) {
     console.error('--apply-rewrites requires --yes (rewrites are the higher consent tier, not a lower one).');
     return 2;

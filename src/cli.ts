@@ -49,6 +49,7 @@ import { migrationCliArgumentError } from './core/embedding-migration-cli.ts';
 import { VERSION } from './version.ts';
 import { assertSupportedBun } from './core/runtime-version.ts';
 import { bigintToStringReplacer } from './core/utils.ts';
+import { connectMountEngineBoundary } from './core/mount-connect-boundary.ts';
 import {
   CLI_ONLY,
   CLI_ONLY_SELF_HELP,
@@ -1413,6 +1414,7 @@ export const __testing = {
   markEngineAsMountForTests(engine: BrainEngine): void {
     MOUNT_ENGINES.add(engine);
   },
+  connectMountEngineBoundary,
   // Test-only entry for test/cli-dispatch-lifecycle.serial.test.ts: the real
   // dispatcher, driven in-process with recorded engine lifecycle calls.
   main,
@@ -2705,13 +2707,12 @@ let activeBrainId: string = 'host';
  * a mount's DB-plane model config is never merged into the caller's gateway.
  */
 async function connectMountEngine(brainId: string): Promise<BrainEngine> {
-  const config = loadConfig();
-  if (config) {
-    const { configureGateway } = await import('./core/ai/gateway.ts');
-    configureGateway(buildGatewayConfig(config));
-  }
   const { loadRegistry } = await import('./core/brain-registry.ts');
-  const handle = await loadRegistry().getBrain(brainId);
+  const handle = await connectMountEngineBoundary(brainId, {
+    loadRegistry,
+    loadHostConfig: loadConfig,
+    configureGateway: async config => (await import('./core/ai/gateway.ts')).configureGateway(buildGatewayConfig(config)),
+  });
   activeBrainId = brainId;
   // Fixup (PR #4186): mark this specific engine as a mount engine so
   // makeContext's DB-plane fallback (see MOUNT_ENGINES above) never re-merges
@@ -2721,7 +2722,6 @@ async function connectMountEngine(brainId: string): Promise<BrainEngine> {
   SELECTED_CONFIG_BY_ENGINE.set(handle.engine, handle.config);
   return handle.engine;
 }
-
 async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngine> {
   // Brain axis: resolve WHICH DATABASE this invocation targets before touching
   // the host engine. --brain (global flag) / GBRAIN_BRAIN_ID / .gbrain-mount /

@@ -13,6 +13,7 @@ import { quarantineRestoredExecution, rebaseRestorePath, relativeBackupPath, typ
 import { quarantineSharedSkillRestore, validateSharedSkillRestoreMode, type SharedSkillRestore, type SharedSkillRestoreOptions } from '../shared-skills/restore.ts';
 import { isPhysicalRootMetadata } from '../persistence/physical-root-record.ts';
 import { protectNewBackupPath } from './private-path.ts';
+import { assertNoManagedPostgresTarget } from '../managed-postgres-unsupported.ts';
 
 interface SourceInventory { id: string; local_path: string | null; managed_relative_path: string | null }
 interface BackupMetadata {
@@ -125,12 +126,16 @@ export function rebaseManagedConfig(config: GBrainConfig, originalRoot: string, 
 }
 
 export async function createPgliteBackup(options: { output: string; root?: string }): Promise<{ archive: string; manifest: ArchiveManifest }> {
-  const root = checkedRoot(options.root ?? dirname(configDir()));
+  const candidateRoot = options.root ?? dirname(configDir());
+  // Inspect only the file config first. Managed targets must refuse before
+  // validating/touching output paths, taking locks, or constructing an engine.
+  const state = readFileConfigState(join(resolve(candidateRoot), '.gbrain', 'config.json'));
+  if (state.kind === 'present') assertNoManagedPostgresTarget(state.config, 'backup');
+  const root = checkedRoot(candidateRoot);
   if (!isAbsolute(options.output)) throw new AgentInstallError('absolute_output_required', 'Backup output must be an absolute path.');
   const output = resolve(options.output);
   if (existsSync(output)) throw new AgentInstallError('backup_exists', 'Backup destination already exists; select a new filename.');
   if (!existsSync(dirname(output))) throw new AgentInstallError('output_parent_missing', 'Create a private backup destination directory first.');
-  const state = readFileConfigState(join(root, '.gbrain', 'config.json'));
   if (state.kind !== 'present' || state.config.engine !== 'pglite' || state.config.remote_mcp || state.config.database_url) {
     throw new AgentInstallError('pglite_required', 'Full local snapshots require an existing file-configured PGLite brain.');
   }
@@ -218,6 +223,8 @@ function metadataOf(manifest: ArchiveManifest): BackupMetadata {
 }
 
 export async function restorePgliteBackup(options: { archive: string; into: string } & SharedSkillRestoreOptions): Promise<{ root: string; quarantined_jobs: number; reconnect_required: string[]; shared_skills: SharedSkillRestore | null }> {
+  const targetConfig = readFileConfigState(join(resolve(options.into), '.gbrain', 'config.json'));
+  if (targetConfig.kind === 'present') assertNoManagedPostgresTarget(targetConfig.config, 'snapshot-replacement');
   const mode = validateSharedSkillRestoreMode(options);
   const root = checkedRoot(options.into);
   if (!existsSync(dirname(root))) throw new AgentInstallError('parent_missing', 'Restore parent directory must already exist.');

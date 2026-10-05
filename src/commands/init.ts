@@ -16,6 +16,7 @@ import { isNewContentDatabase, setupSharedBrainContent, type SharedContentOption
 import { resolveSourceId } from '../core/source-resolver.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import { readPrimaryEmbeddingStores, readStoredEmbeddingIdentity } from '../core/stored-embedding-identity.ts';
+import { failInitFlag, validateInitFlags } from './init-flags.ts';
 
 export async function runInit(args: string[]) {
   // Help guard: cli.ts only routes --help to printOpHelp() for shared-op
@@ -209,74 +210,6 @@ export async function runInit(args: string[]) {
   }
 
   return initPostgres({ databaseUrl, jsonOutput, apiKey, aiOpts, schemaPack, skipEmbedCheck, content });
-}
-
-const INIT_BOOLEAN_FLAGS = new Set([
-  '--pglite',
-  '--supabase',
-  '--mcp-only',
-  '--force',
-  '--non-interactive',
-  '--migrate-only',
-  '--json',
-  '--no-embedding',
-  '--skip-embed-check',
-  '--db-only',
-  '--git',
-  '--no-git',
-  // db-availability loop (5a): Postgres-first ladder for harness installs.
-  '--prefer-postgres',
-  '--allow-docker',
-  '--allow-create-db',
-  '--local-postgres',
-]);
-
-const INIT_VALUE_FLAGS = new Set([
-  '--url',
-  '--key',
-  '--path',
-  '--content-root',
-  '--schema-pack',
-  '--embedding-model',
-  '--model',
-  '--embedding-dimensions',
-  '--expansion-model',
-  '--chat-model',
-  '--mcp-url',
-  '--issuer-url',
-  '--oauth-client-id',
-  '--oauth-client-secret',
-]);
-
-function validateInitFlags(args: string[]) {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (!arg.startsWith('-')) continue;
-
-    if (INIT_BOOLEAN_FLAGS.has(arg)) continue;
-
-    if (INIT_VALUE_FLAGS.has(arg)) {
-      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-        failInitFlag(`gbrain init: ${arg} requires a value`, args.includes('--json'));
-      }
-      i += 1;
-      continue;
-    }
-
-    if (arg.startsWith('--')) {
-      failInitFlag(`gbrain init: unknown flag ${arg}`, args.includes('--json'));
-    }
-  }
-}
-
-function failInitFlag(message: string, jsonOutput: boolean): never {
-  if (jsonOutput) {
-    console.log(JSON.stringify({ status: 'error', reason: 'invalid_flag', message }));
-  } else {
-    console.error(message);
-    console.error('Run `gbrain init --help` for supported flags.');
-  }
-  process.exit(1);
 }
 
 interface ResolveAIOptionsArgs {

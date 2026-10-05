@@ -23,6 +23,7 @@ import { assertManagedFilesystemWrite } from '../core/persistence/filesystem-gua
 import { existsSync, statSync, rmSync } from 'fs';
 import { dirname } from 'path';
 import { loadConfig, loadConfigFileOnly, gbrainPath } from '../core/config.ts';
+import { assertNoManagedPostgresTarget } from '../core/managed-postgres-unsupported.ts';
 
 interface ReinitOpts {
   embeddingModel: string;
@@ -34,6 +35,9 @@ interface ReinitOpts {
 }
 
 export async function runReinitPglite(args: string[]): Promise<void> {
+  if (!args.includes('--help') && !args.includes('-h')) {
+    assertNoManagedPostgresTarget(loadConfigFileOnly() ?? {}, 'init-reinit');
+  }
   const opts = parseArgs(args);
 
   // Confirm we're on PGLite. Refusing on Postgres because the SQL recipe

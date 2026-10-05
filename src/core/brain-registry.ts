@@ -29,6 +29,7 @@ import type { BrainEngine } from './engine.ts';
 import type { EngineConfig } from './types.ts';
 import { GBrainError } from './types.ts';
 import { loadConfig, type GBrainConfig } from './config.ts';
+import { ManagedPostgresUnsupportedError } from './managed-postgres-unsupported.ts';
 
 /** Host brain id. Reserved — users cannot create a mount with this id. */
 export const HOST_BRAIN_ID = 'host';
@@ -220,6 +221,12 @@ export function loadMounts(mountsPath: string = getMountsPath()): MountEntry[] {
         `Each entry shape: { id, path, engine, db_url|database_path, enabled? }`,
       );
     }
+    // Mounts are a separate runtime boundary from the host's managed target.
+    // Reject the field before validating/projecting the rest of the entry so
+    // it can never be silently stripped and reconstructed as URL/PGLite.
+    if (Object.prototype.hasOwnProperty.call(entry, 'managed_postgres')) {
+      throw new ManagedPostgresUnsupportedError('mount');
+    }
     const id = validateMountId(entry.id, `mounts[${i}].id`);
     if (seenIds.has(id)) {
       throw new GBrainError(
@@ -292,6 +299,7 @@ export function loadMounts(mountsPath: string = getMountsPath()): MountEntry[] {
 
 /** Convert a MountEntry to an EngineConfig suitable for createEngine. */
 function mountToEngineConfig(mount: MountEntry): EngineConfig {
+  assertOrdinaryMount(mount);
   return {
     engine: mount.engine,
     database_url: mount.database_url,
@@ -301,11 +309,27 @@ function mountToEngineConfig(mount: MountEntry): EngineConfig {
 
 /** Convert a MountEntry to a GBrainConfig (for OperationContext). */
 function mountToGBrainConfig(mount: MountEntry): GBrainConfig {
+  assertOrdinaryMount(mount);
   return {
     engine: mount.engine,
     database_url: mount.database_url,
     database_path: mount.database_path,
   };
+}
+
+function hostToEngineConfig(config: GBrainConfig): EngineConfig {
+  return {
+    engine: config.engine,
+    database_url: config.database_url,
+    database_path: config.database_path,
+    managed_postgres: config.managed_postgres,
+  };
+}
+
+function assertOrdinaryMount(mount: MountEntry): void {
+  if (Object.prototype.hasOwnProperty.call(mount, 'managed_postgres')) {
+    throw new ManagedPostgresUnsupportedError('mount');
+  }
 }
 
 /**
@@ -322,6 +346,7 @@ export class BrainRegistry {
   constructor(mounts: MountEntry[]) {
     this.mounts = new Map();
     for (const m of mounts) {
+      assertOrdinaryMount(m);
       if (m.enabled !== false) this.mounts.set(m.id, m);
     }
   }
@@ -403,11 +428,7 @@ export class BrainRegistry {
       );
     }
     const { createEngine } = await import('./engine-factory.ts');
-    const engineConfig: EngineConfig = {
-      engine: config.engine,
-      database_url: config.database_url,
-      database_path: config.database_path,
-    };
+    const engineConfig = hostToEngineConfig(config);
     const engine = await createEngine(engineConfig);
     await engine.connect(engineConfig);
     return { id: HOST_BRAIN_ID, engine, config, path: null };
@@ -445,4 +466,5 @@ export const __testing = {
   getMountsPath,
   mountToEngineConfig,
   mountToGBrainConfig,
+  hostToEngineConfig,
 };

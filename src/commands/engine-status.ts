@@ -40,6 +40,7 @@ import {
 } from '../core/connection-manager.ts';
 import { inspectLockHolder } from '../core/pglite-lock.ts';
 import { redactPgUrl } from '../core/url-redact.ts';
+import { assertNoManagedPostgresTarget } from '../core/managed-postgres-unsupported.ts';
 import {
   classifyPgAccessError,
   diagnoseDbConfig,
@@ -227,6 +228,7 @@ export async function runEngineStatus(args: string[]): Promise<number> {
     // Mounted brain: the mount entry IS the config — report ITS engine, not
     // the host's (a mount failure must never read as a host failure).
     const mount = mountFor(brainId);
+    if (opts.probe && mount) assertNoManagedPostgresTarget(mount, 'unsupported-target-workflow');
     report = {
       schema_version: 1,
       brain_id: brainId,
@@ -255,6 +257,7 @@ export async function runEngineStatus(args: string[]): Promise<number> {
     }
   } else {
     const cfg = loadConfig();
+    if (opts.probe) assertNoManagedPostgresTarget(cfg ?? {}, 'unsupported-target-workflow');
     const fileCfg = loadConfigFileOnly();
     const source = getDbUrlSource() as PgDbUrlSource;
     const thin = isThinClient(cfg);

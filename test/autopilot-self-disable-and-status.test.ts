@@ -214,6 +214,18 @@ describe('autopilotEngineIdentity (post-migration convergence)', () => {
     expect(autopilotEngineIdentity({ engine: 'pglite', database_path: '/b/brain.pglite' })).not.toBe(pglite);
   });
 
+  test('managed cluster identity changes restart identity without changing legacy serialization', () => {
+    const managedA = { engine: 'postgres', managed_postgres: { manager_id: 'gbrain-managed-postgres', cluster_id: '123e4567-e89b-42d3-a456-426614174000' } };
+    const managedB = { engine: 'postgres', managed_postgres: { manager_id: 'gbrain-managed-postgres', cluster_id: '123e4567-e89b-42d3-a456-426614174001' } };
+    expect(autopilotEngineIdentity(managedA)).toBe(autopilotEngineIdentity(managedA));
+    expect(autopilotEngineIdentity(managedA)).not.toBe(autopilotEngineIdentity(managedB));
+    expect(autopilotEngineIdentity(managedA)).not.toContain('123e4567-e89b-42d3-a456-426614174000');
+    expect(autopilotEngineIdentity(managedA)).toMatch(/^\{"engine":"postgres","managed_sha256":"[0-9a-f]{24}"\}$/);
+    expect(autopilotEngineIdentity({ engine: 'postgres', database_url: 'postgres://x/db' })).toBe(
+      JSON.stringify({ engine: 'postgres', url: 'postgres://x/db', path: null }),
+    );
+  });
+
   test('ignores everything a migration does not flip — unrelated config edits must not restart the daemon', () => {
     const before = autopilotEngineIdentity({ engine: 'pglite', database_path: '/a/brain.pglite' });
     const after = autopilotEngineIdentity({
