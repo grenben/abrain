@@ -18,6 +18,7 @@ import {
   justUpgradedPath,
 } from './core/self-upgrade.ts';
 import { loadConfig, loadConfigFileOnly, loadConfigWithEngine, toEngineConfig, isThinClient, getDbUrlSource, envShadowDetected } from './core/config.ts';
+import { runPreConnectGuard } from './cli/pre-connect-guard.ts';
 import {
   classifyPgAccessError as classifyDbAccessError,
   diagnoseDbConfig as diagnoseDbConfigForMarker,
@@ -1981,13 +1982,10 @@ async function handleCliOnly(command: string, args: string[]) {
  * @cliPipelineStage
  */
 async function routeCliOnlyBeforeTable(command: string, args: string[]): Promise<boolean> {
-  // Thin-client guard: refuse DB-bound commands cleanly with a pinpoint
-  // hint instead of letting them fail later inside connectEngine or
-  // mid-handler. v0.31.1 routes through `refuseThinClient` so every
-  // refusal carries an actionable next-step hint (CDX-5 cherry-pick A).
-  // Gap-closure wave [OV6]: takes/cache/quarantine first try the
-  // per-subcommand MCP routing (engine-free); unhandled subcommands fall
-  // through to the refusal.
+  runPreConnectGuard(findCliCommand(command)?.preConnectGuard);
+
+  // Refuse DB-bound thin-client commands with an actionable hint. Try
+  // routable subcommands via MCP first; unhandled ones fall through.
   if (THIN_CLIENT_REFUSED_COMMANDS.has(command) || command === 'cache' || command === 'quarantine') {
     const cfg = loadConfig();
     if (isThinClient(cfg)) {

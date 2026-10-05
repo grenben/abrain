@@ -125,7 +125,16 @@ function checkEntryPath(paths: Map<string, { path: string; directory: boolean }>
 }
 
 /** Extract ONLY into a caller-created private, empty staging directory. */
-export function readBackupArchive(archive: string, destination: string): ArchiveManifest {
+export function readBackupArchive(
+  archive: string,
+  destination: string,
+  options?: {
+    beforeExtract?: (
+      manifest: ArchiveManifest,
+      readVerifiedEntry: (path: string, maxBytes: number) => Buffer,
+    ) => void;
+  },
+): ArchiveManifest {
   assertNoSymlinks(archive);
   const fd = openSync(archive, 'r');
   try {
@@ -137,8 +146,25 @@ export function readBackupArchive(archive: string, destination: string): Archive
     catch { fail('Unreadable backup manifest.'); }
     validateManifest(value);
     let position = MAGIC.length + 4 + length;
-    const total = position + value.entries.reduce((n, e) => n + e.size, 0);
+    const entryOffsets = new Map<string, number>();
+    for (const entry of value.entries) {
+      entryOffsets.set(entry.path, position);
+      position += entry.size;
+    }
+    const total = position;
     if (total !== fstatSync(fd).size) fail('Backup length does not match its inventory.');
+    options?.beforeExtract?.(value, (path, maxBytes) => {
+      const entry = value.entries.find(candidate => candidate.path === path);
+      const entryOffset = entryOffsets.get(path);
+      if (!entry || entryOffset === undefined) fail('Requested backup entry is missing.');
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_BYTES || entry.size > maxBytes) {
+        fail('Backup entry exceeds the verification read limit.');
+      }
+      const bytes = readExactly(fd, entry.size, entryOffset);
+      if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256) fail('Backup checksum mismatch.');
+      return bytes;
+    });
+    position = MAGIC.length + 4 + length;
     for (const entry of value.entries) {
       const target = confinedPath(destination, entry.path);
       mkdirSync(dirname(target), { recursive: true, mode: 0o700 });

@@ -14,6 +14,7 @@ import { quarantineSharedSkillRestore, validateSharedSkillRestoreMode, type Shar
 import { isPhysicalRootMetadata } from '../persistence/physical-root-record.ts';
 import { protectNewBackupPath } from './private-path.ts';
 import { assertNoManagedPostgresTarget } from '../managed-postgres-unsupported.ts';
+import { normalizeEngineTarget } from '../engine-target.ts';
 
 interface SourceInventory { id: string; local_path: string | null; managed_relative_path: string | null }
 interface BackupMetadata {
@@ -36,6 +37,7 @@ const EXCLUDED_DIRECTORIES = new Set([
   '.mozilla', '.ssh', '.aws', '.azure', 'credential-deliveries',
 ]);
 const EXCLUDED_FILES = new Set(['.ds_store', '.netrc', '.npmrc', '.pypirc', '.pgpass', '.git-credentials', 'id_rsa', 'id_ed25519']);
+const MAX_ARCHIVED_CONFIG_BYTES = 1024 * 1024;
 const credentialFilename = /^(?:credentials?|auth|tokens?|secrets?|client[_-]secrets?|service[_-]account)(?:(?:[._-][a-z0-9_-]+)?\.(?:json|ya?ml|toml|ini|conf|txt))?$/i;
 const credentialKey = /(^|[._-])(key|secret|token|password|pwd|passwd|auth)([._-]|$)/i;
 
@@ -222,6 +224,29 @@ function metadataOf(manifest: ArchiveManifest): BackupMetadata {
   return value;
 }
 
+/** Validate an archived file-plane config without consulting or mutating disk. */
+function validatedArchivedConfig(bytes: Buffer): GBrainConfig {
+  let value: unknown;
+  try { value = JSON.parse(bytes.toString('utf8')); }
+  catch { throw new AgentInstallError('invalid_backup', 'Backup configuration is unreadable.'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new AgentInstallError('invalid_backup', 'Backup configuration is not local PGLite.');
+  }
+  const config = value as GBrainConfig;
+  // Normalize/refuse before classifying the target, so malformed and mixed
+  // managed references retain their typed public errors.
+  assertNoManagedPostgresTarget(config, 'restore');
+  const target = normalizeEngineTarget(config);
+  const fields = config as GBrainConfig & Record<string, unknown>;
+  if (target.kind !== 'pglite' || config.engine !== 'pglite'
+    || (fields.database_path !== undefined && typeof fields.database_path !== 'string')
+    || fields.database_url !== undefined
+    || fields.remote_mcp || fields.thin_client || fields.thin_client_url) {
+    throw new AgentInstallError('invalid_backup', 'Backup configuration is not local PGLite.');
+  }
+  return config;
+}
+
 export async function restorePgliteBackup(options: { archive: string; into: string } & SharedSkillRestoreOptions): Promise<{ root: string; quarantined_jobs: number; reconnect_required: string[]; shared_skills: SharedSkillRestore | null }> {
   const targetConfig = readFileConfigState(join(resolve(options.into), '.gbrain', 'config.json'));
   if (targetConfig.kind === 'present') assertNoManagedPostgresTarget(targetConfig.config, 'snapshot-replacement');
@@ -244,15 +269,21 @@ export async function restorePgliteBackup(options: { archive: string; into: stri
   let published = false;
   try {
     const payload = join(stage, 'payload'); mkdirSync(payload, { mode: 0o700 });
-    const manifest = readBackupArchive(resolve(options.archive), payload);
+    let archivedConfig: GBrainConfig | undefined;
+    const manifest = readBackupArchive(resolve(options.archive), payload, {
+      beforeExtract: (_manifest, readVerifiedEntry) => {
+        archivedConfig = validatedArchivedConfig(readVerifiedEntry('config.json', MAX_ARCHIVED_CONFIG_BYTES));
+      },
+    });
     const metadata = metadataOf(manifest);
     if (!manifest.entries.some(e => e.path === 'database.tar') || !manifest.entries.some(e => e.path === 'config.json') || manifest.entries.some(e => e.path !== 'database.tar' && e.path !== 'config.json' && !e.path.startsWith('files/'))) throw new AgentInstallError('invalid_backup', 'Unexpected backup payload.');
     for (const entry of manifest.entries.filter(e => e.path.startsWith('files/'))) {
       const rel = entry.path.slice(6);
       if (!metadata.managed_paths.some(p => rel === p || rel.startsWith(p + '/'))) throw new AgentInstallError('invalid_backup', 'Payload is outside the declared managed paths.');
     }
-    const state = readFileConfigState(join(payload, 'config.json'));
-    if (state.kind !== 'present' || state.config.engine !== 'pglite' || state.config.remote_mcp) throw new AgentInstallError('invalid_backup', 'Backup configuration is not local PGLite.');
+    // The callback reads this config from the same open archive descriptor,
+    // verifies its manifest hash, and only then permits payload extraction.
+    if (!archivedConfig) throw new AgentInstallError('invalid_backup', 'Backup configuration is not local PGLite.');
     const restored = join(stage, 'restored'); mkdirSync(restored, { mode: 0o700 });
     const home = join(restored, '.gbrain'); mkdirSync(home, { mode: 0o700 });
     const dbPath = join(home, 'brain.pglite'); mkdirSync(dbPath, { mode: 0o700 });
@@ -280,7 +311,7 @@ export async function restorePgliteBackup(options: { archive: string; into: stri
     await engine.disconnect();
     if (!restoredDatabase.closed) throw new AgentInstallError('restore_close_incomplete', 'The restored database did not close cleanly. Staging is preserved; no usable root was published.');
     const detachedConfig: string[] = [];
-    const config: GBrainConfig = { ...rebaseManagedConfig(state.config, metadata.original_root, root, metadata.managed_paths, detachedConfig), engine: 'pglite', database_path: join(root, '.gbrain', 'brain.pglite') };
+    const config: GBrainConfig = { ...rebaseManagedConfig(archivedConfig, metadata.original_root, root, metadata.managed_paths, detachedConfig), engine: 'pglite', database_path: join(root, '.gbrain', 'brain.pglite') };
     if (sharedSkills) {
       config.mcp = { ...config.mcp, publish_skills: false };
       detachedConfig.push(`${mode === 'recovery' ? 'Recovered the persistent brain identity under operator attestation; external exclusion of the old service remains operator-required and unverified' : 'Restored as a new independent brain'}: archived credentials and enrollments are revoked, publication is disabled, and canonical owners are detached. Review content and policies, claim restored paths through trusted source administration, revalidate writer quiescence, and issue new credentials before publishing. Stale backups cannot establish current revocations or withdrawals.`);

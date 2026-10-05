@@ -134,7 +134,8 @@ import { postgresExecutor, type RunUnsafeOpts } from './engine-sql/dialect-postg
 import type { SqlExecutor } from './engine-sql/executor.ts';
 import { scopedRead, unscopedExecutor } from './engine-sql/brands.ts';
 import { normalizeEngineTarget } from './engine-target.ts';
-import { DEFAULT_MANAGED_ENGINE_DEPENDENCIES, connectManagedIfTarget, disconnectManaged as disconnectManagedRuntime, managedEnginePool, reconnectManaged as reconnectManagedRuntime, type ManagedEngineDependencies, type ManagedEngineHost } from './postgres-engine-managed.ts';
+import { ManagedPostgresPoolError } from './managed-postgres-pool.ts';
+import { DEFAULT_MANAGED_ENGINE_DEPENDENCIES, connectManagedIfTarget, createManagedEngineHost, createManagedEngineRuntime, disconnectManaged as disconnectManagedRuntime, managedEnginePool, reconnectManaged as reconnectManagedRuntime, type ManagedEngineDependencies, type ManagedEngineHost, type ManagedEngineRuntime } from './postgres-engine-managed.ts';
 
 function escapeSqlStringLiteral(value: string): string {
   return value.replace(/'/g, "''");
@@ -166,9 +167,12 @@ export function getPostgresSchema(
 // follow-up that will reintroduce a typed retry mechanism.
 
 export class PostgresEngine implements BrainEngine {
-  constructor(dependencies: ManagedEngineDependencies = DEFAULT_MANAGED_ENGINE_DEPENDENCIES) { this._managedDeps = Object.freeze({ ...dependencies }); }
-  private readonly _managedDeps: ManagedEngineDependencies; private _managedIdentity: string | null = null;
-  private _managedGeneration = 0; private _managedInstancePoolOwned = false;
+  constructor(dependencies: ManagedEngineDependencies = DEFAULT_MANAGED_ENGINE_DEPENDENCIES) {
+    this._managedDeps = Object.freeze({ ...dependencies });
+    this._managedRuntime = createManagedEngineRuntime();
+  }
+  private readonly _managedDeps: ManagedEngineDependencies;
+  private readonly _managedRuntime: ManagedEngineRuntime;
   private vectorIterativeScan?: Promise<boolean>;
   /** Transaction clones keep chunk invalidation and replacement atomic. */
   private _chunkWritesInTransaction = false;
@@ -193,27 +197,9 @@ export class PostgresEngine implements BrainEngine {
    * via the prototype chain (same process, same pools). Fail-open.
    */
   private checkoutGauge = new CheckoutGauge();
-  /**
-   * #1471: module-singleton OWNERSHIP token. `true` only for the engine whose
-   * connect() actually created the shared db.ts `sql` singleton (returned
-   * atomically by db.connect()). Borrowers — probe engines constructed while the
-   * singleton already exists (resolveLintContentSanity config-lift, doctor,
-   * integrity) — get `false` and must NOT db.disconnect() it, or they null the
-   * `sql` the long-lived owner (the cycle engine) still uses and every later
-   * phase throws "connect() has not been called". `_connectionStyle` alone can't
-   * separate owner from borrower: both are 'module'. Correct because the
-   * creator's lifetime dominates all borrowers — the CLI engine is created first
-   * and disconnected last (cli.ts), and borrowers are strictly nested.
-   */
+  /** URL-only creator token; managed ownership uses the exact lease in `_managedRuntime`. */
   private _ownsModuleSingleton = false;
-  /**
-   * Tracks which connection path this engine is using so disconnect() is
-   * idempotent. 'instance' = own _sql pool (poolSize was set);
-   * 'module' = the module-level db singleton (backward compat path).
-   * null = never connected, or already disconnected. Without this, a second
-   * disconnect() on an instance-pool engine would fall through to
-   * db.disconnect() and clobber the unrelated module-level connection.
-   */
+  /** URL connection path; managed lifecycle is tracked by `_managedRuntime`. */
   private _connectionStyle: 'instance' | 'module' | null = null;
 
   /**
@@ -231,7 +217,7 @@ export class PostgresEngine implements BrainEngine {
 
   // Instance connection (for workers) or fall back to module global (backward compat)
   get sql(): ReturnType<typeof postgres> {
-    if (this._managedIdentity !== null) return managedEnginePool(this._managedIdentity, this.connectionManager);
+    if (this._managedRuntime.identity !== null) return managedEnginePool(this._managedRuntime.identity, this.connectionManager);
     if (this._sql) return this._sql;
     // issue #1678: an instance-pool engine whose _sql went null (a mid-process
     // disconnect/reconnect, or a reaped socket) must NOT fall through to the
@@ -344,10 +330,12 @@ export class PostgresEngine implements BrainEngine {
   // Lifecycle
   async connect(config: EngineConfig & { poolSize?: number; parentConnectionManager?: ConnectionManager }): Promise<void> {
     this.vectorIterativeScan = undefined;
+    const managedWork = connectManagedIfTarget(this.managedHost(), config);
+    if (await managedWork) { this._savedConfig = config; return; }
+    if (this._managedRuntime.lifecycle !== 'disconnected') throw new ManagedPostgresPoolError('target_unverified');
     this._savedConfig = config;
-    if (await connectManagedIfTarget(this.managedHost(), config)) return;
     const url = config.database_url;
-    this._managedIdentity = null;
+    this._managedRuntime.identity = null;
     if (config.poolSize) {
       // Instance-level connection for worker isolation. resolvePoolSize lets
       // GBRAIN_POOL_SIZE cap below the caller's requested size when set — the
@@ -420,15 +408,12 @@ export class PostgresEngine implements BrainEngine {
   }
 
   private managedHost(): ManagedEngineHost {
-    const engine = this;
-    return {
-      deps: this._managedDeps,
-      stops: this._beforeDisconnect,
-      get sql() { return engine._sql; }, set sql(value) { engine._sql = value; }, get manager() { return engine.connectionManager; }, set manager(value) { engine.connectionManager = value; },
-      get identity() { return engine._managedIdentity; }, set identity(value) { engine._managedIdentity = value; }, get generation() { return engine._managedGeneration; }, set generation(value) { engine._managedGeneration = value; },
-      get instancePoolOwned() { return engine._managedInstancePoolOwned; }, set instancePoolOwned(value) { engine._managedInstancePoolOwned = value; }, get ownsModule() { return engine._ownsModuleSingleton; }, set ownsModule(value) { engine._ownsModuleSingleton = value; },
-      get style() { return engine._connectionStyle; }, set style(value) { engine._connectionStyle = value; }, get reconnecting() { return engine._reconnecting; }, set reconnecting(value) { engine._reconnecting = value; },
-    };
+    return createManagedEngineHost(this._managedDeps, this._managedRuntime, this._beforeDisconnect, {
+      readSql: () => this._sql,
+      writeSql: value => { this._sql = value; },
+      readManager: () => this.connectionManager,
+      writeManager: value => { this.connectionManager = value; },
+    });
   }
 
   async disconnect(): Promise<void> {
@@ -441,7 +426,7 @@ export class PostgresEngine implements BrainEngine {
   }
 
   private async disconnectInternal(): Promise<void> {
-    if (this._managedIdentity !== null) return disconnectManagedRuntime(this.managedHost());
+    if (this._managedRuntime.identity !== null) return disconnectManagedRuntime(this.managedHost());
     for (const stop of this._beforeDisconnect) await stop();
     // v0.41.25.0 (#1570) — instrument disconnect calls to identify the
     // mid-process caller behind the singleton-null bug. The audit log
@@ -626,6 +611,16 @@ export class PostgresEngine implements BrainEngine {
         Object.defineProperty(txEngine, '_pageTransaction', { value: true });
         Object.defineProperty(txEngine, 'sql', { get: () => tx });
         Object.defineProperty(txEngine, '_sql', { value: tx as unknown as ReturnType<typeof postgres>, writable: false });
+        if (this.connectionManager?.isManagedMode) {
+          const manager = this.connectionManager;
+          const transactionManager = new Proxy(manager, { get(target, property) {
+            if (property === 'read' || property === 'peekReadPool') return () => tx;
+            if (property === 'getReadPool' || property === 'ddl' || property === 'bulk') return async () => tx;
+            if (property === 'isDualPoolActive') return () => false;
+            return Reflect.get(target, property, target);
+          } });
+          Object.defineProperty(txEngine, 'connectionManager', { value: transactionManager });
+        }
         return fn(txEngine);
       }) as Promise<T>);
     } finally {
@@ -3073,8 +3068,11 @@ export class PostgresEngine implements BrainEngine {
 
   /** Reconnect after a transient blip; URL singleton rationale is documented in postgres-engine-managed.ts. */
   async reconnect(ctx?: { error?: unknown }): Promise<void> {
+    if (this._managedRuntime.identity !== null || (this._savedConfig && normalizeEngineTarget(this._savedConfig).kind === 'postgres-managed')) {
+      if (!this._savedConfig) return;
+      return reconnectManagedRuntime(this.managedHost(), this._savedConfig);
+    }
     if (!this._savedConfig || this._reconnecting) return;
-    if (this._managedIdentity !== null || normalizeEngineTarget(this._savedConfig).kind === 'postgres-managed') return reconnectManagedRuntime(this.managedHost(), this._savedConfig);
     if (this._connectionStyle !== 'instance') {
       // Module-singleton: never tear down the shared pool. db.connect() is
       // idempotent (no-op when the singleton is alive — the common #1745 path).

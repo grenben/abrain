@@ -20,22 +20,6 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { canUseSyncWorkerEngines, syncWorkerEngineConfig } from '../src/commands/sync/imports.ts';
-
-test('sync worker config preserves complete managed target and pool size without synthesizing endpoint fields', () => {
-  const managed = { engine: 'postgres' as const, database_url: undefined, database_path: undefined,
-    managed_postgres: { manager_id: 'gbrain-managed-postgres' as const, cluster_id: '00000000-0000-4000-8000-000000000321' } };
-  expect(syncWorkerEngineConfig(managed, 2)).toEqual({ ...managed, poolSize: 2 });
-  expect(syncWorkerEngineConfig({ engine: 'postgres', database_url: 'postgresql://db.example.invalid/brain', database_path: undefined,
-    managed_postgres: undefined }, 2).database_url).toBe('postgresql://db.example.invalid/brain');
-  expect(syncWorkerEngineConfig({ engine: 'pglite', database_url: undefined, database_path: '/tmp/brain.pglite', managed_postgres: undefined }, 2).database_path)
-    .toBe('/tmp/brain.pglite');
-  expect(canUseSyncWorkerEngines('postgres', { kind: 'pglite', database_path: '/tmp/brain.pglite' })).toBe(false);
-  expect(canUseSyncWorkerEngines('postgres', { kind: 'postgres-managed', managed_postgres: managed.managed_postgres })).toBe(true);
-  expect(canUseSyncWorkerEngines('postgres', { kind: 'postgres-url', database_url: 'postgresql://db.example.invalid/brain' })).toBe(true);
-  expect(canUseSyncWorkerEngines('postgres', { kind: 'postgres-url', database_url: undefined })).toBe(false);
-});
-
 function git(repo: string, ...args: string[]): string {
   return execSync(`git ${args.join(' ')}`, { cwd: repo, encoding: 'utf-8' }).trim();
 }

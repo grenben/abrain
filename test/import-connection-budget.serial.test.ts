@@ -91,6 +91,7 @@ function fakeEngine(kind: 'postgres' | 'pglite'): BrainEngine {
     kind,
     executeRaw: async () => [],
     getConfig: async () => null,
+    logIngest: async () => undefined,
   } as unknown as BrainEngine;
 }
 
@@ -228,17 +229,24 @@ test('PGLite config with a Postgres parent falls back to serial without creating
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ engine: 'postgres', database_url: 'postgresql://example.invalid/gbrain' }));
 });
 
-test('managed Postgres import workers receive the validated target and standard budget without URL/path fields', async () => {
+test('managed global config never constructs workers for the selected Postgres engine', async () => {
   process.env.GBRAIN_MAX_CONNECTIONS = '14';
   const target = { manager_id: 'gbrain-managed-postgres', cluster_id: '00000000-0000-4000-8000-000000000123' };
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ engine: 'postgres', managed_postgres: target }));
-  await runImport(fakeEngine('postgres'), ['--no-embed', '--workers', '2', importDir]);
-  expect(workerConnects).toBe(2);
-  expect(workerPoolSizes).toEqual([2, 2]);
-  for (const workerConfig of workerConfigs) {
-    expect(workerConfig).toMatchObject({ engine: 'postgres', managed_postgres: target, poolSize: 2 });
-    expect(workerConfig.database_url).toBeUndefined();
-    expect(workerConfig.database_path).toBeUndefined();
+  writeFileSync(join(importDir, 'selected.md'), '---\ntitle: Selected\n---\ncontent\n');
+  let selectedEngineQueries = 0;
+  const selectedMount = fakeEngine('postgres');
+  selectedMount.executeRaw = async () => {
+    selectedEngineQueries++;
+    return [];
+  };
+  try {
+    await runImport(selectedMount, ['--no-embed', '--workers', '2', importDir]);
+    expect(workerConnects).toBe(0);
+    expect(workerConfigs).toEqual([]);
+    expect(selectedEngineQueries).toBeGreaterThan(0);
+  } finally {
+    rmSync(join(importDir, 'selected.md'), { force: true });
   }
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ engine: 'postgres', database_url: 'postgresql://example.invalid/gbrain' }));
 });

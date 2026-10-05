@@ -137,6 +137,41 @@ describe('getEmbeddingColumnRegistry — builtins + merge', () => {
     expect(reg.embedding!.dimensions).toBe(1024);
   });
 
+  test('managed target without an explicit model leaves the embedding identity unresolved', () => {
+    const managed = cfg({
+      engine: 'postgres',
+      managed_postgres: {
+        manager_id: 'gbrain-managed-postgres',
+        cluster_id: '123e4567-e89b-42d3-a456-426614174000',
+      },
+    });
+    expect(getEmbeddingColumnRegistry(managed).embedding!.provider).toBe('');
+    const resolved: ResolvedColumn = {
+      name: 'embedding', type: 'vector', dimensions: 1536,
+      embeddingModel: 'openai:text-embedding-3-large',
+    };
+    expect(isCacheSafe(resolved, managed)).toBe(false);
+  });
+
+  test('explicit embedding model on managed target resolves normally', () => {
+    const managed = cfg({
+      engine: 'postgres',
+      managed_postgres: {
+        manager_id: 'gbrain-managed-postgres',
+        cluster_id: '123e4567-e89b-42d3-a456-426614174000',
+      },
+      embedding_model: 'voyage:voyage-3-large',
+      embedding_dimensions: 1024,
+    });
+    expect(getEmbeddingColumnRegistry(managed).embedding).toEqual({
+      provider: 'voyage:voyage-3-large', dimensions: 1024, type: 'vector',
+    });
+    expect(isCacheSafe({
+      name: 'embedding', type: 'vector', dimensions: 1024,
+      embeddingModel: 'voyage:voyage-3-large',
+    }, managed)).toBe(true);
+  });
+
   test('builtin embedding_image derives provider from cfg.embedding_multimodal_model', () => {
     const reg = getEmbeddingColumnRegistry(
       cfg({ embedding_multimodal_model: 'voyage:voyage-multimodal-3' }),

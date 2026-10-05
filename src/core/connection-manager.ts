@@ -41,6 +41,7 @@ import { resolvePrepare, resolveSessionTimeouts, resolvePoolSize, resolveMaxLife
 import { redactPgUrl } from './url-redact.ts';
 import { logConnectionEvent } from './connection-audit.ts';
 import { validateManagedPostgresIdentity } from './engine-target.ts';
+import type { ManagedSession } from './managed-postgres-binding.ts';
 
 export type Sql = ReturnType<typeof postgres>;
 
@@ -77,7 +78,7 @@ interface UrlConnectionManagerOpts {
 /** A verified managed pool is supplied by its owner; this manager never owns it. */
 export interface ManagedConnectionManagerOpts {
   managedIdentity: string;
-  managedPool?: Sql;
+  managedSession?: ManagedSession<Sql>;
   parent?: ConnectionManager;
   url?: never;
   directUrl?: never;
@@ -288,6 +289,7 @@ export class ConnectionManager {
   private readonly opts: ConnectionManagerOpts;
   private readonly _managedIdentity: string | null;
   private readonly _managedParent: ConnectionManager | null = null;
+  private _managedSession: ManagedSession<Sql> | null = null;
   private _readPool: Sql | null = null;
   private _readPoolOwnedExternally: boolean;
   private _directInit: Promise<Sql | null> | null = null;
@@ -309,7 +311,7 @@ export class ConnectionManager {
       let managedIdentity: string;
       try { managedIdentity = validateManagedPostgresIdentity(rawOpts.managedIdentity); }
       catch { throw new ConnectionManagerTargetError(); }
-      if (Object.keys(rawOpts).some(key => !['managedIdentity', 'managedPool', 'parent'].includes(key)) ||
+       if (Object.keys(rawOpts).some(key => !['managedIdentity', 'managedSession', 'parent'].includes(key)) ||
           Object.prototype.hasOwnProperty.call(rawOpts, 'url') ||
           Object.prototype.hasOwnProperty.call(rawOpts, 'directUrl') ||
           Object.prototype.hasOwnProperty.call(rawOpts, 'readPoolSize') ||
@@ -317,23 +319,20 @@ export class ConnectionManager {
           Object.prototype.hasOwnProperty.call(rawOpts, 'readPoolOwnedExternally')) {
         throw new ConnectionManagerTargetError();
       }
-      const parent = rawOpts.parent;
-      let pool = rawOpts.managedPool as Sql | undefined;
-      if (parent !== undefined) {
-        if (!(parent instanceof ConnectionManager) || parent.managedIdentity !== managedIdentity) {
-          throw new ConnectionManagerTargetError();
-        }
-        const parentPool = parent.peekReadPool();
-        if (!parentPool || (pool !== undefined && pool !== parentPool)) throw new ConnectionManagerTargetError();
-        pool = parentPool;
-      } else if (!pool) {
+      const rawParent = rawOpts.parent;
+      const parent = rawParent instanceof ConnectionManager ? rawParent : null;
+      const managedSession = rawOpts.managedSession as ManagedSession<Sql> | undefined;
+      if (rawParent !== undefined && (!parent || parent.managedIdentity !== managedIdentity)) {
         throw new ConnectionManagerTargetError();
       }
-      if (!pool) throw new ConnectionManagerTargetError();
+      if (parent && (!parent._managedSession || managedSession)) throw new ConnectionManagerTargetError();
+      if (!parent && !managedSession) throw new ConnectionManagerTargetError();
+      if (managedSession && (!managedSession.matches(managedIdentity) || parent)) throw new ConnectionManagerTargetError();
       this.opts = opts;
       this._managedIdentity = managedIdentity;
-      this._managedParent = parent instanceof ConnectionManager ? parent : null;
-      this._readPool = this._managedParent ? null : pool;
+      this._managedParent = parent;
+      this._managedSession = managedSession ?? (parent ? parent.borrowManagedSession() : null);
+      this._readPool = null;
       this._readPoolOwnedExternally = true;
       this._killSwitch = false;
       this._isSupabase = false;
@@ -396,6 +395,7 @@ export class ConnectionManager {
    * inheritance to share the same instance.
    */
   peekReadPool(): Sql | null {
+    if (this._managedSession) return this._managedSession.peek() as Sql | null;
     if (this.isManagedMode && this._managedParent) return this._managedParent.peekReadPool();
     return this._readPool;
   }
@@ -406,13 +406,7 @@ export class ConnectionManager {
    */
   setReadPool(sql: Sql): void {
     if (this.isManagedMode) {
-      if (this._managedParent) {
-        if (sql !== this._managedParent.peekReadPool()) throw new ConnectionManagerTargetError();
-        return;
-      }
-      this._readPool = sql;
-      this._readPoolOwnedExternally = true;
-      return;
+      throw new ConnectionManagerTargetError();
     }
     this._readPool = sql;
     this._readPoolOwnedExternally = true;
@@ -423,6 +417,7 @@ export class ConnectionManager {
    * we don't double-create when db.ts:connect already owns the singleton.
    */
   async getReadPool(): Promise<Sql> {
+    if (this._managedSession) return this._managedSession.read() as Sql;
     if (this.isManagedMode && this._managedParent) {
       const pool = this._managedParent.peekReadPool();
       if (pool) return pool;
@@ -456,6 +451,7 @@ export class ConnectionManager {
    * Throws if pool not ready.
    */
   read(): Sql {
+    if (this._managedSession) return this._managedSession.read() as Sql;
     if (this.isManagedMode && this._managedParent) {
       const pool = this._managedParent.peekReadPool();
       if (pool) return pool;
@@ -660,7 +656,7 @@ export class ConnectionManager {
    * (db.ts singleton path). Direct pool is always ours.
    */
   async disconnect(): Promise<void> {
-    if (this.isManagedMode) return;
+    if (this.isManagedMode) { this._managedSession?.detach(); this._managedSession = null; this._readPool = null; return; }
     // #1972: end both pools concurrently with a gbrain-owned hard bound, so the
     // per-pool drains don't STACK (sequential 2s waits → ~4-6s once the
     // instance/module pool is added downstream) and neither can hang teardown
@@ -676,6 +672,16 @@ export class ConnectionManager {
       this._readPool = null;
     }
     await Promise.all(ends);
+  }
+
+  /** Internal session borrowing preserves exact parent attachment ancestry. */
+  borrowManagedSession(): ManagedSession<Sql> {
+    if (!this._managedSession) throw new ConnectionManagerTargetError();
+    return this._managedSession.borrow();
+  }
+  requestManagedRefresh(): Promise<void> {
+    if (!this._managedSession) return Promise.reject(new ConnectionManagerTargetError());
+    return this._managedSession.refresh();
   }
 
   /**

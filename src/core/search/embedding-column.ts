@@ -69,6 +69,7 @@ import type {
 } from '../types.ts';
 import type { GBrainConfig } from '../config.ts';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from '../ai/defaults.ts';
+import { normalizeEngineTarget } from '../engine-target.ts';
 
 // ---- Constants ---------------------------------------------------------
 
@@ -315,7 +316,15 @@ export function getEmbeddingColumnRegistry(
   // unit tests that exercise the registry without booting the gateway).
   let gwModel: string | undefined;
   let gwDims: number | undefined;
-  let unresolvedIdentity = !cfg.embedding_model?.trim() && !!(cfg.database_path || cfg.database_url);
+  let managedTarget = false;
+  try {
+    managedTarget = normalizeEngineTarget(cfg).kind === 'postgres-managed';
+  } catch {
+    // Malformed or contradictory optional targets do not make config reads
+    // throw on this hot path. Existing URL/path handling remains unchanged.
+  }
+  let unresolvedIdentity = !cfg.embedding_model?.trim() &&
+    (!!(cfg.database_path || cfg.database_url) || managedTarget);
   try {
     // Dynamic import avoids a static cycle (gateway can transitively
     // depend on this module via search/hybrid.ts → search/embedding-column.ts).
@@ -490,7 +499,13 @@ export function isDefaultColumn(resolved: ResolvedColumn): boolean {
 export function isCacheSafe(resolved: ResolvedColumn, cfg: GBrainConfig): boolean {
   if (resolved.name !== DEFAULT_COLUMN_NAME) return false;
   if (!resolved.embeddingModel) return false;
-  if (!cfg.embedding_model?.trim() && (cfg.database_path || cfg.database_url)) return false;
+  let managedTarget = false;
+  try {
+    managedTarget = normalizeEngineTarget(cfg).kind === 'postgres-managed';
+  } catch {
+    // Preserve the existing non-throwing cache-safety contract.
+  }
+  if (!cfg.embedding_model?.trim() && ((cfg.database_path || cfg.database_url) || managedTarget)) return false;
   // v0.37 fix wave: same resolution chain as the registry — cfg > gateway > default.
   let gwModel: string | undefined;
   let gwDims: number | undefined;

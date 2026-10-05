@@ -12,6 +12,7 @@ import {
   ConnectionManagerTargetError,
   DEFAULT_DIRECT_POOL_SIZE,
 } from '../src/core/connection-manager.ts';
+import { ManagedPostgresBinding } from '../src/core/managed-postgres-binding.ts';
 
 describe('isSupabasePoolerUrl', () => {
   test('detects port 6543', () => {
@@ -43,13 +44,19 @@ describe('ConnectionManager — managed single-pool mode', () => {
   type Pool = ReturnType<typeof ConnectionManager.prototype.read>;
   const managedPool = (end?: () => Promise<void>) => ({ end } as unknown as Pool);
   const identity = 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000001';
+  async function managerFor(pool: Pool, candidate: () => Pool = () => pool) {
+    const binding = new ManagedPostgresBinding(identity, { engine: 'postgres' }, async () => ({ pool: candidate(), identity }), async () => {}, () => new ConnectionManagerTargetError());
+    await binding.ready;
+    const session = binding.attach();
+    return { binding, session, manager: new ConnectionManager({ managedIdentity: identity, managedSession: session }) };
+  }
 
   test('read, DDL and bulk all use the verified pool despite hostile direct URL env', async () => {
     const original = process.env.GBRAIN_DIRECT_DATABASE_URL;
     try {
       process.env.GBRAIN_DIRECT_DATABASE_URL = 'postgresql://u:p@host.invalid:5432/db';
       const pool = managedPool();
-      const cm = new ConnectionManager({ managedIdentity: identity, managedPool: pool });
+      const { manager: cm } = await managerFor(pool);
       let directCalls = 0;
       (cm as unknown as { initDirectPool(): Promise<Pool> }).initDirectPool = async () => { directCalls++; return pool; };
       expect(cm.read()).toBe(pool);
@@ -69,43 +76,42 @@ describe('ConnectionManager — managed single-pool mode', () => {
     }
   });
 
-  test('managed disconnect never ends the externally owned pool; setReadPool refreshes it', async () => {
+  test('managed disconnect never ends externally owned pools and managed setReadPool refuses mutation', async () => {
     let ends = 0;
     const first = managedPool(async () => { ends++; });
     const refreshed = managedPool(async () => { ends++; });
-    const cm = new ConnectionManager({ managedIdentity: identity, managedPool: first });
-    cm.setReadPool(refreshed);
-    expect(cm.read()).toBe(refreshed);
-    expect(await cm.getReadPool()).toBe(refreshed);
+    const { manager: cm } = await managerFor(first);
+    expect(() => cm.setReadPool(refreshed)).toThrow(ConnectionManagerTargetError);
+    expect(cm.read()).toBe(first);
+    expect(await cm.getReadPool()).toBe(first);
     await cm.disconnect();
     expect(ends).toBe(0);
     expect(cm.managedIdentity).toBe(identity);
   });
 
-  test('same-identity parent shares pool; other identities and target modes refuse', () => {
+  test('same-identity parent borrows a descendant session; other targets refuse', async () => {
     const pool = managedPool();
-    const parent = new ConnectionManager({ managedIdentity: identity, managedPool: pool });
+    const { manager: parent } = await managerFor(pool);
     expect(new ConnectionManager({ managedIdentity: identity, parent }).read()).toBe(pool);
-    expect(new ConnectionManager({ managedIdentity: identity, parent, managedPool: pool }).read()).toBe(pool);
     expect(() => new ConnectionManager({ managedIdentity: 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000002', parent })).toThrow(ConnectionManagerTargetError);
-    expect(() => new ConnectionManager({ managedIdentity: identity, parent, managedPool: managedPool() })).toThrow(ConnectionManagerTargetError);
+    expect(() => new ConnectionManager({ managedIdentity: identity, parent, managedSession: parent.borrowManagedSession() })).toThrow(ConnectionManagerTargetError);
     expect(() => new ConnectionManager({ url: 'postgresql://u:p@localhost/db', parent })).toThrow(ConnectionManagerTargetError);
-    expect(() => new ConnectionManager({ managedIdentity: identity, managedPool: pool, parent: new ConnectionManager({ url: 'postgresql://u:p@localhost/db' }) })).toThrow(ConnectionManagerTargetError);
+    expect(() => new ConnectionManager({ managedIdentity: identity, parent: new ConnectionManager({ url: 'postgresql://u:p@localhost/db' }) })).toThrow(ConnectionManagerTargetError);
   });
 
-  test('managed children follow parent refresh and cannot fork their pool', async () => {
+  test('managed child follows its binding refresh and cannot mutate its pool', async () => {
     const first = managedPool();
-    const refreshed = managedPool();
-    const parent = new ConnectionManager({ managedIdentity: identity, managedPool: first });
+    let refreshed = first;
+    const { binding, manager: parent } = await managerFor(first, () => refreshed);
     const child = new ConnectionManager({ managedIdentity: identity, parent });
     expect(child.read()).toBe(first);
     expect(await child.getReadPool()).toBe(first);
-    parent.setReadPool(refreshed);
+    refreshed = managedPool();
+    await binding.refresh();
     expect(child.peekReadPool()).toBe(refreshed);
     expect(child.read()).toBe(refreshed);
     expect(await child.getReadPool()).toBe(refreshed);
-    child.setReadPool(refreshed);
-    expect(child.read()).toBe(refreshed);
+    expect(() => child.setReadPool(refreshed)).toThrow(ConnectionManagerTargetError);
     expect(() => child.setReadPool(first)).toThrow(ConnectionManagerTargetError);
   });
 

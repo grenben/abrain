@@ -62,7 +62,11 @@ interface CliCommandBase {
   selfHelp?: true;
   /** Skip the startup update check and mark children (member of STARTUP_HOOK_SKIP_COMMANDS). */
   skipStartupHooks?: true;
+  /** Safety check that must run before the connectEngine terminator. */
+  preConnectGuard?: CliPreConnectGuard;
 }
+
+export type CliPreConnectGuard = 'migrate-source';
 
 export type CliCommandRecord =
   | (CliCommandBase & {
@@ -207,7 +211,7 @@ export const CLI_COMMANDS: readonly CliCommandRecord[] = [  // Pre-connect: disp
   // deliberately NOT here — it gets a partial dispatch (list/get route over MCP engine-free, the
   // rest refuse) in the main dispatch before connectEngine().
   { name: 'config', phase: 'post-connect', thinClient: 'refuse', selfHelp: true, load: () => import('./commands/config.ts') },
-  { name: 'migrate', phase: 'post-connect', thinClient: 'refuse', selfHelp: true, load: () => import('./commands/migrate.ts') },
+  { name: 'migrate', phase: 'post-connect', thinClient: 'refuse', selfHelp: true, preConnectGuard: 'migrate-source', load: () => import('./commands/migrate.ts') },
   { name: 'retrieval-upgrade', phase: 'post-connect', thinClient: 'refuse', selfHelp: true, load: () => import('./commands/retrieval-upgrade.ts') },
   // selfHelp: #3686 (the #578 residue): eval / storage / reindex each ship real usage — eval's
   // printHelp (15 subcommands), storage's status usage, reindex's target-flag usage — that the

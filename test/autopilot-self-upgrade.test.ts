@@ -39,6 +39,11 @@ describe('autopilot self-upgrade static-shape regressions', () => {
     expect(AUTOPILOT_SRC).toContain('attemptAutopilotSelfUpgrade(engine, engineType, lockPath, () => !configurationBlocked())');
     expect(SELF_UPGRADE_SRC).toMatch(/if \(!mayContinue\(\)\) return;[\s\S]*?execSync\('gbrain upgrade --swap-only'/);
   });
+  test('all metadata writes use fresh file-only config reads, never the env-effective object', () => {
+    expect(SELF_UPGRADE_SRC).toMatch(/const cfg = loadConfigFileOnly\(\);[\s\S]*?reconcileBreadcrumb\(cfg\.self_upgrade, VERSION\)[\s\S]*?saveConfig\(cfg\)/);
+    expect(SELF_UPGRADE_SRC).toMatch(/const breadcrumbConfig = loadConfigFileOnly\(\);[\s\S]*?attempting_version: latestVersion[\s\S]*?saveConfig\(breadcrumbConfig\)/);
+    expect(SELF_UPGRADE_SRC).toMatch(/const fresh = loadConfigFileOnly\(\);[\s\S]*?failed_versions: \[\.\.\.failed\][\s\S]*?saveConfig\(fresh\)/);
+  });
   test('apply path unlinks the lock before exit so the relaunched binary does not self-exit on a stale lock', () => {
     // The exit-for-relaunch block unlinks lockPath then process.exit(0).
     expect(SELF_UPGRADE_SRC).toMatch(/unlinkSync\(lockPath\)[\s\S]{0,120}process\.exit\(0\)/);

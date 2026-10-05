@@ -23,7 +23,7 @@ import { detectExecutionEnvironment } from '../core/execution-env.ts';
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'path';
 import { execSync } from 'child_process';
 import type { BrainEngine } from '../core/engine.ts';
-import { loadConfig, saveConfig, gbrainPath as gbrainHomePath } from '../core/config.ts';
+import { loadConfig, loadConfigFileOnly, saveConfig, gbrainPath as gbrainHomePath } from '../core/config.ts';
 export { autopilotEngineIdentity } from './autopilot-engine-identity.ts';
 import {
   classifyAutopilotLockHolder,
@@ -312,7 +312,7 @@ export function decideLockAcquisition(
  */
 export function reconcileSelfUpgradeAtBoot(): void {
   try {
-    const cfg = loadConfig();
+    const cfg = loadConfigFileOnly();
     if (!cfg) return;
     const { state, transition } = reconcileBreadcrumb(cfg.self_upgrade, VERSION);
     if (!transition) return;
@@ -394,6 +394,11 @@ export async function attemptAutopilotSelfUpgrade(
   engineType: string,
   lockPath: string,
   mayContinue: () => boolean = () => true,
+  testDeps: {
+    idle?: () => Promise<boolean>;
+    installMethod?: () => ReturnType<typeof detectInstallMethod>;
+    swap?: () => void;
+  } = {},
 ): Promise<void> {
   try {
     const cfg = loadConfig();
@@ -414,11 +419,11 @@ export async function attemptAutopilotSelfUpgrade(
     if (!entry || entry.marker.kind !== 'upgrade_available' || !entry.marker.latest) return;
     const latestVersion = entry.marker.latest;
 
-    const idle = await computeAutopilotIdle(engine, engineType);
+    const idle = await (testDeps.idle ? testDeps.idle() : computeAutopilotIdle(engine, engineType));
     const qh = cfg.self_upgrade?.quiet_hours;
     const tz = qh?.tz || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const verdict = evaluateQuietHours({ start: qh?.start ?? 23, end: qh?.end ?? 8, tz }, new Date());
-    const installMethod = detectInstallMethod();
+    const installMethod = testDeps.installMethod ? testDeps.installMethod() : detectInstallMethod();
 
     const decision = decideSelfUpgrade({
       mode: 'auto',
@@ -448,19 +453,26 @@ export async function attemptAutopilotSelfUpgrade(
 
     if (!mayContinue()) return;
     // Apply. Breadcrumb first so a crash-on-launch is attributable.
-    cfg.self_upgrade = { ...(cfg.self_upgrade ?? {}), attempting_version: latestVersion };
-    saveConfig(cfg);
+    const breadcrumbConfig = loadConfigFileOnly();
+    // An env-effective config is runtime policy, not a durable upgrade target.
+    // Do not swap unless the attempt can be attributed in the file plane.
+    if (!breadcrumbConfig) return;
+    breadcrumbConfig.self_upgrade = { ...(breadcrumbConfig.self_upgrade ?? {}), attempting_version: latestVersion };
+    saveConfig(breadcrumbConfig);
     logSelfUpgrade({ channel: 'autopilot', action: 'apply', current: VERSION, latest: latestVersion, reason: decision.reason });
     console.log(`[autopilot] self-upgrade: applying ${VERSION} -> ${latestVersion} (idle, quiet hours).`);
 
     try {
-      execSync('gbrain upgrade --swap-only', {
-        stdio: 'inherit',
-        timeout: 300_000,
-        env: { ...process.env, GBRAIN_SKIP_STARTUP_HOOKS: '1' },
-      });
+      if (testDeps.swap) testDeps.swap();
+      else {
+        execSync('gbrain upgrade --swap-only', {
+          stdio: 'inherit',
+          timeout: 300_000,
+          env: { ...process.env, GBRAIN_SKIP_STARTUP_HOOKS: '1' },
+        });
+      }
     } catch (e) {
-      const fresh = loadConfig();
+      const fresh = loadConfigFileOnly();
       if (fresh) {
         const failed = new Set(fresh.self_upgrade?.failed_versions ?? []);
         failed.add(latestVersion);

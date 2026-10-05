@@ -33,14 +33,14 @@ export async function runInit(args: string[]) {
     return;
   }
 
-  validateInitFlags(args);
+  const initLane = validateInitFlags(args);
 
   const isSupabase = args.includes('--supabase');
   const isPGLite = args.includes('--pglite');
   const isMcpOnly = args.includes('--mcp-only');
   const isForce = args.includes('--force');
   const isNonInteractive = args.includes('--non-interactive');
-  const isMigrateOnly = args.includes('--migrate-only');
+  const isMigrateOnly = initLane === 'migrate-only';
   const jsonOutput = args.includes('--json');
   const fileState = readInitConfigState(jsonOutput);
   const urlIndex = args.indexOf('--url');

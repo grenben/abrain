@@ -39,6 +39,30 @@ import { countStaleFactEmbeddings } from '../core/facts/embedding-identity.ts';
 import { authorizeMigrationBudget, assertMigrationLeases, ceilCents, MigrationBudgetRefusal, type MigrationBudgetRefusalDetails, type MigrationWorstCase } from '../core/embedding-migration-budget.ts';
 import { planMigrationWorstCase, MIGRATION_PROBE_TEXT, RERANKER_PROBE } from '../core/embedding-migration-worst-case.ts';
 import { withAIInvocationGuard } from '../core/ai/invocation-guard.ts';
+import { createHash } from 'node:crypto';
+import { normalizeEngineTarget } from '../core/engine-target.ts';
+
+/** Redacted, deterministic label for a durable managed PostgreSQL target. */
+function managedTargetLabel(config: Parameters<typeof normalizeEngineTarget>[0]): string | null {
+  try {
+    const target = normalizeEngineTarget(config);
+    if (target.kind !== 'postgres-managed') return null;
+    const canonical = `postgres-managed:v1:${target.managed_postgres.manager_id}:${target.managed_postgres.cluster_id}`;
+    return `managed-${createHash('sha256').update(canonical).digest('hex').slice(0, 12)}`;
+  } catch {
+    // Identity output is informational; malformed/contradictory target data
+    // must not leak through diagnostics or turn status into a config failure.
+    return null;
+  }
+}
+
+function migrationTargetIdentity(config: Parameters<typeof normalizeEngineTarget>[0] | null | undefined): { engine: string; target: string } {
+  if (config?.database_url) return { engine: 'postgres', target: redactPgUrl(config.database_url) };
+  const managed = config && managedTargetLabel(config);
+  if (managed) return { engine: 'postgres', target: managed };
+  if (config?.database_path) return { engine: 'pglite', target: config.database_path };
+  return { engine: config?.engine ?? 'pglite', target: 'default path' };
+}
 
 /**
  * Brain-wide migration lock (round-2 #4): serializes whole migrations so two
@@ -545,9 +569,7 @@ export async function planMigrationFlow(
   try {
     const { loadConfig } = await import('../core/config.ts');
     const cfg = loadConfig();
-    if (cfg?.database_url) identity = { engine: 'postgres', target: redactPgUrl(cfg.database_url) };
-    else if (cfg?.database_path) identity = { engine: 'pglite', target: cfg.database_path };
-    else identity = { engine: cfg?.engine ?? 'pglite', target: 'default path' };
+    identity = migrationTargetIdentity(cfg);
   } catch { /* identity is informational */ }
 
   // Quiesce-lite census (round-1 C2 / round-2 #3): embed writers outside the
@@ -898,9 +920,7 @@ export async function runMigrateEmbeddings(
         ? { model: fileCfg.embedding_model ?? null, dims: fileCfg.embedding_dimensions ?? null }
         : null;
       const cfg = loadConfig();
-      if (cfg?.database_url) identity = { engine: 'postgres', target: redactPgUrl(cfg.database_url) };
-      else if (cfg?.database_path) identity = { engine: 'pglite', target: cfg.database_path };
-      else identity = { engine: cfg?.engine ?? 'pglite', target: 'default path' };
+      identity = migrationTargetIdentity(cfg);
     } catch { /* informational */ }
 
     const resumeCmd = report.marker.kind === 'live'

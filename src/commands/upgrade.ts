@@ -404,10 +404,10 @@ function saveUpgradeState(oldVersion: string, newVersion: string) {
  * one-time informational banner, and rewrite an existing autopilot systemd unit
  * to Restart=always so the silent channel's exit-for-relaunch respawns.
  */
-async function applySelfUpgradeSetup(noAutopilotInstall: boolean): Promise<void> {
+export async function applySelfUpgradeSetup(noAutopilotInstall: boolean): Promise<void> {
   try {
-    const { loadConfig, saveConfig } = await import('../core/config.ts');
-    const cfg = loadConfig();
+    const { loadConfigFileOnly, saveConfig } = await import('../core/config.ts');
+    const cfg = loadConfigFileOnly();
     if (cfg) {
       const su = cfg.self_upgrade ?? {};
       let changed = false;

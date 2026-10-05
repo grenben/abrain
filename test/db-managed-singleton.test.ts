@@ -22,7 +22,7 @@ function dependencies(
       overrides.resolve?.(reference);
       return {
       identity: 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000001',
-      options: { path: '/private/socket/.s.PGSQL.5432', user: 'managed', database: 'app', port: 5432, password: async () => 'secret', ssl: false, debug: false },
+       options: { path: '/private/socket/.s.PGSQL.5432', user: 'managed', database: 'app', port: 5432, password: async () => 'secret', ssl: false, debug: false, onnotice: 'resolver-notice' },
       assertPinnedState: () => { overrides.pinned?.(); },
       verifyLiveIdentity: (value: unknown) => {
         if (overrides.verify) return overrides.verify(value);
@@ -54,9 +54,10 @@ describe('managed postgres candidate', () => {
     expect(candidate.pool).toBe(pool);
     const [options] = args as [Record<string, unknown>];
     expect(options).toMatchObject({
-      max: 7, idle_timeout: 20, connect_timeout: 10, types: sharedOptions.types, onnotice: sharedOptions.onnotice,
+      max: 7, idle_timeout: 20, connect_timeout: 10, types: sharedOptions.types,
       path: '/private/socket/.s.PGSQL.5432', user: 'managed', database: 'app', port: 5432, ssl: false, debug: false,
     });
+    expect(options.onnotice).toBeFunction();
     expect(options.password).not.toBe(sharedOptions.password);
     expect(await (options.password as () => Promise<string>)()).toBe('secret');
     expect(closes).toBe(0);
@@ -181,6 +182,14 @@ describe('managed singleton coordinator', () => {
     expect(await singleton.connect('one', async () => candidate('one', {}))).toBe(true);
   });
 
+  test('legacy connect shim preserves only recognized sanitized failure kinds', async () => {
+    const singleton = new ManagedPostgresSingleton<object>(kind => new ManagedPostgresPoolError(kind), async () => {});
+    await expect(singleton.connect('one', async () => { throw new ManagedPostgresPoolError('unavailable'); }))
+      .rejects.toMatchObject({ kind: 'unavailable', message: 'Managed PostgreSQL pool could not be constructed or verified.' });
+    await expect(singleton.connect('one', async () => { const error = new Error('secret path'); error.name = 'Other'; Object.assign(error, { kind: 'unavailable' }); throw error; }))
+      .rejects.toMatchObject({ kind: 'target_unverified', message: 'Managed PostgreSQL pool could not be constructed or verified.' });
+  });
+
   test('disconnect during build closes a late success once and never publishes it', async () => {
     let closes = 0;
     const singleton = new ManagedPostgresSingleton<object>(managedError, async () => { closes++; });
@@ -230,6 +239,7 @@ describe('managed singleton coordinator', () => {
     const closing = singleton.disconnect();
     expect(singleton.getPool()).toBeNull();
     expect(singleton.isBusy()).toBe(false);
+    await Promise.resolve();
     expect(closes).toBe(1);
     finish();
     await closing;

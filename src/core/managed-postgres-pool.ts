@@ -63,7 +63,7 @@ export async function createManagedPostgresCandidate(
   let pool: Pool;
   try {
     // Resolver-owned connection fields deliberately override shared options.
-    pool = deps.create({ ...poolOptions, ...resolution.options } as never);
+    pool = deps.create({ ...poolOptions, ...resolution.options, onnotice: () => {} } as never);
   } catch {
     throw new ManagedPostgresPoolError('unavailable');
   }

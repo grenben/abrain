@@ -759,20 +759,17 @@ export async function runImport(
   let workerFailed = false;
   try {
     if (actualWorkers > 1) {
-      // v0.22.13 (PR #490 A1 + Q3): use engine.kind discriminator (not config.engine
-      // string sniff) and fall back to serial only when no Postgres target is
-      // configured. PGLite remains serial; managed Postgres is worker-capable.
+      // Managed targets lack a selected-engine binding; use the selected engine serially.
       const config = loadConfig();
-      const engineConfig = config ? toEngineConfig(config) : null;
-      const target = engineConfig ? normalizeEngineTarget(engineConfig) : null;
-      const postgresTarget = target?.kind === 'postgres-managed'
-        || (target?.kind === 'postgres-url' && !!target.database_url);
+      const target = config ? normalizeEngineTarget(config) : null;
+      const postgresTarget = target?.kind === 'postgres-url' && !!target.database_url;
       if (engine.kind !== 'postgres' || !postgresTarget) {
         for (const file of files) {
           if (signal?.aborted) break;
           await processFile(engine, file);
         }
       } else {
+        const engineConfig = toEngineConfig(config!);
         const { PostgresEngine } = await import('../core/postgres-engine.ts');
         const { resolvePoolSize } = await import('../core/db.ts');
         // Each child keeps the established two-connection pool. GBRAIN_POOL_SIZE

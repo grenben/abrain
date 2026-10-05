@@ -10,11 +10,13 @@ import { configDir } from './config.ts';
 import { createManagedPostgresCandidate, ManagedPostgresPoolError } from './managed-postgres-pool.ts';
 import { resolveManagedPostgresConnection } from './managed-postgres/connection.ts';
 import { ManagedPostgresSingleton } from './managed-postgres-singleton.ts';
+import type { ManagedAcquisition, ManagedOwnerLease, ManagedRetirement } from './managed-postgres-binding.ts';
+import type { ManagedCandidate } from './managed-postgres-singleton.ts';
 
 let sql: ReturnType<typeof postgres> | null = null;
 let connectedUrl: string | null = null;
 const managedSingleton = new ManagedPostgresSingleton<ReturnType<typeof postgres>>(
-  () => new ManagedPostgresPoolError(),
+  kind => new ManagedPostgresPoolError(kind),
   endPoolBounded,
 );
 
@@ -252,6 +254,7 @@ export async function setSessionDefaults(_sql: ReturnType<typeof postgres>): Pro
 export function getConnection(): ReturnType<typeof postgres> {
   const connection = sql ?? managedSingleton.getPool();
   if (!connection) {
+    if (managedSingleton.isBusy()) throw new ManagedPostgresPoolError('target_unverified');
     throw new GBrainError(
       'No database connection',
       'connect() has not been called',
@@ -260,6 +263,29 @@ export function getConnection(): ReturnType<typeof postgres> {
   }
   return connection;
 }
+
+/** Managed-only acquisition. Slot reservation/session/lease are synchronous; ready is the proof barrier. */
+export function acquireManaged(
+  identity: string,
+  config: EngineConfig,
+  build: (config: Readonly<EngineConfig>) => Promise<ManagedCandidate<ReturnType<typeof postgres>>>,
+): ManagedAcquisition<ReturnType<typeof postgres>> {
+  if (sql) throw new ManagedPostgresPoolError('target_unverified');
+  return managedSingleton.acquire(identity, config, build);
+}
+
+/** Exact-owner release; borrowers only detach their own session. */
+export function beginManagedRelease(owner: ManagedOwnerLease): ManagedRetirement {
+  return managedSingleton.beginRelease(owner);
+}
+
+/** Snapshot/revoke the exact managed slot before global shutdown yields. */
+export function beginManagedGlobalShutdown(): ManagedRetirement {
+  const retirement = managedSingleton.beginGlobalRelease();
+  return retirement;
+}
+
+export function managedModuleBusy(): boolean { return managedSingleton.isBusy(); }
 
 /**
  * Connect the module-level singleton. Returns `true` iff THIS call created the
@@ -278,9 +304,11 @@ export function getConnection(): ReturnType<typeof postgres> {
 export async function connect(config: EngineConfig): Promise<boolean> {
   const target = normalizeEngineTarget(config);
   if (target.kind === 'postgres-managed') {
+    // Legacy compatibility only: this Boolean is informational and is never
+    // release authority. PostgresEngine uses acquireManaged/beginManagedRelease.
     const identity = `postgres-managed:v1:${target.managed_postgres.manager_id}:${target.managed_postgres.cluster_id}`;
     if (sql) throw new ManagedPostgresPoolError();
-    const options = buildPoolOptions();
+    const options = buildPoolOptions(true);
     return managedSingleton.connect(identity, async () => {
       return createManagedPostgresCandidate(config, options, {
           resolve: resolveManagedPostgresConnection,
@@ -348,7 +376,7 @@ export async function disconnect(): Promise<void> {
   const s = sql;
   sql = null;
   connectedUrl = null;
-  const managedClose = managedSingleton.disconnect();
+  const managedRetirement = beginManagedGlobalShutdown();
   // Invalidate a managed proof synchronously, before the audit import yields.
   // v0.41.25.0 (#1570) — instrument every disconnect call site so v0.41.26
   // can identify the caller that's nulling the module singleton mid-cycle.
@@ -365,19 +393,25 @@ export async function disconnect(): Promise<void> {
   // concurrent module connect() can't observe a non-null `sql` mid-teardown and
   // join a pool that's already closing. Mirrors the v0.41.8.0 PGLite-disconnect
   // snapshot+early-null pattern.
-  await Promise.all([s ? endPoolBounded(s) : Promise.resolve(), managedClose]);
+  await Promise.all([s ? endPoolBounded(s) : Promise.resolve(), managedRetirement.finish()]);
 }
 
-function buildPoolOptions(): Record<string, unknown> {
+function buildPoolOptions(managed = false): Record<string, unknown> {
   const timeouts = resolveSessionTimeouts();
   const options: Record<string, unknown> = {
     max: resolvePoolSize(), idle_timeout: 20, connect_timeout: 10,
     max_lifetime: resolveMaxLifetimeSeconds(),
     types: { bigint: postgres.BigInt },
-    onnotice: process.env.GBRAIN_PG_NOTICES === '1' ? undefined : () => {},
+    onnotice: resolvePoolNoticeHandler(managed),
   };
   if (Object.keys(timeouts).length) options.connection = timeouts;
   return options;
+}
+
+/** Managed clients always suppress notices; URL clients preserve the legacy opt-in. */
+export function resolvePoolNoticeHandler(managed = false): (() => void) | undefined {
+  if (managed) return () => {};
+  return process.env.GBRAIN_PG_NOTICES === '1' ? undefined : () => {};
 }
 
 export async function initSchema(): Promise<void> {

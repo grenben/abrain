@@ -517,6 +517,37 @@ describe('reranker companion (D8)', () => {
 });
 
 describe('status surface + completion smoke check (D6/D11)', () => {
+  test('managed target status uses a stable redacted digest', async () => {
+    const uuidA = '123e4567-e89b-42d3-a456-426614174000';
+    const uuidB = '123e4567-e89b-42d3-a456-426614174001';
+    const configPath = join(tmpHome, '.gbrain', 'config.json');
+    const priorConfig = readFileSync(configPath);
+    const statusIdentity = async (clusterId: string) => {
+      writeFileSync(configPath, JSON.stringify({
+        engine: 'postgres',
+        managed_postgres: { manager_id: 'gbrain-managed-postgres', cluster_id: clusterId },
+      }));
+      const capture = captureStdout();
+      try {
+        await runMigrate(['--status', '--json']);
+        return JSON.parse(capture.lines.join('\n')).identity as { engine: string; target: string };
+      } finally { capture.restore(); }
+    };
+    try {
+      const first = await statusIdentity(uuidA);
+      const same = await statusIdentity(uuidA);
+      const other = await statusIdentity(uuidB);
+      expect(first.engine).toBe('postgres');
+      expect(first.target).toMatch(/^managed-[a-f0-9]{12}$/);
+      expect(same).toEqual(first);
+      expect(other.target).not.toBe(first.target);
+      expect(JSON.stringify([first, other])).not.toContain(uuidA);
+      expect(JSON.stringify([first, other])).not.toContain(uuidB);
+    } finally {
+      writeFileSync(configPath, priorConfig);
+    }
+  });
+
   test('--status --json reports planes, censuses, markers — and never mutates', async () => {
     const outLines: string[] = [];
     const origLog = console.log;

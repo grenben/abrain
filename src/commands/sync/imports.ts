@@ -44,15 +44,6 @@ type ImportContext = {
   progress: SyncProgress;
 };
 
-export function syncWorkerEngineConfig(config: ReturnType<typeof toEngineConfig>, poolSize: number) {
-  return { ...config, poolSize };
-}
-
-export function canUseSyncWorkerEngines(engineKind: BrainEngine['kind'], target: ReturnType<typeof normalizeEngineTarget> | null): boolean {
-  return engineKind === 'postgres' && (target?.kind === 'postgres-managed'
-    || (target?.kind === 'postgres-url' && !!target.database_url));
-}
-
 /** The add/modify drain. Returns a partial result when the run aborts. */
 export async function runImportsPhase(
   run: SyncRun,
@@ -388,14 +379,14 @@ async function drainImports(
   const importOne = (eng: BrainEngine, path: string) => importOnePath(run, ctx, eng, path);
     try {
     if (runParallel) {
-      // A1 (v0.22.13): use engine.kind discriminator instead of config?.engine
-      // string compare or constructor.name sniff. Q3: belt-and-suspenders fall
-      // back to serial only when no Postgres target is configured. PGLite stays
-      // serial; a validated managed Postgres reference is worker-capable.
+      // Use workers only for a configured URL target. Managed targets do not
+      // expose an exact binding on this selected engine, so constructing from
+      // global config could route writes into a different brain.
       const config = loadConfig();
-      const engineConfig = config ? toEngineConfig(config) : null;
-      const target = engineConfig ? normalizeEngineTarget(engineConfig) : null;
-      if (!canUseSyncWorkerEngines(engine.kind, target)) {
+      const target = config ? normalizeEngineTarget(config) : null;
+      const canUseWorkers = engine.kind === 'postgres'
+        && target?.kind === 'postgres-url' && !!target.database_url;
+      if (!canUseWorkers) {
         for (const path of importsToDo) {
           // v0.41.13.0 (T2 / D-V3-2): per-iteration abort check. PGLite
           // serial fallback inside the parallel branch (database_url unset).
@@ -406,6 +397,7 @@ async function drainImports(
           await importOne(engine, path);
         }
       } else {
+        const engineConfig = toEngineConfig(config!);
         const { PostgresEngine } = await import('../../core/postgres-engine.ts');
         const { resolvePoolSize } = await import('../../core/db.ts');
         const workerPoolSize = Math.min(2, resolvePoolSize(2));
@@ -422,7 +414,7 @@ async function drainImports(
           // already-connected engines on any one failure.
           for (let i = 0; i < workerCount; i++) {
             const eng = new PostgresEngine();
-            await eng.connect(syncWorkerEngineConfig(engineConfig!, workerPoolSize));
+            await eng.connect({ ...engineConfig, poolSize: workerPoolSize });
             workerEngines.push(eng);
           }
 

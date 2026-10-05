@@ -38,12 +38,17 @@ const INIT_VALUE_FLAGS = new Set([
   '--oauth-client-secret',
 ]);
 
+// A schema-only run may optionally request JSON output, and nothing else.
+// This includes force and remote/thin-client credentials: --force must never
+// widen the managed-target exemption.
+const MIGRATE_ONLY_FLAGS = new Set(['--migrate-only', '--json']);
+
 /** Validate flag syntax first, then guard every target-changing init lane. */
 export function validateInitFlags(
   args: string[],
   targetConfig?: ManagedPostgresTargetLike | null,
-): void {
-  if (args.includes('--help') || args.includes('-h')) return;
+): 'migrate-only' | 'regular' {
+  if (args.includes('--help') || args.includes('-h')) return 'regular';
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (!arg.startsWith('-')) continue;
@@ -58,12 +63,21 @@ export function validateInitFlags(
     if (arg.startsWith('--')) failInitFlag(`gbrain init: unknown flag ${arg}`, args.includes('--json'));
   }
 
+  const migrateOnly = args.includes('--migrate-only');
+  if (migrateOnly) {
+    if (args.some((arg) => !MIGRATE_ONLY_FLAGS.has(arg))) {
+      failInitFlag('gbrain init: --migrate-only must be used alone (optionally with --json)', args.includes('--json'));
+    }
+  }
+
   // Schema-only migration uses the complete configured EngineConfig and does
   // not replace its target. It remains supported for managed references.
-  if (!args.includes('--migrate-only')) {
+  const lane = migrateOnly ? 'migrate-only' : 'regular';
+  if (lane !== 'migrate-only') {
     const config = targetConfig === undefined ? loadConfigFileOnly() ?? {} : targetConfig ?? {};
     assertNoManagedPostgresTarget(config, 'init-reinit');
   }
+  return lane;
 }
 
 export function failInitFlag(message: string, jsonOutput: boolean): never {

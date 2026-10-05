@@ -69,13 +69,35 @@ async function expectManagedRefusal(fn: () => unknown | Promise<unknown>): Promi
 }
 
 describe('managed-target command refusals', () => {
-  test('exported init flag validator refuses target changes but permits help and migrate-only', () => {
+  test('exported init flag validator refuses target changes but permits help and pure migrate-only', () => {
     expect(() => validateInitFlags(['--pglite'], managed)).toThrow(ManagedPostgresUnsupportedError);
     expect(() => validateInitFlags(['--force', '--url', 'postgresql://host.invalid/db'], managed)).toThrow(ManagedPostgresUnsupportedError);
     expect(() => validateInitFlags(['--mcp-only'], managed)).toThrow(ManagedPostgresUnsupportedError);
     expect(() => validateInitFlags(['--migrate-only'], managed)).not.toThrow();
+    expect(() => validateInitFlags(['--migrate-only', '--json'], managed)).not.toThrow();
     expect(() => validateInitFlags(['--help'], managed)).not.toThrow();
-    expect(() => validateInitFlags(['--migrate-only', '--url', 'postgresql://host.invalid/db'], managed)).not.toThrow();
+    const exit = spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const args of [
+        ['--migrate-only', '--mcp-only'],
+        ['--migrate-only', '--pglite'],
+        ['--migrate-only', '--url', 'postgresql://host.invalid/db'],
+        ['--migrate-only', '--prefer-postgres'],
+        ['--migrate-only', '--mcp-url', 'https://host.invalid/mcp'],
+        ['--migrate-only', '--issuer-url', 'https://host.invalid'],
+        ['--migrate-only', '--oauth-client-id', 'client'],
+        ['--migrate-only', '--oauth-client-secret', 'secret'],
+        ['--migrate-only', '--force', '--pglite'],
+      ]) {
+        expect(() => validateInitFlags(args, managed)).toThrow('exit:1');
+      }
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
   });
 
   test('init flag syntax errors take precedence over managed-target refusal', () => {
@@ -165,6 +187,28 @@ describe('managed-target command refusals', () => {
     await expectManagedRefusal(() => runInit(['--force', '--url', 'postgresql://user:secret@host.invalid/db']));
     await expectManagedRefusal(() => runInit(['--mcp-only']));
     await expectManagedRefusal(() => runInit(['--prefer-postgres', '--non-interactive']));
+    const exit = spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const args of [
+        ['--migrate-only', '--mcp-only'],
+        ['--migrate-only', '--pglite'],
+        ['--migrate-only', '--url', 'postgresql://host.invalid/db'],
+        ['--migrate-only', '--prefer-postgres'],
+        ['--migrate-only', '--mcp-url', 'https://host.invalid/mcp'],
+        ['--migrate-only', '--issuer-url', 'https://host.invalid'],
+        ['--migrate-only', '--force', '--pglite'],
+      ]) {
+        await expect(runInit(args)).rejects.toThrow('exit:1');
+      }
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
+    expect(() => validateInitFlags(['--migrate-only'], managed)).not.toThrow();
+    expect(bytes()).toBe(before);
     await expectManagedRefusal(() => runPreferPostgresLadder({
       jsonOutput: false, apiKey: null, customPath: null, aiOpts: {}, schemaPack: 'gbrain-base-v2',
       skipEmbedCheck: true, allowDocker: true, allowCreateDb: true, localPostgres: true,
