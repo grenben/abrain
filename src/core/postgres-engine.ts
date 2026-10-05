@@ -133,6 +133,8 @@ import type { CjkKeywordCtx } from './search/cjk-keyword-sql.ts';
 import { postgresExecutor, type RunUnsafeOpts } from './engine-sql/dialect-postgres.ts';
 import type { SqlExecutor } from './engine-sql/executor.ts';
 import { scopedRead, unscopedExecutor } from './engine-sql/brands.ts';
+import { normalizeEngineTarget } from './engine-target.ts';
+import { DEFAULT_MANAGED_ENGINE_DEPENDENCIES, connectManagedIfTarget, disconnectManaged as disconnectManagedRuntime, managedEnginePool, reconnectManaged as reconnectManagedRuntime, type ManagedEngineDependencies, type ManagedEngineHost } from './postgres-engine-managed.ts';
 
 function escapeSqlStringLiteral(value: string): string {
   return value.replace(/'/g, "''");
@@ -164,6 +166,9 @@ export function getPostgresSchema(
 // follow-up that will reintroduce a typed retry mechanism.
 
 export class PostgresEngine implements BrainEngine {
+  constructor(dependencies: ManagedEngineDependencies = DEFAULT_MANAGED_ENGINE_DEPENDENCIES) { this._managedDeps = Object.freeze({ ...dependencies }); }
+  private readonly _managedDeps: ManagedEngineDependencies; private _managedIdentity: string | null = null;
+  private _managedGeneration = 0; private _managedInstancePoolOwned = false;
   private vectorIterativeScan?: Promise<boolean>;
   /** Transaction clones keep chunk invalidation and replacement atomic. */
   private _chunkWritesInTransaction = false;
@@ -226,6 +231,7 @@ export class PostgresEngine implements BrainEngine {
 
   // Instance connection (for workers) or fall back to module global (backward compat)
   get sql(): ReturnType<typeof postgres> {
+    if (this._managedIdentity !== null) return managedEnginePool(this._managedIdentity, this.connectionManager);
     if (this._sql) return this._sql;
     // issue #1678: an instance-pool engine whose _sql went null (a mid-process
     // disconnect/reconnect, or a reaped socket) must NOT fall through to the
@@ -339,7 +345,9 @@ export class PostgresEngine implements BrainEngine {
   async connect(config: EngineConfig & { poolSize?: number; parentConnectionManager?: ConnectionManager }): Promise<void> {
     this.vectorIterativeScan = undefined;
     this._savedConfig = config;
+    if (await connectManagedIfTarget(this.managedHost(), config)) return;
     const url = config.database_url;
+    this._managedIdentity = null;
     if (config.poolSize) {
       // Instance-level connection for worker isolation. resolvePoolSize lets
       // GBRAIN_POOL_SIZE cap below the caller's requested size when set — the
@@ -411,6 +419,18 @@ export class PostgresEngine implements BrainEngine {
     }
   }
 
+  private managedHost(): ManagedEngineHost {
+    const engine = this;
+    return {
+      deps: this._managedDeps,
+      stops: this._beforeDisconnect,
+      get sql() { return engine._sql; }, set sql(value) { engine._sql = value; }, get manager() { return engine.connectionManager; }, set manager(value) { engine.connectionManager = value; },
+      get identity() { return engine._managedIdentity; }, set identity(value) { engine._managedIdentity = value; }, get generation() { return engine._managedGeneration; }, set generation(value) { engine._managedGeneration = value; },
+      get instancePoolOwned() { return engine._managedInstancePoolOwned; }, set instancePoolOwned(value) { engine._managedInstancePoolOwned = value; }, get ownsModule() { return engine._ownsModuleSingleton; }, set ownsModule(value) { engine._ownsModuleSingleton = value; },
+      get style() { return engine._connectionStyle; }, set style(value) { engine._connectionStyle = value; }, get reconnecting() { return engine._reconnecting; }, set reconnecting(value) { engine._reconnecting = value; },
+    };
+  }
+
   async disconnect(): Promise<void> {
     this.vectorIterativeScan = undefined;
     if (this._disconnectPromise) return this._disconnectPromise;
@@ -421,6 +441,7 @@ export class PostgresEngine implements BrainEngine {
   }
 
   private async disconnectInternal(): Promise<void> {
+    if (this._managedIdentity !== null) return disconnectManagedRuntime(this.managedHost());
     for (const stop of this._beforeDisconnect) await stop();
     // v0.41.25.0 (#1570) — instrument disconnect calls to identify the
     // mid-process caller behind the singleton-null bug. The audit log
@@ -3050,34 +3071,10 @@ export class PostgresEngine implements BrainEngine {
     return chunksImpl.getChunksWithEmbeddings(unscopedExecutor(this.engineSql, 'chunks: unscoped on master (EO4 inventory)'), slug, opts);
   }
 
-  /**
-   * Reconnect the engine after a transient connection blip. Branches on
-   * connection style; no-ops if no saved config or if already reconnecting.
-   *
-   * - MODULE-singleton engines SHARE `db.ts`'s `sql` (#1745). Calling
-   *   `db.disconnect()` here (via `this.disconnect()`) would null it out from
-   *   under EVERY concurrent op (other dream-cycle phases, minion-queue
-   *   `promoteDelayed`), which then throw "connect() has not been called" in the
-   *   disconnect→connect window. postgres.js already auto-replaces dead sockets
-   *   inside its pool, so a transient blip recovers WITHOUT a teardown. Recover
-   *   idempotently instead: `db.connect()` is a no-op when the singleton is alive
-   *   (the common case) and re-establishes it only if some other path nulled it —
-   *   never introducing a null window — then refreshes the ConnectionManager read
-   *   pool. Scope: fixes the singleton-NULL-window bug specifically; it does NOT
-   *   rebuild a genuinely WEDGED-but-live pool (db.connect() no-ops there) — a
-   *   different failure mode postgres.js owns.
-   *
-   * - INSTANCE pools (worker engines, `poolSize` set) own their `_sql` — tearing
-   *   it down and rebuilding is correct and isolated; nobody else shares it. This
-   *   path also records a pool-recovery audit event (#1685 GAP B) so the
-   *   `pool_reap_health` doctor check can answer "reaped N times AND not
-   *   auto-recovering." `ctx.error` (threaded by retry.ts) is classified: a
-   *   CONNECTION_ENDED match is a true pooler reap; anything else (or no error,
-   *   e.g. the supervisor's health-check reconnect) is `reconnect_other`. All
-   *   audit calls are best-effort and never block the reconnect (CODEX #8).
-   */
+  /** Reconnect after a transient blip; URL singleton rationale is documented in postgres-engine-managed.ts. */
   async reconnect(ctx?: { error?: unknown }): Promise<void> {
     if (!this._savedConfig || this._reconnecting) return;
+    if (this._managedIdentity !== null || normalizeEngineTarget(this._savedConfig).kind === 'postgres-managed') return reconnectManagedRuntime(this.managedHost(), this._savedConfig);
     if (this._connectionStyle !== 'instance') {
       // Module-singleton: never tear down the shared pool. db.connect() is
       // idempotent (no-op when the singleton is alive — the common #1745 path).
