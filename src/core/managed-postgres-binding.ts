@@ -102,7 +102,8 @@ export class ManagedPostgresBinding<Pool> {
     this.state = 'revoked';
     const refusal = this.failure('target_unverified');
     this.readyWaiter.reject(refusal);
-    this.pendingWaiter?.reject(refusal);
+    const waiter = this.pendingWaiter;
+    if (waiter) { this.clearPending(waiter); waiter.reject(refusal); }
     for (const session of this.sessions) session.invalidate();
     const captured = [...this.records];
     this.current = null;
@@ -118,21 +119,23 @@ export class ManagedPostgresBinding<Pool> {
     return this.revoke();
   }
 
-  private async runCandidate(refresh: boolean, waiter: { resolve(): void; reject(error: unknown): void }): Promise<void> {
+  private async runCandidate(refresh: boolean, waiter: { promise: Promise<void>; resolve(): void; reject(error: unknown): void }): Promise<void> {
     let candidate: ManagedPoolCandidate<Pool>;
     try { candidate = await this.build(this.config); }
     catch (error) {
       const kind = classify(error);
       if (this.state === 'revoked') return;
-      waiter.reject(this.failure(kind));
       if (refresh && kind === 'unavailable') this.state = 'ready';
-      else await this.revoke().finish();
+      this.clearPending(waiter);
+      waiter.reject(this.failure(kind));
+      if (!(refresh && kind === 'unavailable')) await this.revoke().finish();
       return;
     }
     const record: RecordEntry<Pool> = { pool: candidate.pool, closePromise: null };
     this.records.add(record);
     if (candidate.identity !== this.identity || this.state === 'revoked') {
       await this.closeRecord(record);
+      this.clearPending(waiter);
       waiter.reject(this.failure('target_unverified'));
       if (candidate.identity !== this.identity) await this.revoke().finish();
       return;
@@ -141,8 +144,12 @@ export class ManagedPostgresBinding<Pool> {
     this.current = record;
     this.revision++;
     this.state = 'ready';
+    this.clearPending(waiter);
     waiter.resolve();
     if (old) await this.closeRecord(old);
+  }
+  private clearPending(waiter: { promise: Promise<void> }): void {
+    if (this.pendingWaiter === waiter) { this.pendingWaiter = null; this.pending = null; }
   }
   private async closeRecord(record: RecordEntry<Pool>): Promise<void> {
     if (record.closePromise) return record.closePromise;

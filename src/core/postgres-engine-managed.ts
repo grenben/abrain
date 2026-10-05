@@ -7,7 +7,7 @@ import { resolveManagedPostgresConnection } from './managed-postgres/connection.
 import { ConnectionManager, type ConnectionManagerOpts } from './connection-manager.ts';
 import { ManagedPostgresBinding, type ManagedOwnerLease, type ManagedSession } from './managed-postgres-binding.ts';
 import { ManagedPostgresSingleton } from './managed-postgres-singleton.ts';
-import type { EngineConfig } from './types.ts';
+import { GBrainError, type EngineConfig } from './types.ts';
 import { logDbDisconnect } from './audit/db-disconnect-audit.ts';
 import { logPoolRecovery } from './audit/pool-recovery-audit.ts';
 import { drainBackgroundWorkBeforeDisconnect } from './background-work.ts';
@@ -35,9 +35,11 @@ export interface ManagedEngineRuntime {
   parent: ConnectionManager | null;
   signature: ManagedAttachmentSignature | null;
   revokedIdentity: string | null;
+  routingMode: 'url' | 'managed';
+  managedResetAllowed: boolean;
 }
 export function createManagedEngineRuntime(): ManagedEngineRuntime {
-  return { identity: null, generation: 0, session: null, lease: null, binding: null, lifecycle: 'disconnected', work: null, reconnectWork: null, style: null, parent: null, signature: null, revokedIdentity: null };
+  return { identity: null, generation: 0, session: null, lease: null, binding: null, lifecycle: 'disconnected', work: null, reconnectWork: null, style: null, parent: null, signature: null, revokedIdentity: null, routingMode: 'url', managedResetAllowed: false };
 }
 
 export interface ManagedEngineHost {
@@ -46,13 +48,17 @@ export interface ManagedEngineHost {
   sql: EnginePool | null;
   manager: ConnectionManager | null;
   stops: ReadonlySet<() => Promise<void>>;
+  saveConfig(config: EngineConfigEx): void;
+  ownsModuleSingleton: boolean;
+  connectionStyle: 'instance' | 'module' | null;
+  createUrlPool(url: string, config: EngineConfigEx): EnginePool;
 }
 
 export function createManagedEngineHost(
   deps: ManagedEngineDependencies,
   runtime: ManagedEngineRuntime,
   stops: ReadonlySet<() => Promise<void>>,
-  access: { readSql(): EnginePool | null; writeSql(value: EnginePool | null): void; readManager(): ConnectionManager | null; writeManager(value: ConnectionManager | null): void },
+  access: { readSql(): EnginePool | null; writeSql(value: EnginePool | null): void; readManager(): ConnectionManager | null; writeManager(value: ConnectionManager | null): void; saveConfig(config: EngineConfigEx): void; readOwnsModuleSingleton(): boolean; writeOwnsModuleSingleton(value: boolean): void; readConnectionStyle(): 'instance' | 'module' | null; writeConnectionStyle(value: 'instance' | 'module' | null): void; createUrlPool(url: string, config: EngineConfigEx): EnginePool },
 ): ManagedEngineHost {
   return {
     deps,
@@ -62,6 +68,12 @@ export function createManagedEngineHost(
     set sql(value) { access.writeSql(value); },
     get manager() { return access.readManager(); },
     set manager(value) { access.writeManager(value); },
+    saveConfig: config => access.saveConfig(config),
+    get ownsModuleSingleton() { return access.readOwnsModuleSingleton(); },
+    set ownsModuleSingleton(value) { access.writeOwnsModuleSingleton(value); },
+    get connectionStyle() { return access.readConnectionStyle(); },
+    set connectionStyle(value) { access.writeConnectionStyle(value); },
+    createUrlPool: (url, config) => access.createUrlPool(url, config),
   };
 }
 
@@ -72,6 +84,7 @@ export interface ManagedEngineDependencies {
   readonly acquireManaged?: typeof db.acquireManaged;
   readonly beginManagedRelease?: typeof db.beginManagedRelease;
   readonly teardownTimeoutMs?: number;
+  readonly createUrlPool?: (url: string, options: Record<string, unknown>) => EnginePool;
 }
 export const DEFAULT_MANAGED_ENGINE_DEPENDENCIES: ManagedEngineDependencies = Object.freeze({
   createCandidate: (config: EngineConfig, options: Record<string, unknown>) => createManagedPostgresCandidate(config, options, {
@@ -81,6 +94,7 @@ export const DEFAULT_MANAGED_ENGINE_DEPENDENCIES: ManagedEngineDependencies = Ob
   createManager: (options: ConnectionManagerOpts) => new ConnectionManager(options),
   acquireManaged: db.acquireManaged,
   beginManagedRelease: db.beginManagedRelease,
+  createUrlPool: (url: string, options: Record<string, unknown>) => postgres(url, options as never),
 });
 
 const coordinators = new WeakMap<Function, ManagedPostgresSingleton<EnginePool>>();
@@ -97,6 +111,7 @@ export async function connectManagedIfTarget(host: ManagedEngineHost, config: En
   try { target = normalizeEngineTarget(config); }
   catch (error) { if (config.managed_postgres !== undefined) throw new ManagedPostgresPoolError('target_unverified'); throw error; }
   if (target.kind !== 'postgres-managed') return false;
+  host.runtime.routingMode = 'managed';
   const signature = managedAttachmentSignature(config, managedPostgresIdentity(target.managed_postgres));
   if (host.runtime.revokedIdentity !== null) throw new ManagedPostgresPoolError('target_unverified');
   if (host.runtime.lifecycle === 'connecting' && host.runtime.work) {
@@ -111,6 +126,7 @@ export async function connectManagedIfTarget(host: ManagedEngineHost, config: En
 }
 
 export async function connectManaged(host: ManagedEngineHost, config: EngineConfigEx, reference: { manager_id: 'gbrain-managed-postgres'; cluster_id: string }): Promise<void> {
+  host.runtime.routingMode = 'managed';
   const identity = managedPostgresIdentity(reference);
   const signature = managedAttachmentSignature(config, identity);
   const parent = signature.parent;
@@ -161,6 +177,8 @@ export async function connectManaged(host: ManagedEngineHost, config: EngineConf
     host.sql = config.poolSize && !parent ? session.read() : null;
     host.runtime.style = style;
     host.runtime.lifecycle = 'attached';
+    host.runtime.revokedIdentity = null;
+    host.runtime.managedResetAllowed = false;
   } catch (error) {
     session?.detach();
     if (lease) {
@@ -185,6 +203,49 @@ function sameAttachment(left: ManagedAttachmentSignature | null, right: ManagedA
   return left !== null && left.identity === right.identity && left.style === right.style && left.parent === right.parent && left.poolSize === right.poolSize;
 }
 
+export async function connectUrl(host: ManagedEngineHost, config: EngineConfigEx): Promise<void> {
+  const switchingFromManaged = host.runtime.routingMode === 'managed';
+  if (switchingFromManaged && (!host.runtime.managedResetAllowed || host.runtime.lifecycle !== 'disconnected')) {
+    throw new ManagedPostgresPoolError('target_unverified');
+  }
+  if (!switchingFromManaged) host.saveConfig(config);
+  try {
+    const url = config.database_url;
+    if (config.poolSize) {
+      if (!url) throw new GBrainError('No database URL', 'database_url is missing', 'Provide --url');
+      host.sql = host.createUrlPool(url, config);
+      await host.sql`SELECT 1`;
+      await db.setSessionDefaults(host.sql);
+      host.connectionStyle = 'instance';
+      host.manager = new ConnectionManager({ url, parent: config.parentConnectionManager, readPoolOwnedExternally: true });
+      host.manager.setReadPool(host.sql);
+    } else {
+      host.ownsModuleSingleton = await db.connect(config);
+      host.connectionStyle = 'module';
+      if (url) {
+        host.manager = new ConnectionManager({ url, parent: config.parentConnectionManager, readPoolOwnedExternally: true });
+        host.manager.setReadPool(db.getConnection());
+      }
+    }
+    host.saveConfig(config);
+    if (switchingFromManaged) {
+      host.runtime.identity = null;
+      host.runtime.signature = null;
+      host.runtime.revokedIdentity = null;
+      host.runtime.routingMode = 'url';
+      host.runtime.managedResetAllowed = false;
+    }
+  } catch (error) {
+    if (!switchingFromManaged) throw error;
+    await host.manager?.disconnect().catch(() => {});
+    host.manager = null;
+    if (host.sql) { await db.endPoolBounded(host.sql); host.sql = null; }
+    if (host.ownsModuleSingleton) { await db.disconnect(); host.ownsModuleSingleton = false; }
+    host.connectionStyle = null;
+    throw error;
+  }
+}
+
 export function managedInstanceOptions(config: EngineConfigEx): Record<string, unknown> {
   const timeouts = db.resolveSessionTimeouts();
   const options: Record<string, unknown> = {
@@ -207,8 +268,8 @@ export function managedManager(identity: string, session: ManagedSession<EngineP
 export function classifyManagedError(error: unknown): ManagedPostgresPoolError {
   return error instanceof ManagedPostgresPoolError ? error : new ManagedPostgresPoolError('target_unverified');
 }
-export function managedEnginePool(identity: string, manager: ConnectionManager | null): EnginePool {
-  if (!manager?.isManagedMode || manager.managedIdentity !== identity) throw new ManagedPostgresPoolError('target_unverified');
+export function managedEnginePool(identity: string | null, manager: ConnectionManager | null): EnginePool {
+  if (!identity || !manager?.isManagedMode || manager.managedIdentity !== identity) throw new ManagedPostgresPoolError('target_unverified');
   try { return manager.read() as EnginePool; } catch (error) { throw classifyManagedError(error); }
 }
 
@@ -218,6 +279,8 @@ export async function disconnectManaged(host: ManagedEngineHost): Promise<void> 
     host.runtime.revokedIdentity = null;
     host.runtime.identity = null;
     host.runtime.signature = null;
+    host.runtime.routingMode = 'managed';
+    host.runtime.managedResetAllowed = true;
     return;
   }
   const style = host.runtime.style === 'parent' ? 'instance' : host.runtime.style;
@@ -231,6 +294,8 @@ export async function disconnectManaged(host: ManagedEngineHost): Promise<void> 
   host.runtime.identity = null;
   host.runtime.signature = null;
   host.runtime.revokedIdentity = null;
+  host.runtime.routingMode = 'managed';
+  host.runtime.managedResetAllowed = true;
   let retirement = lease ? (binding ? binding.beginRelease(lease) : (host.deps.beginManagedRelease?.(lease) ?? coordinator(host).beginRelease(lease))) : null;
   try { logDbDisconnect('postgres', style ?? 'unknown'); } catch { /* best effort */ }
   const timeout = host.deps.teardownTimeoutMs ?? 2000;

@@ -32,6 +32,25 @@ function harness(build: ManagedEngineDependencies['createCandidate'], overrides:
 }
 function candidate(value: ReturnType<typeof fakePool>, id = identity) { return { pool: value, identity: id }; }
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
+function productionHarness(build: ManagedEngineDependencies['createCandidate'], overrides: Partial<ManagedEngineDependencies> = {}) {
+  const deps: ManagedEngineDependencies = {
+    createCandidate: build,
+    closePool: async pool => { await pool.end({ timeout: 2 }); },
+    createManager: options => new ConnectionManager(options),
+    acquireManaged: db.acquireManaged,
+    beginManagedRelease: db.beginManagedRelease,
+    ...overrides,
+  };
+  const create = () => { const engine = new PostgresEngine(deps); engines.push(engine); return engine; };
+  return { create, deps };
+}
+function callableUrlPool(_name: string, query: () => Promise<unknown> = async () => []): ReturnType<typeof postgres> & { closes: number } {
+  const tagged = (() => query()) as unknown as ReturnType<typeof postgres>;
+  const state = { closes: 0 };
+  Object.assign(tagged, { end: async () => { state.closes++; }, unsafe: async () => [], closes: 0 });
+  Object.defineProperty(tagged, 'closes', { get: () => state.closes });
+  return tagged as ReturnType<typeof postgres> & { closes: number };
+}
 
 describe('managed binding real composition', () => {
   test('coalesces acquisitions, gives one exact owner, and late proof after owner disconnect closes once', async () => {
@@ -80,6 +99,103 @@ describe('managed binding real composition', () => {
     expect((engine as unknown as { _savedConfig: EngineConfig })._savedConfig).toBe(applied);
   });
 
+  test('production adapter: disconnected borrower refuses sql while module owner remains usable', async () => {
+    const pool = fakePool('production-shared');
+    const ownerHarness = productionHarness(async () => candidate(pool));
+    const borrowerHarness = productionHarness(async () => { throw new Error('borrower must not build'); });
+    const owner = ownerHarness.create(), borrower = borrowerHarness.create();
+    await owner.connect(config()); await borrower.connect(config());
+    await borrower.disconnect();
+    expect(() => borrower.sql).toThrow(ManagedPostgresPoolError);
+    expect(owner.sql).toBe(pool);
+    expect(db.getConnection()).toBe(pool);
+  });
+
+  test('production adapter: disconnected instance refuses even when unrelated module singleton exists', async () => {
+    const modulePool = fakePool('unrelated-module');
+    const moduleHarness = productionHarness(async () => candidate(modulePool));
+    const instanceHarness = productionHarness(async () => candidate(fakePool('independent-instance')));
+    const owner = moduleHarness.create(), instance = instanceHarness.create();
+    await owner.connect(config());
+    await instance.connect({ ...config(), poolSize: 2 });
+    await instance.disconnect();
+    expect(() => instance.sql).toThrow(ManagedPostgresPoolError);
+    expect(owner.sql).toBe(modulePool);
+    expect(db.getConnection()).toBe(modulePool);
+  });
+
+  test('production adapter: failed borrower manager attachment refuses singleton fallback', async () => {
+    const pool = fakePool('manager-owner');
+    const ownerHarness = productionHarness(async () => candidate(pool));
+    const failedHarness = productionHarness(async () => { throw new Error('borrower must not build'); }, {
+      createManager: () => { throw new Error('injected manager failure'); },
+    });
+    const owner = ownerHarness.create(), failed = failedHarness.create();
+    await owner.connect(config());
+    await expect(failed.connect(config())).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(() => failed.sql).toThrow(ManagedPostgresPoolError);
+    expect(owner.sql).toBe(pool);
+  });
+
+  test('production adapter: delayed old disconnect never routes through a newer module binding', async () => {
+    const oldPool = fakePool('delayed-old-module'), newPool = fakePool('new-module');
+    const oldHarness = productionHarness(async () => candidate(oldPool), { teardownTimeoutMs: 100 });
+    const newHarness = productionHarness(async () => candidate(newPool));
+    const oldEngine = oldHarness.create(), newEngine = newHarness.create();
+    await oldEngine.connect(config());
+    const hook = deferred<void>();
+    oldEngine.registerBeforeDisconnect(() => hook.promise);
+    const closing = oldEngine.disconnect();
+    await newEngine.connect(config());
+    expect(() => oldEngine.sql).toThrow(ManagedPostgresPoolError);
+    expect(newEngine.sql).toBe(newPool);
+    hook.resolve(); await closing;
+    expect(() => oldEngine.sql).toThrow(ManagedPostgresPoolError);
+    expect(newEngine.sql).toBe(newPool);
+  });
+
+  test('production adapter: security revocation requires disconnect before URL mode can publish', async () => {
+    const first = fakePool('revoked-source'), replacement = fakePool('unrelated-managed-owner');
+    let builds = 0, urlAttempts = 0;
+    const urlProof = deferred<void>(), madeUrlPool = deferred<void>();
+    const urlPools: { connected?: ReturnType<typeof postgres> & { closes: number }; failed?: ReturnType<typeof postgres> & { closes: number } } = {};
+    const revokedHarness = productionHarness(async () => {
+      if (++builds === 1) return candidate(first);
+      throw new ManagedPostgresPoolError('target_unverified');
+    }, {
+      createUrlPool: () => {
+        urlAttempts++;
+        if (urlAttempts === 1) {
+          urlPools.failed = callableUrlPool('failed-url', async () => { throw new Error('stubbed URL attach failure'); });
+          return urlPools.failed!;
+        }
+        urlPools.connected = callableUrlPool('url-after-reset', async () => { await urlProof.promise; return []; });
+        madeUrlPool.resolve();
+        return urlPools.connected!;
+      },
+    });
+    const engine = revokedHarness.create();
+    await engine.connect(config());
+    await expect(engine.reconnect()).rejects.toMatchObject({ kind: 'target_unverified' });
+    const ownerHarness = productionHarness(async () => candidate(replacement));
+    const owner = ownerHarness.create(); await owner.connect(config());
+    const urlConfig = { engine: 'postgres' as const, database_url: 'postgresql://user:secret@localhost/brain', poolSize: 2 };
+    await expect(engine.connect(urlConfig)).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(urlAttempts).toBe(0);
+    await engine.disconnect();
+    await expect(engine.connect(urlConfig)).rejects.toThrow('stubbed URL attach failure');
+    expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
+    expect(urlPools.failed?.closes).toBe(1);
+    expect(owner.sql).toBe(replacement);
+    const connectingUrl = engine.connect(urlConfig);
+    await madeUrlPool.promise;
+    expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
+    urlProof.resolve();
+    await connectingUrl;
+    expect(engine.sql).toBe(urlPools.connected!);
+    expect(owner.sql).toBe(replacement);
+  });
+
   test('same-engine concurrent reconnect joins the deferred refresh outcome', async () => {
     const old = fakePool('same-engine-old'), replacement = fakePool('same-engine-new');
     const proof = deferred<{ pool: ReturnType<typeof postgres>; identity: string }>();
@@ -96,6 +212,39 @@ describe('managed binding real composition', () => {
     await Promise.all([first, second]);
     expect(engine.sql).toBe(replacement);
     expect(builds).toBe(2);
+  });
+
+  test('completed refresh clears bookkeeping before old close so the next classified refresh is independent', async () => {
+    const poolA = fakePool('refresh-A'), poolB = fakePool('refresh-B');
+    const releaseA = deferred<void>(), closeStarted = deferred<void>();
+    let builds = 0;
+    const h = harness(async () => {
+      builds++;
+      if (builds === 1) return candidate(poolA);
+      if (builds === 2) return candidate(poolB);
+      throw new ManagedPostgresPoolError('target_unverified');
+    }, {
+      closePool: async pool => {
+        if (pool === poolA) { closeStarted.resolve(); await releaseA.promise; }
+        await pool.end({ timeout: 2 });
+      },
+    });
+    const engine = h.create(); await engine.connect(config());
+    await engine.reconnect();
+    await closeStarted.promise;
+    expect(engine.connectionManager?.read()).toBe(poolB);
+    let secondSettled = false;
+    const second = engine.reconnect().then(() => { secondSettled = true; }, error => { secondSettled = true; return error; });
+    await poolB.closed;
+    expect(builds).toBe(3);
+    expect(secondSettled).toBe(false);
+    expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
+    releaseA.resolve();
+    await poolA.closed;
+    const failure = await second;
+    expect(failure).toBeInstanceOf(ManagedPostgresPoolError);
+    expect(poolA.closes).toBe(1);
+    expect(poolB.closes).toBe(1);
   });
 
   test('owner, independent borrower and descendant coalesce concurrent refresh and route every read to replacement', async () => {
@@ -374,7 +523,7 @@ describe('managed binding real composition', () => {
     const engine = h.create();
     await expect(engine.connect(config())).rejects.toMatchObject({ kind: 'target_unverified' });
     expect(owned.closes).toBe(1);
-    expect(engine.connectionManager).toBeNull();
+    expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
   });
 
   test('unknown construction failures become fixed secret-free target_unverified errors', async () => {
