@@ -1,4 +1,5 @@
 import type { Migration } from './types.ts';
+import { schemaDiagnostic } from '../schema-diagnostics.ts';
 import { slugifyPath } from '../sync.ts';
 
 // Version 1 is the baseline (schema.sql creates everything with IF NOT EXISTS).
@@ -6,7 +7,7 @@ export const v002: Migration = {
   version: 2,
   name: 'slugify_existing_pages',
   sql: '',
-  handler: async (engine) => {
+  handler: async (engine, context) => {
     const pages = await engine.listPages();
     let renamed = 0;
     for (const page of pages) {
@@ -18,13 +19,13 @@ export const v002: Migration = {
           renamed++;
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
-          console.error(`  Warning: could not rename "${page.slug}" → "${newSlug}": ${msg}`);
+          if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(`  Warning: could not rename "${page.slug}" → "${newSlug}": ${msg}`);
         }
       }
     }
     // Migration progress goes to stderr — stdout must stay clean for
     // callers parsing JSON (e.g. `gbrain doctor --json | jq`); migrations
     // can run lazily inside ANY command's first DB connect.
-    if (renamed > 0) process.stderr.write(`  Renamed ${renamed} slugs\n`);
+    if (renamed > 0) { if (context?.managedSafe) schemaDiagnostic(context, 'migration_completed'); else process.stderr.write(`  Renamed ${renamed} slugs\n`); }
   },
 };

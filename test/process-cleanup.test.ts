@@ -26,6 +26,9 @@ import {
   triggerCleanupAndExit,
   installSignalHandlers,
   _registeredCleanupCountForTests,
+  registerShutdownSettlement,
+  _registeredShutdownSettlementCountForTests,
+  _setShutdownSettlementDeadlineForTests,
   _resetForTests,
 } from '../src/core/process-cleanup.ts';
 
@@ -223,7 +226,82 @@ describe('installSignalHandlers', () => {
     } finally {
       (process as any).exit = origExit;
     }
-    expect(exits).toEqual([{ code: 143, cleanupFinished: true }, { code: 141, cleanupFinished: true }, { code: 0, cleanupFinished: true }]);
+    expect(exits).toEqual([{ code: 143, cleanupFinished: true }]);
+  });
+
+  test('settlements are awaited after same-signal listeners and before cleanup', async () => {
+    const events: string[] = [];
+    let release!: () => void;
+    registerShutdownSettlement(() => new Promise<void>((resolve) => { release = resolve; }));
+    registerCleanup('ordered', async () => { events.push('cleanup'); });
+    const abortLikeCommandListener = () => { events.push('abort'); };
+    process.on('SIGTERM', abortLikeCommandListener);
+    const origExit = process.exit;
+    const exits: number[] = [];
+    (process as any).exit = (code?: number) => { exits.push(code ?? 0); };
+    try {
+      installSignalHandlers();
+      process.emit('SIGTERM');
+      expect(events).toEqual(['abort']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toEqual(['abort']);
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      process.off('SIGTERM', abortLikeCommandListener);
+      (process as any).exit = origExit;
+    }
+    expect(events).toEqual(['abort', 'cleanup']);
+    expect(exits).toEqual([143]);
+    expect(_registeredShutdownSettlementCountForTests()).toBe(0);
+  });
+
+  test('registration and deregistration are identity-exact; rejection is redacted', async () => {
+    const secret = 'private settlement detail';
+    let started = 0;
+    const remove = registerShutdownSettlement(async () => { started++; throw new Error(secret); });
+    registerShutdownSettlement(async () => { started++; });
+    expect(_registeredShutdownSettlementCountForTests()).toBe(2);
+    remove();
+    remove();
+    expect(_registeredShutdownSettlementCountForTests()).toBe(1);
+    const originalWrite = process.stderr.write;
+    let output = '';
+    (process.stderr as any).write = (chunk: string) => { output += chunk; return true; };
+    const origExit = process.exit;
+    (process as any).exit = () => {};
+    try {
+      installSignalHandlers();
+      process.emit('SIGTERM');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      (process.stderr as any).write = originalWrite;
+      (process as any).exit = origExit;
+    }
+    expect(started).toBe(1);
+    expect(output).not.toContain(secret);
+  });
+
+  test('timeout emits only the fixed redacted warning and repeated signals share one exit', async () => {
+    _setShutdownSettlementDeadlineForTests(5);
+    registerShutdownSettlement(() => new Promise(() => {}));
+    const originalWrite = process.stderr.write;
+    let output = '';
+    (process.stderr as any).write = (chunk: string) => { output += chunk; return true; };
+    const origExit = process.exit;
+    const exits: number[] = [];
+    (process as any).exit = (code?: number) => { exits.push(code ?? 0); };
+    try {
+      installSignalHandlers();
+      process.emit('SIGTERM');
+      process.emit('SIGHUP');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    } finally {
+      (process.stderr as any).write = originalWrite;
+      (process as any).exit = origExit;
+    }
+    expect(output).toBe('[process-cleanup] shutdown settlement deadline reached\n');
+    expect(exits).toEqual([143]);
   });
 
   test('_resetForTests DETACHES every listener installSignalHandlers attached', () => {

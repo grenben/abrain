@@ -226,11 +226,11 @@ describe('managed-init preflight classifier', () => {
 
   test('owned structural resumes accept each lifecycle phase; matching config is published-resume', () => {
     for (const phase of ['allocated', 'initialized', 'provisioned'] as const) {
-      expect(classifyManagedInitPreflight(owned(base(), phase))).toEqual({ kind: 'owned-resume', phase, evidence: 'structural-only' });
+      expect(classifyManagedInitPreflight(owned(base(), phase))).toEqual({ kind: 'owned-resume', phase, evidence: 'structural-only', reference: { manager_id: MANAGER_ID, cluster_id: id } });
     }
     const published = owned(base(), 'provisioned');
     published.fileConfig = managedConfig();
-    expect(classifyManagedInitPreflight(published)).toEqual({ kind: 'published-resume', phase: 'provisioned', evidence: 'structural-only' });
+    expect(classifyManagedInitPreflight(published)).toEqual({ kind: 'published-resume', phase: 'provisioned', evidence: 'structural-only', reference: { manager_id: MANAGER_ID, cluster_id: id } });
     for (const phase of ['allocated', 'initialized'] as const) {
       const premature = owned(base(), phase);
       premature.fileConfig = managedConfig();
@@ -317,12 +317,12 @@ describe('managed-init preflight classifier', () => {
           rmSync(join(fixture.configDir, 'config.json'));
         }
         const before = treeSnapshot(fixture.temp);
-        expect(inspectManagedInitPreflight(observerInput(fixture))).toEqual({ kind: 'owned-resume', phase, evidence: 'structural-only' });
+        expect(inspectManagedInitPreflight(observerInput(fixture))).toEqual({ kind: 'owned-resume', phase, evidence: 'structural-only', reference: { manager_id: MANAGER_ID, cluster_id: id } });
         expect(treeSnapshot(fixture.temp)).toBe(before);
       if (phase === 'provisioned') {
           const published = { engine: 'postgres', managed_postgres: { manager_id: MANAGER_ID, cluster_id: id }, memory: { auto_writeback: 'off' } };
           writeFileSync(join(fixture.configDir, 'config.json'), JSON.stringify(published), { mode: 0o600 });
-          expect(inspectManagedInitPreflight(observerInput(fixture))).toEqual({ kind: 'published-resume', phase, evidence: 'structural-only' });
+          expect(inspectManagedInitPreflight(observerInput(fixture))).toEqual({ kind: 'published-resume', phase, evidence: 'structural-only', reference: { manager_id: MANAGER_ID, cluster_id: id } });
         }
       } finally { rmSync(fixture.temp, { recursive: true, force: true }); }
     }
@@ -332,7 +332,7 @@ describe('managed-init preflight classifier', () => {
     const interrupted = realFixture();
     try {
       createOwnedFixture(interrupted, 'allocated', true);
-      expect(inspectManagedInitPreflight(observerInput(interrupted))).toEqual({ kind: 'owned-resume', phase: 'allocated', evidence: 'structural-only' });
+      expect(inspectManagedInitPreflight(observerInput(interrupted))).toEqual({ kind: 'owned-resume', phase: 'allocated', evidence: 'structural-only', reference: { manager_id: MANAGER_ID, cluster_id: id } });
     } finally { rmSync(interrupted.temp, { recursive: true, force: true }); }
 
     for (const phase of ['initialized', 'provisioned'] as const) {

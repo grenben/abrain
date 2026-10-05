@@ -14,9 +14,11 @@ export const v179: Migration = {
   idempotent: true,
   transaction: false,
   sql: '',
-  handler: async engine => {
+  handler: async (engine, context) => {
     for (const index of PERSISTENCE_SYNC_RUN_INDEXES) {
-      await buildIndexOnline(engine, 179, { ...index, table: 'persistence_requests' }, { notice: migrationNotice });
+      await buildIndexOnline(engine, 179, { ...index, table: 'persistence_requests' }, {
+        notice: line => migrationNotice(line, context),
+      });
     }
   },
 };

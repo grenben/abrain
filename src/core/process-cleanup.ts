@@ -44,6 +44,7 @@
  */
 
 const CLEANUP_DEADLINE_MS = 3_000;
+const SHUTDOWN_SETTLEMENT_DEADLINE_MS = 15_000;
 
 interface CleanupEntry {
   name: string;
@@ -53,6 +54,9 @@ interface CleanupEntry {
 const registry = new Map<symbol, CleanupEntry>();
 let installed = false;
 let cleanupPass: Promise<void> | null = null;
+const shutdownSettlements = new Set<() => Promise<unknown> | unknown>();
+let shutdownPass: Promise<void> | null = null;
+let shutdownSettlementDeadlineMs = SHUTDOWN_SETTLEMENT_DEADLINE_MS;
 /** Refs to every listener attached by installSignalHandlers, keyed by
  *  target+event, so _resetForTests can DETACH them — without this, a test
  *  that installs and "resets" leaves a live SIGTERM→exit(143) listener on
@@ -84,6 +88,28 @@ export function registerCleanup(name: string, fn: () => Promise<void>): () => vo
 }
 
 /**
+ * Register entrypoint-owned work that must settle before abnormal shutdown.
+ * Accepts either a promise or a getter (the getter is invoked only when
+ * shutdown starts). Registrations after shutdown starts are refused and the
+ * returned deregister function is a no-op. Settlement errors are redacted.
+ */
+export function registerShutdownSettlement(
+  getPromiseOrPromise: Promise<unknown> | (() => Promise<unknown> | unknown),
+): () => void {
+  if (shutdownPass) return () => {};
+  const getter = typeof getPromiseOrPromise === 'function'
+    ? getPromiseOrPromise
+    : () => getPromiseOrPromise;
+  shutdownSettlements.add(getter);
+  let registered = true;
+  return () => {
+    if (!registered) return;
+    registered = false;
+    shutdownSettlements.delete(getter);
+  };
+}
+
+/**
  * Read the currently registered cleanup count. Test seam.
  *
  * @internal
@@ -105,6 +131,46 @@ export async function triggerCleanupAndExit(code: number): Promise<void> {
 function runCleanupPass(): Promise<void> {
   cleanupPass ??= runCleanupCallbacks();
   return cleanupPass;
+}
+
+async function runShutdownSettlements(): Promise<void> {
+  const entries = Array.from(shutdownSettlements);
+  shutdownSettlements.clear();
+  if (entries.length === 0) return;
+
+  const settlements = Promise.allSettled(entries.map((getPromise) => {
+    try { return Promise.resolve(getPromise()); }
+    catch { return Promise.resolve(); }
+  }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<'deadline'>((resolve) => {
+    timer = setTimeout(() => resolve('deadline'), shutdownSettlementDeadlineMs);
+    if (typeof (timer as { unref?: () => void }).unref === 'function') {
+      (timer as { unref: () => void }).unref();
+    }
+  });
+  const result = await Promise.race([settlements.then(() => 'settled' as const), deadline]);
+  if (timer) clearTimeout(timer);
+  if (result === 'deadline') {
+    try { process.stderr.write('[process-cleanup] shutdown settlement deadline reached\n'); }
+    catch { /* stderr may be unavailable */ }
+  }
+}
+
+function runShutdownPass(): Promise<void> {
+  shutdownPass ??= (async () => {
+    // Deferring the snapshot to a microtask lets command-local handlers
+    // attached to the same signal synchronously request abort first.
+    await Promise.resolve();
+    await runShutdownSettlements();
+    await runCleanupPass();
+  })();
+  return shutdownPass;
+}
+
+function initiateShutdown(code: number): void {
+  if (shutdownPass) return;
+  void runShutdownPass().finally(() => process.exit(code));
 }
 
 async function runCleanupCallbacks(): Promise<void> {
@@ -148,14 +214,9 @@ export function installSignalHandlers(): void {
   installed = true;
 
   const handleSignal = (signal: NodeJS.Signals) => {
-    void runCleanupPass().finally(() => {
-      // Match GNU `kill` exit-code convention: 128 + signal number for
-      // signal-terminated processes. The actual integer doesn't matter
-      // much (shells generally use it as advisory); the goal is "exit
-      // promptly after cleanup".
-      const code = signal === 'SIGTERM' ? 143 : signal === 'SIGHUP' ? 129 : signal === 'SIGPIPE' ? 141 : 1;
-      process.exit(code);
-    });
+    // Match GNU `kill` exit-code convention: 128 + signal number.
+    const code = signal === 'SIGTERM' ? 143 : signal === 'SIGHUP' ? 129 : signal === 'SIGPIPE' ? 141 : 1;
+    initiateShutdown(code);
   };
 
   const attach = (
@@ -188,7 +249,7 @@ export function installSignalHandlers(): void {
   // through the cleanup pass so locks release BEFORE we exit.
   attach(process.stdout, 'error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EPIPE') {
-      void triggerCleanupAndExit(0);
+      initiateShutdown(0);
     }
   });
   // Same for stderr — less common but possible (e.g. `2>&1 | head` after
@@ -196,7 +257,7 @@ export function installSignalHandlers(): void {
   attach(process.stderr, 'error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EPIPE') {
       // No stderr means no useful logs on the way out; still cleanup.
-      void triggerCleanupAndExit(0);
+      initiateShutdown(0);
     }
   });
 }
@@ -209,6 +270,7 @@ export function installSignalHandlers(): void {
  */
 export function _resetForTests(): void {
   registry.clear();
+  shutdownSettlements.clear();
   // Detach every listener installSignalHandlers attached — clearing flags
   // alone leaves a live SIGTERM→exit(143) listener on the shared test-runner
   // process, which a later synthetic `process.emit('SIGTERM')` would trigger,
@@ -219,4 +281,16 @@ export function _resetForTests(): void {
   installedListeners.length = 0;
   installed = false;
   cleanupPass = null;
+  shutdownPass = null;
+  shutdownSettlementDeadlineMs = SHUTDOWN_SETTLEMENT_DEADLINE_MS;
+}
+
+/** @internal Test-only bounded-wait override; reset by _resetForTests. */
+export function _setShutdownSettlementDeadlineForTests(ms: number): void {
+  shutdownSettlementDeadlineMs = Math.max(0, ms);
+}
+
+/** @internal Test-only inspection; never reports settlement contents. */
+export function _registeredShutdownSettlementCountForTests(): number {
+  return shutdownSettlements.size;
 }

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'bun:test';
-import { parseExpectedColumns, simplifyColumnDef, detectMissingColumns } from '../src/core/schema-verify.ts';
+import { describe, it, expect, spyOn } from 'bun:test';
+import { parseExpectedColumns, simplifyColumnDef, detectMissingColumns, verifySchema } from '../src/core/schema-verify.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 
 /**
@@ -162,5 +162,72 @@ describe('simplifyColumnDef', () => {
   it('handles array types', () => {
     const result = simplifyColumnDef("TEXT[]");
     expect(result).toBe("TEXT[]");
+  });
+});
+
+describe('verifySchema managed diagnostics', () => {
+  const columnsExcept = (table: string, excluded: string) => parseExpectedColumns()
+    .filter(column => column.table === table && column.column !== excluded)
+    .map(column => ({ table_name: table, column_name: column.column }));
+
+  it('self-heals through real helper with fixed managed diagnostics and no ordinary output', async () => {
+    const output = [] as string[];
+    const log = spyOn(console, 'warn').mockImplementation(() => {});
+    const stdout = spyOn(console, 'log').mockImplementation(() => {});
+    const stderr = spyOn(console, 'error').mockImplementation(() => {});
+    const outStream = spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const errStream = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const engine = {
+      ...stubEngine({ tables: ['pages'], columns: columnsExcept('pages', 'content_hash') }),
+      runMigration: async () => {},
+    } as unknown as BrainEngine;
+    try {
+      const result = await verifySchema(engine, { managedSafe: true, emit: event => output.push(event) });
+      expect(result.healed).toContainEqual({ table: 'pages', column: 'content_hash' });
+      expect(output).toEqual(['schema_self_heal_started', 'schema_self_healed']);
+      expect(log).not.toHaveBeenCalled();
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr).not.toHaveBeenCalled();
+      expect(outStream).not.toHaveBeenCalled(); expect(errStream).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); stdout.mockRestore(); stderr.mockRestore(); outStream.mockRestore(); errStream.mockRestore(); }
+  });
+
+  it('throws fixed managed-safe failure text after hostile ALTER error without leaking it to output', async () => {
+    const hostile = 'column=secret_column path=/private/dir url=postgresql://u:p@host/db uuid=01234567-89ab-cdef-0123-456789abcdef';
+    const output = [] as string[];
+    const log = spyOn(console, 'warn').mockImplementation(() => {});
+    const stdout = spyOn(console, 'log').mockImplementation(() => {});
+    const stderr = spyOn(console, 'error').mockImplementation(() => {});
+    const outStream = spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const errStream = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const engine = {
+      ...stubEngine({ tables: ['pages'], columns: columnsExcept('pages', 'content_hash') }),
+      runMigration: async () => { throw new Error(hostile); },
+    } as unknown as BrainEngine;
+    try {
+      let failure: unknown;
+      try { await verifySchema(engine, { managedSafe: true, emit: event => output.push(event) }); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).not.toContain(hostile);
+      expect((failure as Error).message).not.toContain('content_hash');
+      expect(output).toContain('migration_warning');
+      expect(output).toContain('schema_self_heal_started');
+      expect(output).not.toContain('schema_self_healed');
+      const captured = [log.mock.calls, stdout.mock.calls, stderr.mock.calls, outStream.mock.calls, errStream.mock.calls, output].flat().join(' ');
+      expect(captured).not.toMatch(/pages|content_hash|private|postgresql:|01234567|secret_column/);
+    } finally { log.mockRestore(); stdout.mockRestore(); stderr.mockRestore(); outStream.mockRestore(); errStream.mockRestore(); }
+  });
+
+  it('preserves ordinary no-context self-heal output and raw failure details', async () => {
+    const hostile = 'ordinary schema failure excerpt';
+    const stderr = spyOn(console, 'error').mockImplementation(() => {});
+    const engine = {
+      ...stubEngine({ tables: ['pages'], columns: columnsExcept('pages', 'content_hash') }),
+      runMigration: async () => { throw new Error(hostile); },
+    } as unknown as BrainEngine;
+    try {
+      await expect(verifySchema(engine)).rejects.toThrow(hostile);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(hostile));
+    } finally { stderr.mockRestore(); }
   });
 });

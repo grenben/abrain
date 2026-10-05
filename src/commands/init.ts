@@ -33,7 +33,7 @@ export async function runInit(args: string[]) {
     return;
   }
 
-  const initLane = validateInitFlags(args); if (typeof initLane === 'object' && initLane.lane === 'managed-postgres') { const message = 'Managed PostgreSQL init is not available yet; no changes were made.'; if (initLane.json) console.log(JSON.stringify({ status: 'error', reason: 'managed_init_unavailable', message })); else console.error(message); process.exit(1); }
+  const initLane = validateInitFlags(args); if (typeof initLane === 'object' && initLane.lane === 'managed-postgres') { await (await import('./init-managed-postgres.ts')).runManagedPostgresInit(initLane); return; }
 
   const isSupabase = args.includes('--supabase');
   const isPGLite = args.includes('--pglite');
@@ -1820,6 +1820,7 @@ ENGINE SELECTION (mutually exclusive)
   --supabase            Use Supabase Postgres (recommended for 1000+ files)
   --url <URL>           Use a manual Postgres connection string
   --mcp-only            Thin-client mode: connect to a remote gbrain MCP, no local engine
+  --managed-postgres    Fresh local PostgreSQL 17 + pgvector: database-only/keyless/deferred, manual-only. Requires a fresh engine (no conversion/adoption); no content/provider setup; no login-start; bare-init defaults stay unchanged. --yes authorizes cluster/schema only; package install separately requires --install-packages --package-plan-fingerprint <sha256>. Noninteractive/JSON require --yes.
 
 OPTIONS
   --force               Overwrite an existing config (gated by default)
@@ -1853,10 +1854,7 @@ EXAMPLES
   gbrain init --mcp-only --url https://...  # Thin-client mode
 
 NOTES
-  - Bare \`gbrain init\` always defaults to PGLite at ~/.gbrain/brain.pglite.
-    In a directory with 1000+ .md files it prints a suggestion to use
-    \`gbrain init --supabase\` (faster search at scale) but still proceeds
-    with PGLite.
+  - Bare \`gbrain init\` always defaults to PGLite at ~/.gbrain/brain.pglite; in a directory with 1000+ .md files it suggests \`gbrain init --supabase\` but still proceeds with PGLite.
   - Existing config is preserved unless --force is passed.
 `.trim());
 }

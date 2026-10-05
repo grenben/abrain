@@ -15,6 +15,8 @@
 
 import { SCHEMA_SQL } from './schema-embedded.generated.ts';
 import type { BrainEngine } from './engine.ts';
+import type { SchemaDiagnosticContext } from './schema-diagnostics.ts';
+import { schemaDiagnostic } from './schema-diagnostics.ts';
 
 /** A column expected to exist in the database. */
 export interface ExpectedColumn {
@@ -240,7 +242,7 @@ export async function detectMissingColumns(engine: BrainEngine): Promise<DetectR
  * @returns VerifyResult with details of what was checked and fixed.
  * @throws Error if any columns could not be healed (after attempting all).
  */
-export async function verifySchema(engine: BrainEngine): Promise<VerifyResult> {
+export async function verifySchema(engine: BrainEngine, context?: SchemaDiagnosticContext): Promise<VerifyResult> {
   const expected = parseExpectedColumns();
   const detected = await detectMissingColumns(engine);
 
@@ -256,11 +258,11 @@ export async function verifySchema(engine: BrainEngine): Promise<VerifyResult> {
   }
 
   // Log missing columns
-  console.warn(`\n⚠️  Schema verification found ${result.missing.length} missing column(s):`);
+  if (context?.managedSafe) schemaDiagnostic(context, 'schema_self_heal_started'); else console.warn(`\n⚠️  Schema verification found ${result.missing.length} missing column(s):`);
   for (const m of result.missing) {
-    console.warn(`  ${m.table}.${m.column}`);
+    if (!context?.managedSafe) console.warn(`  ${m.table}.${m.column}`);
   }
-  console.warn('  Attempting self-heal via ALTER TABLE ADD COLUMN...\n');
+  if (!context?.managedSafe) console.warn('  Attempting self-heal via ALTER TABLE ADD COLUMN...\n');
 
   // Build a map from table.column -> definition for self-healing
   const defMap = new Map<string, string>();
@@ -273,6 +275,7 @@ export async function verifySchema(engine: BrainEngine): Promise<VerifyResult> {
     const rawDef = defMap.get(`${m.table}.${m.column}`);
     if (!rawDef) {
       result.failed.push({ ...m, error: 'No definition found in schema' });
+      if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning');
       continue;
     }
 
@@ -282,26 +285,28 @@ export async function verifySchema(engine: BrainEngine): Promise<VerifyResult> {
       const sql = `ALTER TABLE ${m.table} ADD COLUMN IF NOT EXISTS ${m.column} ${simpleDef}`;
       await engine.runMigration(0, sql);
       result.healed.push({ table: m.table, column: m.column });
-      console.log(`  ✓ Added ${m.table}.${m.column}`);
+      if (!context?.managedSafe) console.log(`  ✓ Added ${m.table}.${m.column}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       result.failed.push({ ...m, error: msg });
-      console.error(`  ✗ Failed to add ${m.table}.${m.column}: ${msg}`);
+      if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(`  ✗ Failed to add ${m.table}.${m.column}: ${msg}`);
     }
   }
 
-  if (result.healed.length > 0) {
+  if (result.healed.length > 0 && !context?.managedSafe) {
     console.log(`\n  Schema self-heal: ${result.healed.length}/${result.missing.length} column(s) recovered.`);
   }
 
   if (result.failed.length > 0) {
-    const failList = result.failed.map(f => `${f.table}.${f.column}: ${f.error}`).join('\n  ');
+    const failList = context?.managedSafe ? 'self-heal failed' : result.failed.map(f => `${f.table}.${f.column}: ${f.error}`).join('\n  ');
     throw new Error(
       `Schema verification failed: ${result.failed.length} column(s) could not be added:\n  ${failList}\n` +
       'This usually means PgBouncer transaction-mode silently dropped ALTER TABLE statements.\n' +
       'Fix: connect directly to Postgres (not through PgBouncer) and run: gbrain apply-migrations --yes'
     );
   }
+
+  if (result.healed.length > 0 && context?.managedSafe) schemaDiagnostic(context, 'schema_self_healed');
 
   return result;
 }

@@ -1,4 +1,5 @@
 import type { Migration } from './types.ts';
+import { schemaDiagnostic } from '../schema-diagnostics.ts';
 import { hnswMaxDimsForType } from '../vector-index.ts';
 
 export const v144: Migration = {
@@ -78,7 +79,7 @@ export const v144: Migration = {
   // sql above re-applies dream_verdicts_ttl (idempotent DDL) and this
   // handler re-applies the takes resize (dimension check = no-op
   // everywhere it already ran).
-  handler: async (engine) => {
+  handler: async (engine, context) => {
     const dimRows = await engine.executeRaw<{ value: string }>(
       `SELECT value FROM config WHERE key = 'embedding_dimensions'`,
     );
@@ -110,6 +111,6 @@ export const v144: Migration = {
              WHERE active AND embedding IS NOT NULL`,
       );
     }
-    process.stderr.write(`  v144 skew guard: takes.embedding resized to vector(${embeddingDim})\n`);
+    if (context?.managedSafe) schemaDiagnostic(context, 'migration_completed'); else process.stderr.write(`  v144 skew guard: takes.embedding resized to vector(${embeddingDim})\n`);
   },
 };

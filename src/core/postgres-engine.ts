@@ -58,6 +58,8 @@ import { sanitizeForJsonb, sanitizeText, buildLinkRows, buildTimelineRows } from
 import { runMigrations } from './migrate.ts';
 import { SCHEMA_SQL } from './schema-embedded.generated.ts';
 import { verifySchema } from './schema-verify.ts';
+import type { SchemaDiagnosticContext } from './schema-diagnostics.ts';
+import { schemaDiagnostic } from './schema-diagnostics.ts';
 import { applyChunkEmbeddingIndexPolicy, dropZombieIndexes, hnswIndexExpected, supportsHnswIterativeScan } from './vector-index.ts';
 import { searchVectorPool, readVectorPool, remainingVectorBudget } from './search/vector-pool.ts';
 import { withVectorSettings } from './search/vector-settings.ts';
@@ -434,7 +436,7 @@ export class PostgresEngine implements BrainEngine {
     // else: nothing to disconnect (already done or never connected)
   }
 
-  async initSchema(): Promise<void> {
+  async initSchema(context?: SchemaDiagnosticContext): Promise<void> {
     // v0.30.1 (X1): route DDL through the direct pool when ConnectionManager
     // is in dual-pool mode. The pooler's 2-min statement_timeout truncates
     // SCHEMA_SQL replays + migrations on Supabase; the direct pool gets
@@ -484,7 +486,7 @@ export class PostgresEngine implements BrainEngine {
     // an unbounded pg_advisory_lock — a leaked pooler session holding key 42
     // hung every gbrain invocation forever with no output. On timeout the
     // error names the holder pid with pg_terminate_backend recovery guidance.
-    await acquireInitSchemaAdvisoryLock((q) => conn.unsafe(q));
+    await acquireInitSchemaAdvisoryLock((q) => conn.unsafe(q), context?.managedSafe ? { log: () => schemaDiagnostic(context, 'schema_lock_waiting') } : {});
     try {
       // Pre-schema bootstrap: add forward-referenced state the embedded schema
       // blob requires but that older brains don't have yet (issues #366/#375/
@@ -499,26 +501,26 @@ export class PostgresEngine implements BrainEngine {
       await conn.unsafe(sqlText);
 
       // Run any pending migrations automatically
-      const { applied } = await runMigrations(this);
+      const { applied } = await runMigrations(this, context);
       if (applied > 0) {
-        process.stderr.write(`  ${applied} migration(s) applied\n`);
+        schemaDiagnostic(context, 'migration_completed', () => process.stderr.write(`  ${applied} migration(s) applied\n`));
       }
 
       // Post-migration schema verification: catches columns that migrations
       // defined but PgBouncer transaction-mode silently failed to create.
       // Self-heals missing columns via ALTER TABLE ADD COLUMN IF NOT EXISTS.
-      const verify = await verifySchema(this);
+      const verify = await verifySchema(this, context);
       if (verify.healed.length > 0) {
-        process.stderr.write(`  Schema verify: self-healed ${verify.healed.length} missing column(s)\n`);
+        schemaDiagnostic(context, 'schema_self_healed', () => process.stderr.write(`  Schema verify: self-healed ${verify.healed.length} missing column(s)\n`));
       }
 
       // v0.30.1 (Fix 5): sweep zombie HNSW indexes (indisvalid=false) from
       // crashed CREATE INDEX CONCURRENTLY calls. Best-effort; errors logged
       // to stderr but never block engine.connect.
       try {
-        const result = await dropZombieIndexes(this);
+        const result = await dropZombieIndexes(this, undefined, context);
         if (result.dropped.length > 0) {
-          process.stderr.write(`  HNSW sweep: dropped ${result.dropped.length} zombie index(es)\n`);
+          schemaDiagnostic(context, 'zombie_indexes_removed', () => process.stderr.write(`  HNSW sweep: dropped ${result.dropped.length} zombie index(es)\n`));
         }
       } catch { /* best-effort */ }
     } finally {

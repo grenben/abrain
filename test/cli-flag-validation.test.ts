@@ -107,6 +107,30 @@ describe('#2185 acceptance — real usage stays legal', () => {
     expect(validateCommandFlags('sync', ['--full'])).toBeNull();
   });
 
+  test('managed-init and standalone postgres flags stay within their owned commands', () => {
+    const managedInitFlags = [
+      '--managed-postgres',
+      '--install-packages',
+      '--package-plan-fingerprint', 'a'.repeat(64),
+    ];
+    expect(validateCommandFlags('init', managedInitFlags)).toBeNull();
+    expect(CLI_FLAG_REGISTRY.init).toEqual(expect.arrayContaining(managedInitFlags.filter(f => f.startsWith('--'))));
+
+    // `gbrain postgres provision` independently owns package consent; it does
+    // not own init's managed-postgres selector.
+    expect(validateCommandFlags('postgres', ['provision', '--install-packages', '--package-plan-fingerprint', 'a'.repeat(64)])).toBeNull();
+    expect(validateCommandFlags('postgres', ['provision', '--managed-postgres'])).toBe('--managed-postgres');
+
+    for (const command of ['reinit-pglite', 'creds', 'google']) {
+      for (const flag of ['--managed-postgres', '--install-packages', '--package-plan-fingerprint']) {
+        expect(CLI_FLAG_REGISTRY[command], `${command} registry must not advertise ${flag}`).not.toContain(flag);
+        expect(validateCommandFlags(command, [flag, ...(flag === '--package-plan-fingerprint' ? ['a'.repeat(64)] : [])]), `${command} must reject ${flag}`).toBe(flag);
+      }
+    }
+    // A normal reinit option remains valid; the ownership correction is narrow.
+    expect(validateCommandFlags('reinit-pglite', ['--yes'])).toBeNull();
+  });
+
   test('scope flags require direct consumption on upgrade surfaces', () => {
     expect(validateCommandFlags('reindex', ['--markdown', '--type', 'atom'])).toBeNull();
     expect(validateCommandFlags('upgrade', ['--type', 'atom'])).toBe('--type');

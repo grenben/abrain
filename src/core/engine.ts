@@ -757,7 +757,7 @@ export interface BrainEngine {
    * for parity so the call is never a silent no-op.
    */
   reconnect(ctx?: { error?: unknown }): Promise<void>;
-  initSchema(): Promise<void>;
+  initSchema(context?: import('./schema-diagnostics.ts').SchemaDiagnosticContext): Promise<void>;
   transaction<T>(fn: (engine: BrainEngine) => Promise<T>): Promise<T>;
   /** Short control transaction on the existing direct route; honors nested transaction scope. */
   transactionDirect<T>(fn: (engine: BrainEngine) => Promise<T>): Promise<T>;

@@ -1,4 +1,6 @@
 import type { BrainEngine } from './engine.ts';
+import type { SchemaDiagnosticContext } from './schema-diagnostics.ts';
+import { schemaDiagnostic, migrationTimeoutDiagnostic } from './schema-diagnostics.ts';
 import type { Migration } from './schema-migrations/types.ts';
 import { MIGRATIONS } from './schema-migrations/registry.generated.ts';
 import { setQuietMigrationNotices } from './schema-migrations/helpers.ts';
@@ -117,9 +119,10 @@ export async function getIdleBlockers(engine: BrainEngine): Promise<IdleBlocker[
  * Check for idle-in-transaction connections that might block DDL.
  * Returns true if blockers were found (logged as warnings).
  */
-async function checkForBlockingConnections(engine: BrainEngine): Promise<boolean> {
+async function checkForBlockingConnections(engine: BrainEngine, context?: SchemaDiagnosticContext): Promise<boolean> {
   const rows = await getIdleBlockers(engine);
   if (rows.length > 0) {
+    if (context?.managedSafe) { schemaDiagnostic(context, 'migration_warning'); return true; }
     console.warn(`\n⚠️  Found ${rows.length} idle-in-transaction connection(s) older than 5 minutes:`);
     for (const r of rows) {
       console.warn(`  PID ${r.pid} — idle since ${r.query_start}`);
@@ -145,6 +148,7 @@ async function runMigrationSQLWithRetry(
   engine: BrainEngine,
   m: Migration,
   sql: string,
+  context?: SchemaDiagnosticContext,
 ): Promise<void> {
   // GBRAIN_MIGRATE_BACKOFF_MS lets tests skip the 5s/15s/45s backoff. In
   // production the env var is unset and the default cadence applies.
@@ -162,8 +166,8 @@ async function runMigrationSQLWithRetry(
       if (attempt > 0) {
         lastBlockers = await getIdleBlockers(engine);
         if (lastBlockers.length > 0) {
-          console.warn(`  [retry ${attempt}/3] ${lastBlockers.length} idle-in-transaction blocker(s):`);
-          for (const b of lastBlockers) {
+          if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.warn(`  [retry ${attempt}/3] ${lastBlockers.length} idle-in-transaction blocker(s):`);
+          for (const b of context?.managedSafe ? [] : lastBlockers) {
             console.warn(`    PID ${b.pid} idle since ${b.query_start} — ${b.query.slice(0, 80)}`);
           }
         }
@@ -184,7 +188,7 @@ async function runMigrationSQLWithRetry(
         throw err;
       }
       const delay = backoffs[attempt];
-      console.warn(`  [retry ${attempt + 1}/3] ${m.name} hit ${lastErr.message.slice(0, 80)}; retrying in ${delay}ms`);
+      if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.warn(`  [retry ${attempt + 1}/3] ${m.name} hit ${lastErr.message.slice(0, 80)}; retrying in ${delay}ms`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -395,7 +399,7 @@ export function isDeadlockError(err: unknown): boolean {
   return /40P01|deadlock detected/i.test(msg);
 }
 
-export async function runMigrations(engine: BrainEngine): Promise<{ applied: number; current: number }> {
+export async function runMigrations(engine: BrainEngine, context?: SchemaDiagnosticContext): Promise<{ applied: number; current: number }> {
   const currentStr = await engine.getConfig('version');
   const current = parseInt(currentStr || '1', 10);
 
@@ -417,7 +421,7 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
   try {
     const r = await repairTimelineDedupIndex(engine);
     if (r.repaired) {
-      console.error(
+      if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(
         `[migrate] healed idx_timeline_dedup drift (#2038): ${r.before.join(',') || '(absent)'} ` +
         `→ page_id,date,md5(summary),source` +
         (r.collapsedDuplicates > 0 ? ` (collapsed ${r.collapsedDuplicates} duplicate row(s))` : ''),
@@ -433,9 +437,9 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
   try {
     const p = await repairPagesUpsertArbiter(engine);
     if (p.repaired) {
-      console.error(`[migrate] restored pages_source_slug_key UNIQUE(source_id, slug) (#550)`);
+      if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(`[migrate] restored pages_source_slug_key UNIQUE(source_id, slug) (#550)`);
     } else if (p.reason === 'duplicates') {
-      console.error(
+      if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(
         `[migrate] cannot restore pages_source_slug_key: ${p.duplicateGroups} duplicate ` +
         `(source_id, slug) group(s) exist — page upserts will keep failing until the ` +
         `duplicates are resolved (#550). See \`gbrain doctor\`.`,
@@ -452,15 +456,15 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
     try {
       const l = await repairLinkSourceCheck(engine);
       if (l.repaired) {
-        console.error(`[migrate] restored links_link_source_check to the v114 kebab-case gate (#4613)`);
+        if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(`[migrate] restored links_link_source_check to the v114 kebab-case gate (#4613)`);
       } else if (l.reason === 'violations') {
-        console.error(
+        if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(
           `[migrate] cannot restore links_link_source_check: ${l.violations} links row(s) have a ` +
           `non-kebab link_source — fix or delete them, then re-run (#4613). See \`gbrain doctor\`.`,
         );
       }
     } catch (e) {
-      console.error(`[migrate] links_link_source_check self-heal could not run (#4613): ${e instanceof Error ? e.message : String(e)}`);
+      if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.error(`[migrate] links_link_source_check self-heal could not run (#4613): ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -487,31 +491,31 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
   // Progress messages route to stderr so callers parsing stdout (e.g.
   // `gbrain jobs submit --json | jq`) aren't polluted by migration noise.
   if (quietReplay) {
-    process.stderr.write(`  Setting up brain schema (v${LATEST_VERSION})...\n`);
+    schemaDiagnostic(context, 'schema_setup', () => process.stderr.write(`  Setting up brain schema (v${LATEST_VERSION})...\n`));
   } else {
-    process.stderr.write(`  Schema version ${current} → ${LATEST_VERSION} (${pending.length} migration(s) pending)\n`);
+    schemaDiagnostic(context, 'schema_migrations', () => process.stderr.write(`  Schema version ${current} → ${LATEST_VERSION} (${pending.length} migration(s) pending)\n`));
   }
 
   let applied = 0;
   try {
     // Pre-flight: warn about connections that might block DDL
-    await checkForBlockingConnections(engine);
+    await checkForBlockingConnections(engine, context);
 
     for (const m of pending) {
-      if (!quietReplay) process.stderr.write(`  [${m.version}] ${m.name}...\n`);
+      if (!quietReplay) schemaDiagnostic(context, 'migration_started', () => process.stderr.write(`  [${m.version}] ${m.name}...\n`));
       try {
-        await applyOneMigration(engine, m);
+        await applyOneMigration(engine, m, context);
         // Update version after both SQL and handler succeed. Inside the same
         // catch so a stamp-write failure is also NAMED in quiet mode.
         await engine.setConfig('version', String(m.version));
       } catch (err) {
         // Quiet fresh-install replay: name the failing migration — without the
         // per-step lines, the error would otherwise be anonymous.
-        if (quietReplay) process.stderr.write(`  [${m.version}] ${m.name} failed\n`);
+        if (quietReplay && !context?.managedSafe) process.stderr.write(`  [${m.version}] ${m.name} failed\n`);
         throw err;
       }
 
-      if (!quietReplay) process.stderr.write(`  [${m.version}] ✓ ${m.name}\n`);
+      if (!quietReplay) schemaDiagnostic(context, 'migration_completed', () => process.stderr.write(`  [${m.version}] ✓ ${m.name}\n`));
       applied++;
     }
   } finally {
@@ -525,7 +529,7 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
 
 /** One migration's full body (SQL + handler + verify), extracted so the
  *  runMigrations loop can name the failing migration in quiet-replay mode. */
-async function applyOneMigration(engine: BrainEngine, m: Migration): Promise<void> {
+async function applyOneMigration(engine: BrainEngine, m: Migration, context?: SchemaDiagnosticContext): Promise<void> {
     // Pick SQL: engine-specific `sqlFor` wins over engine-agnostic `sql`.
     const sql = m.sqlFor?.[engine.kind] ?? m.sql;
 
@@ -533,35 +537,15 @@ async function applyOneMigration(engine: BrainEngine, m: Migration): Promise<voi
       try {
         // v0.30.1: retry wrapper handles statement_timeout + conn-reset
         // across 3 attempts (5s/15s/45s). Other errors throw immediately.
-        await runMigrationSQLWithRetry(engine, m, sql);
+        await runMigrationSQLWithRetry(engine, m, sql, context);
       } catch (err: unknown) {
-        // Actionable diagnostics for statement timeout (Postgres error 57014).
-        // Shape matches the 4-part error standard (what / why / fix / verify).
         const code = (err as { code?: string })?.code;
         if (code === '57014' || err instanceof MigrationRetryExhausted) {
-          console.error(`\n❌ Migration ${m.version} (${m.name}) ${err instanceof MigrationRetryExhausted ? 'exhausted retries' : 'hit statement_timeout (SQLSTATE 57014)'}.`);
-          if (err instanceof MigrationRetryExhausted && err.lastBlockers.length > 0) {
-            const b = err.lastBlockers[0];
-            console.error('');
-            console.error(`   Likely blocker: PID ${b.pid}, idle since ${b.query_start}`);
-            console.error(`   Query: ${b.query.slice(0, 120)}`);
-            console.error('');
-            console.error(`   Recovery: psql ... -c "SELECT pg_terminate_backend(${b.pid})"`);
-            console.error('');
-          } else {
-            console.error('');
-            console.error('   Cause: another connection holds a lock on the target table, or the');
-            console.error('   server statement_timeout (~2 min on Supabase) is too short for this DDL.');
-            console.error('');
-            console.error('   Fix:');
-            console.error('     1. gbrain doctor --locks    # find idle-in-transaction blockers');
-            console.error('     2. Terminate blocker(s) shown by step 1 via pg_terminate_backend(<pid>)');
-            console.error('     3. gbrain apply-migrations --yes  # re-run from the version that failed');
-            console.error('');
-          }
-          console.error('   Verify:');
-          console.error('     gbrain doctor              # schema_version should match latest');
-          console.error('');
+          const exhausted = err instanceof MigrationRetryExhausted;
+          migrationTimeoutDiagnostic(context, {
+            version: m.version, name: m.name, exhausted,
+            blocker: exhausted ? err.lastBlockers[0] : undefined,
+          });
         }
         throw err;
       }
@@ -569,7 +553,7 @@ async function applyOneMigration(engine: BrainEngine, m: Migration): Promise<voi
 
     // Application-level handler (runs outside transaction for flexibility)
     if (m.handler) {
-      await m.handler(engine);
+      await m.handler(engine, context);
     }
 
     // v0.30.1 (D6): post-condition probe. If a verify hook is declared, run
@@ -581,9 +565,9 @@ async function applyOneMigration(engine: BrainEngine, m: Migration): Promise<voi
       if (!verifyOk) {
         const idempotent = isMigrationIdempotent(m);
         if (idempotent) {
-          console.warn(`  [${m.version}] ⚠️  verify failed; re-running idempotent migration once`);
-          if (sql) await runMigrationSQLWithRetry(engine, m, sql);
-          if (m.handler) await m.handler(engine);
+          if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.warn(`  [${m.version}] ⚠️  verify failed; re-running idempotent migration once`);
+           if (sql) await runMigrationSQLWithRetry(engine, m, sql, context);
+          if (m.handler) await m.handler(engine, context);
           // Best-effort: don't double-throw if second run still fails verify.
           // Operator's next run of doctor will re-detect drift.
         } else {

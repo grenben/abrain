@@ -289,12 +289,55 @@ package-plan drift is refused; existing data is not reinitialized or deleted.
 This path remains opt-in. Existing PGLite brains and bare `gbrain init` behavior
 are unchanged, and an existing brain is never silently repointed. Moving an
 existing brain remains an explicit guarded migration (`gbrain migrate`); cluster
-provisioning does not perform that migration. Native package and cluster
-execution has not been validated on the current Mac by operator choice. The
-deterministic tests use injected process dependencies and do not establish
-native Homebrew or cluster behavior. Native execution evidence remains
-outstanding; any such release validation belongs on isolated macOS CI, a VM,
-or dedicated test hardware, not the operator's current Mac.
+provisioning does not perform that migration.
+
+### Fresh database with managed init
+
+`gbrain init --managed-postgres` is an explicit macOS-only setup for a fresh
+GBrain-owned local PostgreSQL 17 + pgvector database. It requires neither Docker
+nor Supabase. It is separate from both the bare PGLite default and
+`--prefer-postgres`: the latter's connection ladder does not provision this
+managed cluster. Managed init fails closed for incompatible existing config or
+artifacts, and does not adopt foreign/user-managed PostgreSQL, convert or repoint
+PGLite, or target remote/thin, manual-URL, or unrelated PostgreSQL configurations.
+
+The first establishment initializes only the database/schema. It is keyless and
+defers embeddings; it does not import content, onboard providers/models/search
+mode, run a paid probe, start login-start, or configure a background service.
+The cluster remains manually controlled. `gbrain postgres provision` owns the
+cluster lifecycle only; `gbrain init --managed-postgres` coordinates that
+lifecycle with schema initialization and config publication.
+
+Consent has two gates. `--yes` authorizes cluster and schema initialization, not
+package installation. When packages are missing, init reports a sanitized
+package impact and exact fingerprint. Installation requires the separate
+`--install-packages --package-plan-fingerprint <fingerprint>` consent; copy the
+exact fingerprint printed by the current run. Interactive approval remains a
+separate prompt. When packages are already ready, an explicit noninteractive run
+can use:
+
+```bash
+gbrain init --managed-postgres --yes
+```
+
+If the first run reports missing packages, approve that exact plan on rerun:
+
+```bash
+gbrain init --managed-postgres --yes --install-packages \
+  --package-plan-fingerprint <fingerprint>
+```
+
+| Outcome | Operator action |
+|---|---|
+| Pre-commit failure | State is retained; config was not published. Diagnose the reported stage before retrying. |
+| Publication uncertain | Inspect the reported status and config before retrying. |
+| Committed cleanup | Config is committed; do not blindly rerun or destructively compensate. |
+
+The lifecycle lock spans ownership proof, package/provision work, schema,
+publication, and cleanup. Config publication follows successful schema setup and
+stores only the managed reference and fixed deferred-embedding sentinel, never a
+URL, password, or socket. Resuming published managed config preserves existing
+embedding settings.
 
 ### User-managed local Postgres
 

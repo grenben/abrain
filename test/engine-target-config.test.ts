@@ -15,7 +15,7 @@ import {
   saveConfig,
   toEngineConfig,
 } from '../src/core/config.ts';
-import { publishManagedInitConfigFile } from '../src/core/config-managed-publication.ts';
+import { publishManagedInitConfigFile, publishManagedInitConfigForInitFile } from '../src/core/config-managed-publication.ts';
 import { withConfigPublicationLock } from '../src/core/config-publication.ts';
 
 const uuid = '01234567-89ab-cdef-0123-456789abcdef';
@@ -411,6 +411,37 @@ describe('managed target config loading and publication', () => {
         expect(readdirSync(join(root, '.gbrain')).filter((name) => name.includes('.tmp-'))).toEqual([]);
       }
     });
+  });
+
+  test('init publication writes deferred embedding only on establishment and preserves resumed profile verbatim', async () => {
+    const root = home();
+    const dir = join(root, '.gbrain'); mkdirSync(dir);
+    const path = join(dir, 'config.json');
+
+    publishManagedInitConfigForInitFile(managed, dir, path, { embedding_disabled: true });
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ engine: 'postgres', managed_postgres: managed, embedding_disabled: true });
+
+    writeFileSync(path, JSON.stringify({ backup: { recent: 'concurrent' } }));
+    publishManagedInitConfigForInitFile(managed, dir, path, { embedding_disabled: true });
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({
+      engine: 'postgres', managed_postgres: managed, embedding_disabled: true, backup: { recent: 'concurrent' },
+    });
+
+    const resumedProfiles = [
+      { embedding_disabled: true },
+      { embedding_disabled: false },
+      {},
+      { embedding_model: 'custom-embedder', embedding_dimensions: 1536 },
+    ];
+    for (const profile of resumedProfiles) {
+      const existing = { engine: 'postgres', managed_postgres: managed, backup: { keep: true }, ...profile };
+      writeFileSync(path, JSON.stringify(existing));
+      publishManagedInitConfigForInitFile(managed, dir, path, { embedding_disabled: true });
+      const actual = JSON.parse(readFileSync(path, 'utf8'));
+      for (const [key, value] of Object.entries(profile)) expect(actual[key]).toEqual(value);
+      if (!Object.hasOwn(profile, 'embedding_disabled')) expect(Object.hasOwn(actual, 'embedding_disabled')).toBe(false);
+      expect(actual.backup).toEqual({ keep: true });
+    }
   });
 
   test('ordinary stale save cannot erase managed target; exact-reference save can update metadata', async () => {

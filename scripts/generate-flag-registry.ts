@@ -80,6 +80,18 @@ function isExcludedModule(p: string): boolean {
 /** Universal helper flags every command may see (parsed or short-circuited upstream). */
 const UNIVERSAL_FLAGS = ['--help', '--json', '--brain', '--source'];
 
+/**
+ * Command-owned flags must not become legal merely because a command imports
+ * an init handler/helper that mentions them in its parser or help text. These
+ * are exclusive acceptance surfaces, not a generic deny list: standalone
+ * `postgres provision` owns package-consent flags independently of init.
+ */
+const COMMAND_OWNED_FLAGS: Record<string, readonly string[]> = {
+  '--managed-postgres': ['init'],
+  '--install-packages': ['init', 'postgres'],
+  '--package-plan-fingerprint': ['init', 'postgres'],
+};
+
 const FLAG_RE = /--[a-z0-9][a-z0-9-]*/g;
 
 function flagsInText(text: string): Set<string> {
@@ -434,6 +446,9 @@ export function buildFlagRegistry(root: string = ROOT): Record<string, string[]>
     for (const f of SCOPING_FLAGS_BY_COMMAND[command] ?? []) {
       if (flags.has(f) && !consumes(depthZeroText, f)) flags.delete(f);
     }
+    for (const [flag, owners] of Object.entries(COMMAND_OWNED_FLAGS)) {
+      if (flags.has(flag) && !owners.includes(command)) flags.delete(flag);
+    }
     registry[command] = [...flags].sort();
   }
   return registry;
@@ -456,9 +471,10 @@ export function renderRegistryModule(registry: Record<string, string[]>): string
 //
 // Per-command legal flags for CLI_ONLY commands, derived from each command's
 // source (case block + imported modules + one level of relative imports +
-// scripts/generate-flag-registry.ts EXTRA_FLAGS). Deliberately over-inclusive
-// (help-text mentions count): accepting an ignored flag is the pre-#2185
-// status quo; missing a real one breaks working invocations.
+// scripts/generate-flag-registry.ts EXTRA_FLAGS), then constrained by explicit
+// command ownership for flags that cannot be inherited through helper imports.
+// Otherwise deliberately over-inclusive (help-text mentions count): accepting
+// an ignored flag is the pre-#2185 status quo; missing a real one breaks usage.
 export const CLI_FLAG_REGISTRY: Record<string, readonly string[]> = {
 ${entries}
 };

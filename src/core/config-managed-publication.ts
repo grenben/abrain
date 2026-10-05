@@ -146,12 +146,38 @@ export function readConfigForPublication(
   } finally { try { close(fd); } catch { /* preserve safe refusal/publication outcome */ } }
 }
 
+export interface ManagedInitKeylessMetadata { readonly embedding_disabled: true; }
+
 /** Strictly publish one canonical managed reference while preserving current metadata. */
 export function publishManagedInitConfigFile(
   reference: ManagedPostgresReference,
   directory: string,
   destination: string,
   dependencies: ManagedPublicationDependencies = {},
+): void {
+  publishManagedInitConfigFileInternal(reference, directory, destination, undefined, dependencies);
+}
+
+/** Init-only publication: the sole metadata addition is the fixed deferred-embedding sentinel. */
+export function publishManagedInitConfigForInitFile(
+  reference: ManagedPostgresReference,
+  directory: string,
+  destination: string,
+  metadata: ManagedInitKeylessMetadata,
+  dependencies: ManagedPublicationDependencies = {},
+): void {
+  if (metadata.embedding_disabled !== true || Object.keys(metadata).some((key) => key !== 'embedding_disabled')) {
+    throw new ConfigPublicationRefusedError();
+  }
+  publishManagedInitConfigFileInternal(reference, directory, destination, metadata, dependencies);
+}
+
+function publishManagedInitConfigFileInternal(
+  reference: ManagedPostgresReference,
+  directory: string,
+  destination: string,
+  keyless: ManagedInitKeylessMetadata | undefined,
+  dependencies: ManagedPublicationDependencies,
 ): void {
   try {
     const canonical = validateManagedPostgresReference(reference);
@@ -173,7 +199,12 @@ export function publishManagedInitConfigFile(
           }
         }
       }
-      const published = { ...(current ?? {}), engine: 'postgres', managed_postgres: canonical };
+      const published = {
+        ...(current ?? {}),
+        engine: 'postgres',
+        managed_postgres: canonical,
+        ...(keyless && current?.managed_postgres === undefined ? keyless : {}),
+      };
       publishConfigFile(canonicalDestination, Buffer.from(JSON.stringify(published, null, 2) + '\n', 'utf8'),
         dependencies.publication, { directoryDurability: 'strict' });
     }, dependencies.lock);

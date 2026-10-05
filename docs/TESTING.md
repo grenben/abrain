@@ -513,6 +513,14 @@ pass before publication. The native macOS 26.2 smoke is not macOS 27
 certification, and Linux fault injection is not a full native Windows backup
 create/restore test.
 
+Managed local PostgreSQL init has deterministic coverage through injected
+process/package dependencies, but native Homebrew and cluster execution still
+needs evidence. Run that validation only in isolated macOS CI, a disposable VM,
+or dedicated test hardware—not on a contributor's machine. Evidence must cover
+package planning and consented installation, PostgreSQL 17 + pgvector, SCRAM
+and socket connections, restart/reconnect, and incompatible-artifact handling.
+Mocked lifecycle tests do not establish those native behaviors.
+
 The glibc Linux, macOS and Windows matrix also runs
 `persistence-publication-native.serial.test.ts`,
 `persistence-git-publication.test.ts`,

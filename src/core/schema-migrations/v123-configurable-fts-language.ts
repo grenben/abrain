@@ -28,7 +28,7 @@ export const v123: Migration = {
   // To change language after this migration has run, use
   // `gbrain reindex-search-vector`.
   sql: '',
-  handler: async (engine) => {
+  handler: async (engine, context) => {
     const lang = getFtsLanguage();
 
     const recreatePagesFn = `
@@ -71,7 +71,7 @@ export const v123: Migration = {
       // stderr, NOT stdout: migrations run lazily inside any command's
       // first DB connect — a console.log here polluted `doctor --json`
       // stdout and broke jq consumers (heavy-tests fm_wallclock).
-      migrationNotice(`  v123: trigger functions recreated with language='english' (default — no backfill needed)\n`);
+      migrationNotice(`  v123: trigger functions recreated with language='english' (default — no backfill needed)\n`, context);
       return;
     }
 
@@ -92,6 +92,6 @@ export const v123: Migration = {
         WHERE search_vector IS NOT NULL;
       `);
 
-    migrationNotice(`  v123: trigger functions recreated with language='${lang}' + backfilled existing rows\n`);
+    migrationNotice(`  v123: trigger functions recreated with language='${lang}' + backfilled existing rows\n`, context);
   },
 };

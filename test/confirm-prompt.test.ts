@@ -10,6 +10,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { PassThrough } from 'stream';
+import { getEventListeners } from 'node:events';
 import { promptYesNo } from '../src/core/confirm-prompt.ts';
 
 function mkStreams() {
@@ -57,6 +58,44 @@ describe('promptYesNo (#4318)', () => {
     const p = promptYesNo('Proceed? [y/N] ', { input, output });
     input.end('y\n');
     expect(await p).toBe(true);
+  });
+
+  test('already-aborted signal declines without attaching input listeners', async () => {
+    const { input, output } = mkStreams();
+    const controller = new AbortController();
+    controller.abort();
+    const before = input.listenerCount('data');
+    expect(await promptYesNo('Proceed? [y/N] ', { input, output, signal: controller.signal })).toBe(false);
+    expect(input.listenerCount('data')).toBe(before);
+  });
+
+  test('abort while unresolved declines and removes its abort listener', async () => {
+    const { input, output } = mkStreams();
+    const controller = new AbortController();
+    const p = promptYesNo('Proceed? [y/N] ', { input, output, signal: controller.signal });
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1);
+    controller.abort();
+    expect(await p).toBe(false);
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    expect(input.listenerCount('data')).toBe(0);
+  });
+
+  test('answer wins an answer-vs-abort race and settles once', async () => {
+    const { input, output } = mkStreams();
+    const controller = new AbortController();
+    const p = promptYesNo('Proceed? [y/N] ', { input, output, signal: controller.signal });
+    input.write('yes\n');
+    controller.abort();
+    expect(await p).toBe(true);
+  });
+
+  test('EOF while abort-aware prompt is pending declines', async () => {
+    const { input, output } = mkStreams();
+    const controller = new AbortController();
+    const p = promptYesNo('Proceed? [y/N] ', { input, output, signal: controller.signal });
+    input.end();
+    expect(await p).toBe(false);
+    controller.abort();
   });
 });
 

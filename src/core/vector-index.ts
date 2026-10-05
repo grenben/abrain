@@ -15,6 +15,8 @@
  */
 
 import type { BrainEngine } from './engine.ts';
+import type { SchemaDiagnosticContext } from './schema-diagnostics.ts';
+import { schemaDiagnostic } from './schema-diagnostics.ts';
 
 export const PGVECTOR_HNSW_VECTOR_MAX_DIMS = 2000;
 export const PGVECTOR_HNSW_HALFVEC_MAX_DIMS = 4000;
@@ -149,6 +151,7 @@ export async function checkActiveBuild(
 export async function dropZombieIndexes(
   engine: BrainEngine,
   tableNames: string[] = ['content_chunks', 'pages', 'takes'],
+  context?: SchemaDiagnosticContext,
 ): Promise<{ dropped: string[] }> {
   if (engine.kind !== 'postgres') return { dropped: [] };
   const dropped: string[] = [];
@@ -167,21 +170,21 @@ export async function dropZombieIndexes(
       // Guard: skip if there's an active build for this index.
       const active = await checkActiveBuild(engine, r.indexname);
       if (active.active) {
-        process.stderr.write(`[hnsw] skipping zombie cleanup of ${r.indexname} — active build (pid ${active.pid})\n`);
+        schemaDiagnostic(context, 'zombie_index_skipped', () => process.stderr.write(`[hnsw] skipping zombie cleanup of ${r.indexname} — active build (pid ${active.pid})\n`));
         continue;
       }
       try {
         await engine.executeRaw(`DROP INDEX IF EXISTS ${r.indexname}`);
         dropped.push(r.indexname);
-        process.stderr.write(`[hnsw] dropped zombie index ${r.indexname} on ${r.tablename}\n`);
+        schemaDiagnostic(context, 'zombie_index_dropped', () => process.stderr.write(`[hnsw] dropped zombie index ${r.indexname} on ${r.tablename}\n`));
       } catch (err) {
-        process.stderr.write(`[hnsw] failed to drop ${r.indexname}: ${(err as Error).message}\n`);
+        schemaDiagnostic(context, 'zombie_index_drop_failed', () => process.stderr.write(`[hnsw] failed to drop ${r.indexname}: ${(err as Error).message}\n`));
       }
     }
   } catch (err) {
     // Best-effort: pg_stat_activity / pg_index queries may be restricted
     // on managed Postgres tiers. Don't fail engine.connect() over it.
-    process.stderr.write(`[hnsw] zombie-index probe failed: ${(err as Error).message}\n`);
+    schemaDiagnostic(context, 'zombie_probe_failed', () => process.stderr.write(`[hnsw] zombie-index probe failed: ${(err as Error).message}\n`));
   }
   return { dropped };
 }

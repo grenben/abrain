@@ -1,4 +1,5 @@
 import type { Migration } from './types.ts';
+import { schemaDiagnostic } from '../schema-diagnostics.ts';
 import { hnswMaxDimsForType } from '../vector-index.ts';
 
 export const v142: Migration = {
@@ -6,7 +7,7 @@ export const v142: Migration = {
   name: 'takes_embedding_dimension_matches_config',
   idempotent: true,
   sql: '',
-  handler: async (engine) => {
+  handler: async (engine, context) => {
     // Skew guard (see renumber note above): branch-tester DBs at v141
     // missed extract_rollup_expected_limit; IF NOT EXISTS makes this free
     // everywhere else.
@@ -48,6 +49,6 @@ export const v142: Migration = {
              WHERE active AND embedding IS NOT NULL`,
       );
     }
-    process.stderr.write(`  v142: takes.embedding resized to vector(${embeddingDim}); existing take vectors cleared\n`);
+    if (context?.managedSafe) schemaDiagnostic(context, 'migration_completed'); else process.stderr.write(`  v142: takes.embedding resized to vector(${embeddingDim}); existing take vectors cleared\n`);
   },
 };

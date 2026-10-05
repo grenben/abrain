@@ -77,7 +77,8 @@ describe('self-upgrade metadata persistence uses the durable file config', () =>
   });
 
   test('attempt breadcrumb and failed-swap metadata are recorded against the durable config', async () => {
-    seedConfig({ mode: 'auto', quiet_hours: { start: 0, end: 23, tz: 'UTC' }, existing: 'keep' });
+    const hour = new Date().getUTCHours();
+    seedConfig({ mode: 'auto', quiet_hours: { start: (hour + 23) % 24, end: (hour + 2) % 24, tz: 'UTC' }, existing: 'keep' });
     writeUpdateCache({ kind: 'upgrade_available', current: '0.60.25', latest: '99.0.0' });
     let breadcrumbDuringSwap: Record<string, any> | undefined;
     await attemptAutopilotSelfUpgrade({} as any, 'pglite', join(tmp, 'lock'), () => true, {

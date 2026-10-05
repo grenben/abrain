@@ -3,6 +3,7 @@
  * Leaf module: it must never import src/core/migrate.ts.
  */
 import type { BrainEngine } from '../engine.ts';
+import type { SchemaDiagnosticContext } from '../schema-diagnostics.ts';
 
 /**
  * Schema migrations — run automatically on initSchema().
@@ -34,7 +35,7 @@ export interface Migration {
    * Defaults to true.
    */
   transaction?: boolean;
-  handler?: (engine: BrainEngine) => Promise<void>;
+  handler?: (engine: BrainEngine, context?: SchemaDiagnosticContext) => Promise<void>;
   /**
    * v0.30.1 (D6): when undefined, treated as `true` for all existing
    * migrations (every migration in the registry uses CREATE ... IF NOT

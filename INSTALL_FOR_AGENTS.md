@@ -158,6 +158,50 @@ Tradeoff to know before choosing: Postgres brains get MCP tools every session pl
 the pull protocol, but NOT the PGLite-only per-turn bootstrap hook lane (see
 `BOOTSTRAP_FOR_AGENTS.md` and the degradation matrix in `docs/guides/bootstrap.md`).
 
+### Optional managed local PostgreSQL (explicit opt-in)
+
+On macOS, a fresh GBrain-owned local brain can instead use the dedicated native
+PostgreSQL 17 + pgvector cluster, without Docker or Supabase:
+
+```bash
+gbrain init --managed-postgres
+```
+
+This is explicit opt-in only. Bare `gbrain init` remains PGLite, and
+`--prefer-postgres` remains its separate connection ladder; it does not provision
+this cluster. Managed init is fresh/owned-only: it will not adopt user-managed or
+foreign PostgreSQL, convert or repoint PGLite, or target remote/thin, manual-URL,
+or unrelated PostgreSQL configurations. Incompatible existing configuration or
+artifacts fail closed.
+
+The initial setup is database-only, keyless, and defers embeddings. It does not
+onboard content, providers, models, or search mode, make a paid probe, start a
+login service, or configure a background service. `--yes` authorizes cluster and
+schema initialization only. If required packages are missing, inspect the
+sanitized package impact and exact fingerprint printed by the first run; package
+installation also requires the exact fingerprint as a separate consent:
+
+```bash
+gbrain init --managed-postgres --yes --install-packages \
+  --package-plan-fingerprint <fingerprint>
+```
+
+Copy the exact fingerprint printed for that plan; do not substitute or reuse a
+different plan's value. Interactive package approval is a separate prompt. For
+packages already ready, `gbrain init --managed-postgres --yes` needs no package
+installation consent. This is a manual controller: it does not configure
+login-start. `gbrain postgres provision` manages only the cluster; managed init
+coordinates cluster lifecycle, schema initialization, and config publication.
+The lifecycle lock spans proof, provisioning, schema work, publication, and
+cleanup. Config is published only after schema success and stores a managed
+reference plus the fixed deferred-embedding sentinel—not a URL, password, or
+socket. Resuming a published managed config preserves its embedding settings.
+
+On failure, pre-commit errors retain state and do not publish config. If config
+publication is reported uncertain, inspect the reported status and config before
+retrying. If committed cleanup is reported, config is already committed: do not
+blindly rerun or destructively compensate.
+
 **Runtime failure loop (how the harness self-heals).** When Postgres access
 breaks at runtime, gbrain emits a machine marker: `GBRAIN_DB_ACCESS <reason>`
 (plus ` brain=<id>` when a mounted brain failed) — on non-TTY stderr for

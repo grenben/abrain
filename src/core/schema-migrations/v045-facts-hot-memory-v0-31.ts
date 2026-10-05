@@ -1,4 +1,5 @@
 import type { Migration } from './types.ts';
+import { schemaDiagnostic } from '../schema-diagnostics.ts';
 import type { BrainEngine } from '../engine.ts';
 import { hnswMaxDimsForType, readExistingEmbeddingShape } from '../vector-index.ts';
 
@@ -25,7 +26,7 @@ export const v045: Migration = {
   //     trust boundary as part of the index, not a callback.
   //   - consolidated_into BIGINT — takes.id is BIGSERIAL.
   sql: '',
-  handler: async (engine: BrainEngine) => {
+  handler: async (engine: BrainEngine, context) => {
     // Step 1: resolve embedding dim from config table (already populated
     // by the schema-init __EMBEDDING_DIMS__ replacement on PGLite, or by
     // the seed config on Postgres). Default to 1536 (OpenAI text-embed-3-large).
@@ -72,7 +73,7 @@ export const v045: Migration = {
         } else {
           // Fall back to full-precision vector with stderr warning.
           // eslint-disable-next-line no-console
-          console.warn(
+          if (context?.managedSafe) schemaDiagnostic(context, 'migration_warning'); else console.warn(
             `[v40 facts] pgvector ${v} < 0.7 — falling back to VECTOR(${embeddingDim}). ` +
             `HALFVEC space savings unavailable; functionality otherwise identical. ` +
             `Upgrade pgvector to 0.7+ to enable HALFVEC.`,

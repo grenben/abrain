@@ -46,7 +46,7 @@ export const v124: Migration = {
   // install baselines in pglite-schema.ts / schema-embedded.ts — all
   // four updated in the same commit as this migration.
   sql: '',
-  handler: async (engine) => {
+  handler: async (engine, context) => {
     const lang = getFtsLanguage();
     await engine.executeRaw(`
         CREATE OR REPLACE FUNCTION update_page_search_vector() RETURNS trigger SET search_path = pg_catalog, public AS $fn$
@@ -68,6 +68,6 @@ export const v124: Migration = {
         $fn$ LANGUAGE plpgsql;
       `);
     migrationNotice(`  v124: update_page_search_vector() no longer indexes compiled_truth (was overflowing tsvector on large pages, #2704)
-`);
+`, context);
   },
 };

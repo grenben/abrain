@@ -21,7 +21,7 @@ export const v139: Migration = {
   // re-run). Both engines share one SQL text via executeRaw.
   idempotent: true,
   sql: '',
-  handler: async (engine) => {
+  handler: async (engine, context) => {
     const r = await repairLegacyTimelineSourceRows(engine);
     if (r.rowsRewritten > 0 || r.rowsDeleted > 0) {
       migrationNotice(
@@ -29,6 +29,7 @@ export const v139: Migration = {
         `(source, summary) shape` +
         (r.rowsDeleted > 0 ? ` and removed ${r.rowsDeleted} already-duplicated row(s)` : '') +
         ` across ${r.pagesScanned} page(s), so re-extraction dedups instead of duplicating (#3957).\n`,
+        context,
       );
     }
   },

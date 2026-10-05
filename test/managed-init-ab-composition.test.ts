@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { inspectManagedInitCommandEligibility, inspectManagedInitPreflight } from '../src/core/managed-postgres/init-preflight-observer.ts';
 import { withProvisionedManagedCluster } from '../src/core/managed-postgres.ts';
 import type { ProcessRunner } from '../src/core/managed-postgres/process.ts';
-import { publishManagedInitConfigFile } from '../src/core/config-managed-publication.ts';
+import { publishManagedInitConfigForInitFile } from '../src/core/config-managed-publication.ts';
 import { managedPaths } from '../src/core/managed-postgres/ownership.ts';
 import type { ManagedPostgresReference } from '../src/core/types.ts';
 
@@ -128,7 +128,7 @@ describe('managed-init A↔B composition', () => {
     let reference: ManagedPostgresReference | undefined;
     await withProvisionedManagedCluster(context, (callbackReference) => { reference = callbackReference; });
     expect(reference).toBeDefined();
-    expect(inspectManagedInitPreflight(checkInput)).toEqual({ kind: 'owned-resume', phase: 'provisioned', evidence: 'structural-only' });
+    expect(inspectManagedInitPreflight(checkInput)).toMatchObject({ kind: 'owned-resume', phase: 'provisioned', evidence: 'structural-only' });
 
     const root = join(configDir, 'postgres/17');
     const beforeResume = tree(root);
@@ -136,7 +136,7 @@ describe('managed-init A↔B composition', () => {
     await withProvisionedManagedCluster(context, (callbackReference) => {
       expect(callbackReference).toEqual(reference!);
       expect(existsSync(join(root, '.lifecycle.lock'))).toBe(true);
-      publishManagedInitConfigFile(callbackReference!, configDir, join(configDir, 'config.json'));
+      publishManagedInitConfigForInitFile(callbackReference!, configDir, join(configDir, 'config.json'), { embedding_disabled: true });
     }, {}, { beforeMutation(state) {
       expect(state.kind).toBe('owned-resume');
       expect(existsSync(join(root, '.lifecycle.lock'))).toBe(true);
@@ -145,6 +145,7 @@ describe('managed-init A↔B composition', () => {
       checkedUnderLock = true;
     } });
     expect(checkedUnderLock).toBe(true);
-    expect(inspectManagedInitPreflight(checkInput)).toEqual({ kind: 'published-resume', phase: 'provisioned', evidence: 'structural-only' });
+    expect(JSON.parse(readFileSync(join(configDir, 'config.json'), 'utf8')).embedding_disabled).toBe(true);
+    expect(inspectManagedInitPreflight(checkInput)).toMatchObject({ kind: 'published-resume', phase: 'provisioned', evidence: 'structural-only' });
   });
 });

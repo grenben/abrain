@@ -1352,6 +1352,7 @@ describe('PR #356 + #363 — session timeouts applied via startup parameters', (
     // kept as a no-op shim for back-compat with existing call sites.
     const dbSrc = readFileSync(resolve('src/core/db.ts'), 'utf-8');
     const pgSrc = surfaceSource('postgres-engine');
+    const managedPgSrc = readFileSync(resolve('src/core/postgres-engine-managed.ts'), 'utf-8');
 
     // Helper still exists for back-compat
     expect(dbSrc).toContain('export async function setSessionDefaults');
@@ -1367,7 +1368,10 @@ describe('PR #356 + #363 — session timeouts applied via startup parameters', (
     // setSessionDefaults still callable (no-op) so existing call sites
     // don't break, but the SET command itself is gone — the work has
     // already happened at connection startup time.
-    expect(pgSrc).toContain('db.setSessionDefaults');
+    // initSchema now accepts optional diagnostics; the separate managed
+    // connection path retains the timeout compatibility shim.
+    expect(pgSrc).toMatch(/async initSchema\((?:\s*context\?\s*:\s*SchemaDiagnosticContext\s*)?\)/);
+    expect(managedPgSrc).toContain('db.setSessionDefaults(host.sql)');
 
     // Critically: no SET idle_in_transaction in source — startup parameters
     // are the durable mechanism for PgBouncer transaction mode.

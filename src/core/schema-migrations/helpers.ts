@@ -6,6 +6,8 @@
  * (ESM import cycle -> TDZ at module load, including in the compiled binary).
  */
 import type { BrainEngine } from '../engine.ts';
+import type { SchemaDiagnosticContext } from '../schema-diagnostics.ts';
+import { schemaDiagnostic } from '../schema-diagnostics.ts';
 
 /**
  * When true, per-migration explanatory notices (e.g. the v123/v124 "here is
@@ -22,7 +24,8 @@ let quietMigrationNotices = false;
 
 /** Write a per-migration explanatory notice unless fresh-install quiet mode is
  *  on. Handlers should route their "what changed" lines through this. */
-export function migrationNotice(line: string): void {
+export function migrationNotice(line: string, context?: SchemaDiagnosticContext): void {
+  if (context?.managedSafe) { schemaDiagnostic(context, 'migration_notice'); return; }
   if (quietMigrationNotices) return;
   process.stderr.write(line);
 }

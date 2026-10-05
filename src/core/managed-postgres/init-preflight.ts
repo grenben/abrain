@@ -63,8 +63,8 @@ export interface ManagedInitPreflightInput {
 
 export type ManagedInitPreflightResult =
   | { kind: 'fresh' }
-  | { kind: 'owned-resume'; phase: SetupPhase; evidence: 'structural-only' }
-  | { kind: 'published-resume'; phase: SetupPhase; evidence: 'structural-only' };
+  | { kind: 'owned-resume'; phase: SetupPhase; evidence: 'structural-only'; reference: { manager_id: 'gbrain-managed-postgres'; cluster_id: string } }
+  | { kind: 'published-resume'; phase: SetupPhase; evidence: 'structural-only'; reference: { manager_id: 'gbrain-managed-postgres'; cluster_id: string } };
 
 export const MANAGED_INIT_PREFLIGHT_REFUSAL_CODE = 'managed_init_preflight_refused' as const;
 export const MANAGED_INIT_PREFLIGHT_REFUSAL_MESSAGE = 'Managed PostgreSQL init preflight refused; no changes were made.';
@@ -179,6 +179,7 @@ function classifyObservedManagedInit(input: ManagedInitPreflightInput): ManagedI
     kind: managedClusterId === null ? 'owned-resume' : 'published-resume',
     phase: input.owner.owner.phase,
     evidence: 'structural-only',
+    reference: { manager_id: 'gbrain-managed-postgres', cluster_id: input.owner.owner.clusterId },
   };
 }
 
