@@ -7,9 +7,14 @@ import { loadConfigSnapshot } from './config-snapshot.ts';
 import { loadGbrainEnvFile } from './gbrain-env-file.ts';
 import { dotenvValuesForKey } from './env-trust.ts';
 import { REMOTE_PRIVATE_PAGES_KEY } from './search/private-visibility.ts';
-import { normalizeEngineTarget, validateManagedTargetConfig } from './engine-target.ts';
-import { publishConfigFile, type ConfigPublicationDependencies } from './config-publication.ts';
-export { ConfigPublicationUncertainError } from './config-publication.ts';
+import { validateManagedTargetConfig } from './engine-target.ts';
+import { ConfigFileParseError, parseFileOnlyConfig } from './config-file-parser.ts';
+import type { ConfigPublicationDependencies } from './config-publication.ts';
+import { publishManagedInitConfigFile, saveConfigFile } from './config-managed-publication.ts';
+import { ConfigPublicationFailedError, ConfigPublicationCommittedCleanupError, ConfigPublicationRefusedError,
+  ConfigPublicationUncertainError } from './config-publication.ts';
+export { ConfigPublicationUncertainError, ConfigPublicationRefusedError, ConfigPublicationFailedError,
+  ConfigPublicationCommittedCleanupError } from './config-publication.ts';
 export type { ConfigPublicationDependencies } from './config-publication.ts';
 
 /**
@@ -578,29 +583,6 @@ export function isThinClient(config: GBrainConfig | null): boolean {
  * Load config with credential precedence: env vars > config file.
  * Plugin config is handled by the plugin runtime injecting env vars.
  */
-// v0.36.x #1086: translate legacy `provider` + `model` config shape (seen in
-// pre-v0.32 docs and some community templates) to the canonical
-// `embedding_model: "<provider>:<model>"`. Without this translation, sync
-// and embed silently fell through to the hardcoded OpenAI default, blocking
-// Voyage / Cohere / Mistral users from using their configured provider.
-function migrateLegacyEmbeddingConfig(raw: Record<string, unknown>): Record<string, unknown> {
-  if (raw.embedding_model !== undefined) return raw;
-  const provider = typeof raw.provider === 'string' ? raw.provider : undefined;
-  const model = typeof raw.model === 'string' ? raw.model : undefined;
-  if (!provider || !model) return raw;
-  // Strip the legacy keys to avoid downstream confusion. Emit a one-line
-  // stderr nudge so the operator updates their config to the canonical shape.
-  const rest = { ...raw };
-  delete rest.provider;
-  delete rest.model;
-  rest.embedding_model = `${provider}:${model}`;
-  console.warn(
-    `[config] legacy "provider" + "model" detected; using "${rest.embedding_model}".` +
-    ` Rewrite ~/.gbrain/config.json to: "embedding_model": "${rest.embedding_model}".`,
-  );
-  return rest;
-}
-
 /**
  * File-only config loader. Reads ~/.gbrain/config.json and applies the
  * legacy embedding-config migration shim. Does NOT merge env vars, does
@@ -615,16 +597,14 @@ function migrateLegacyEmbeddingConfig(raw: Record<string, unknown>): Record<stri
  * v0.37 fix wave (CDX-5 from round 1). Pinned by test/config-file-only-loader.test.ts.
  */
 export function loadConfigFileOnly(): GBrainConfig | null {
-  let parsed: Record<string, unknown>;
+  let raw: string;
   try {
-    const raw = readFileSync(getConfigPath(), 'utf-8');
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    raw = readFileSync(getConfigPath(), 'utf-8');
   } catch {
     return null;
   }
-  const config = migrateLegacyEmbeddingConfig(parsed) as unknown as GBrainConfig;
-  validateManagedTargetConfig(config);
-  return config;
+  try { return parseFileOnlyConfig(raw) as unknown as GBrainConfig; }
+  catch (error) { if (error instanceof ConfigFileParseError) return null; throw error; }
 }
 
 /**
@@ -698,8 +678,7 @@ export function loadConfig(): GBrainConfig | null {
   let fileConfig: GBrainConfig | null = null;
   try {
     const raw = readFileSync(getConfigPath(), 'utf-8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    fileConfig = migrateLegacyEmbeddingConfig(parsed) as unknown as GBrainConfig;
+    fileConfig = parseFileOnlyConfig(raw, false) as unknown as GBrainConfig;
   } catch { /* no config file */ }
 
   // Try env vars (cwd-.env-origin DATABASE_URL excluded — see #427 guard above)
@@ -1680,16 +1659,20 @@ export function isConfigTruthy(raw: unknown): boolean {
     && ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 export function saveConfig(config: GBrainConfig, dependencies: Readonly<ConfigPublicationDependencies> = {}): void {
-  const target = normalizeEngineTarget(config);
   const dir = getConfigDir(), destination = getConfigPath();
   mkdirSync(dir, { recursive: true });
-  // Atomic write (tmp + rename): long-lived workers re-read this file per job
-  // (gateway env refresh, keyed/keyless classification) — a truncate-then-write
-  // here could be read torn, making a keyed install classify as keyless and
-  // calmly consume work it should retry.
-  publishConfigFile(destination, Buffer.from(JSON.stringify(config, null, 2) + '\n', 'utf8'), dependencies,
-    { directoryDurability: target.kind === 'postgres-managed' ? 'strict' : 'allow-unsupported' });
+  saveConfigFile(config, dir, destination, dependencies);
   ensureGitignore();
+}
+export function publishManagedInitConfig(reference: ManagedPostgresReference): void {
+  try {
+    const dir = getConfigDir(), destination = getConfigPath();
+    publishManagedInitConfigFile(reference, dir, destination);
+  } catch (error) {
+    if (error instanceof ConfigPublicationRefusedError || error instanceof ConfigPublicationFailedError
+      || error instanceof ConfigPublicationUncertainError || error instanceof ConfigPublicationCommittedCleanupError) throw error;
+    throw new ConfigPublicationFailedError();
+  }
 }
 
 /**

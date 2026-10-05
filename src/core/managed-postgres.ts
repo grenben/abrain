@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
@@ -8,6 +8,8 @@ import { acquireLifecycleLock, assertPrivateFile, atomicWriteOwnedFile, canonica
 import { HOMEBREW_SAFE_ENV, inspectPackages, planPackageImpact, REQUIRED_FORMULAE, type PackageDeps, type PackageImpact, type PackageReport } from './managed-postgres/packages.ts';
 import { ProcessCancelledError, ProcessTerminationUnconfirmedError, runProcess, type ProcessResult, type ProcessRunner } from './managed-postgres/process.ts';
 import { MANAGED_IDENTITY_QUERY, renderManagedPostgresConfig, verifyManagedPostgresLiveIdentity, type LiveIdentity } from './managed-postgres/identity.ts';
+import { validateManagedPostgresReference } from './engine-target.ts';
+import type { ManagedPostgresReference } from './types.ts';
 
 export type ManagedClassification = 'absent' | 'packages_missing' | 'packages_incompatible' | 'allocated' | 'partial' | 'ownership_unknown' | 'stopped' | 'port_collision' | 'startup_failure' | 'auth_failure' | 'wrong_server' | 'missing_extension' | 'schema_incomplete' | 'ready';
 export interface ManagedContext {
@@ -45,6 +47,10 @@ function runtime(ctx: ManagedContext) {
 }
 function durable<T>(ctx: ManagedContext, action: () => T): T { checkSignal(ctx); const result = action(); checkSignal(ctx); return result; }
 function target(owner: OwnerMetadata): ManagedTarget { return { host: '127.0.0.1', port: owner.port, database: owner.database, role: owner.role, socketPath: owner.socketPath, controller: 'manual' }; }
+function canonicalClusterReference(clusterId: string): Readonly<ManagedPostgresReference> {
+  const reference = validateManagedPostgresReference({ manager_id: 'gbrain-managed-postgres', cluster_id: clusterId });
+  return Object.freeze(reference);
+}
 function platformRefusal(ctx: ManagedContext): string | undefined {
   const r = runtime(ctx);
   if (r.platform !== 'darwin') return 'Only macOS is supported.';
@@ -286,40 +292,89 @@ async function provisionCapabilities(ctx: ManagedContext, paths: ManagedPaths, o
   const ext = await sql(ctx, owner, paths, owner.database, 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;');
   if (!ok(ext)) throw new Error('Managed PostgreSQL capability setup failed; state retained.');
 }
-export async function provision(context: ManagedContext = {}, consent: { installPackages?: boolean; packagePlanFingerprint?: string } = {}): Promise<ManagedTarget> {
+export async function withProvisionedManagedCluster<T>(
+  context: ManagedContext,
+  callback: (cluster: Readonly<ManagedPostgresReference>) => T | Promise<T>,
+  consent: { installPackages?: boolean; packagePlanFingerprint?: string } = {},
+  options: { beforeMutation?: (state: Readonly<{ kind: 'fresh' | 'owned-resume'; reference: Readonly<ManagedPostgresReference> }>) => void | Promise<void> } = {},
+): Promise<T> {
   checkSignal(context);
   const r = runtime(context), paths = getPaths(context);
+  const unsupported = platformRefusal(context);
+  if (unsupported) throw new Error(unsupported);
   validateExistingManagedAncestry(paths, r.uid, context.configDir ?? defaultConfigDir());
-  if (existsSync(paths.lock)) throw new Error('Managed PostgreSQL lifecycle is locked or lock state is ambiguous; no action was taken.');
+  if (pathExists(paths.lock)) throw new Error('Managed PostgreSQL lifecycle is locked or lock state is ambiguous; no action was taken.');
+  const preOwnerExists = existsSync(paths.owner);
+  let preOwnerClusterId: string | undefined;
+  if (preOwnerExists) {
+    const existing = readOwner(paths, r.uid);
+    canonicalClusterReference(existing.clusterId);
+    preOwnerClusterId = existing.clusterId;
+  } else if (existsSync(paths.root) && readdirSync(paths.root).length) {
+    throw new Error('Managed PostgreSQL root contains unknown state; it will not be adopted or overwritten.');
+  }
+  // Compatibility refusals and package consent happen before reserving a new
+  // root/lock. Homebrew may update its metadata cache while planning, but no
+  // package installation occurs before explicit exact-fingerprint consent.
+  const preflight = await planProvision(context);
   checkSignal(context);
-  const plan = await planProvision(context);
-  checkSignal(context);
-  if (plan.refusal) throw new Error(plan.refusal);
-  if (!plan.packages.ready && !(plan.installPackages && consent.installPackages === true && consent.packagePlanFingerprint === plan.packagePlanFingerprint)) throw new Error('PostgreSQL packages are missing; exact install and package-plan fingerprint consent is required.');
+  if (preflight.refusal) throw new Error(preflight.refusal);
+  if (!preflight.packages.ready) {
+    if (preOwnerExists) throw new Error(preflight.packages.missing.length ? 'Managed PostgreSQL packages are missing; owned clusters are never repaired during resume.' : 'Installed PostgreSQL packages or architecture are incompatible; upgrades and replacement are refused.');
+    if (!preflight.installPackages || consent.installPackages !== true || consent.packagePlanFingerprint !== preflight.packagePlanFingerprint) throw new Error('PostgreSQL packages are missing; exact install and package-plan fingerprint consent is required.');
+  }
+  const candidateReference = preOwnerExists ? undefined : canonicalClusterReference(context.clusterId?.() ?? randomUUID());
+  // The lock lives beneath the managed root, so safely reserve that private
+  // directory before the lock can be atomically acquired.
   durable(context, () => ensurePrivateDir(paths.root, r.uid));
-  validateExistingManagedAncestry(paths, r.uid, context.configDir ?? defaultConfigDir());
-  if (!existsSync(paths.owner) && readdirSync(paths.root).length) throw new Error('Managed PostgreSQL root contains unknown state; it will not be adopted or overwritten.');
-  checkSignal(context);
   const release = acquireLifecycleLock(paths);
   let releaseAllowed = true;
   try {
     checkSignal(context);
-    let packages = plan.packages;
-    if (!packages.ready) {
-      if (!packages.brew) throw new Error('Homebrew is unavailable; package installation is not possible.');
-      const lockedImpact = await planPackageImpact(packages, r.runner);
-      if (!lockedImpact.known || lockedImpact.fingerprint !== consent.packagePlanFingerprint) throw new Error('Homebrew package impact changed or is unknown under lock; install consent is stale.');
-       requireOk(await r.runner(packages.brew, [...packages.installArgv], { timeoutMs: 10 * 60_000, outputLimit: 16 * 1024, env: { ...commandEnv(context), ...HOMEBREW_SAFE_ENV } }), 'package install');
+    checkSignal(context);
+    durable(context, () => ensurePrivateDir(paths.root, r.uid));
+    validateExistingManagedAncestry(paths, r.uid, context.configDir ?? defaultConfigDir());
+    const isNew = !existsSync(paths.owner);
+    if (isNew && readdirSync(paths.root).some(entry => entry !== '.lifecycle.lock')) throw new Error('Managed PostgreSQL root contains unknown state; it will not be adopted or overwritten.');
+    if (isNew === preOwnerExists) throw new Error('Managed PostgreSQL ownership changed while acquiring the lifecycle lock.');
+    if (!isNew) {
+      const lockedOwner = readOwner(paths, r.uid);
+      canonicalClusterReference(lockedOwner.clusterId);
+      if (lockedOwner.clusterId !== preOwnerClusterId) throw new Error('Managed PostgreSQL ownership changed while acquiring the lifecycle lock.');
+    }
+    let packages = await packageReport(context);
+    let owner!: OwnerMetadata, creds!: ManagedCredentials;
+    const beforeMutation = async (kind: 'fresh' | 'owned-resume', reference: Readonly<ManagedPostgresReference>) => {
+      checkSignal(context);
+      if (options.beforeMutation) await options.beforeMutation(Object.freeze({ kind, reference }));
+      checkSignal(context);
+    };
+    if (!isNew) {
+      // Existing state is proved before any possible package mutation. Owned resume
+      // never installs or repairs its package set.
+      const proof = await offlineProof(context, paths, packages);
+      if (typeof proof === 'string') throw new Error(`Managed PostgreSQL ownership proof failed (${proof}); retained state was not changed.`);
+      owner = proof.owner; creds = proof.credentials;
+      const reference = canonicalClusterReference(owner.clusterId);
+      await beforeMutation('owned-resume', reference);
+    } else {
+      await beforeMutation('fresh', candidateReference!);
+    }
+    if (isNew && !packages.ready) {
+      if (packages.incompatible.length || packages.missing.includes('homebrew')) throw new Error(packages.incompatible.length ? 'Installed PostgreSQL packages or architecture are incompatible; upgrades and replacement are refused.' : 'Homebrew is required and will not be installed automatically.');
+      const impact = await planPackageImpact(packages, r.runner);
+      if (!impact.known || !impact.fingerprint || impact.fingerprint !== preflight.packagePlanFingerprint || consent.installPackages !== true || consent.packagePlanFingerprint !== impact.fingerprint) throw new Error('Homebrew package impact changed or is unknown under lock; install consent is stale or missing.');
+      checkSignal(context);
+      requireOk(await r.runner(packages.brew!, [...packages.installArgv], { timeoutMs: 10 * 60_000, outputLimit: 16 * 1024, env: { ...commandEnv(context), ...HOMEBREW_SAFE_ENV } }), 'package install');
       packages = await packageReport(context);
       if (!packages.ready) throw new Error('Installed package set failed compatibility verification; no automatic repair was attempted.');
     }
-    let owner: OwnerMetadata, creds: ManagedCredentials, isNew = !existsSync(paths.owner);
     if (isNew) {
       const port = await allocatePort(context);
       if ([5432, 5434, 6543].includes(port) || port < 1024 || port > 65535 || await portInUse(context, port)) throw new Error('Managed PostgreSQL port is unavailable or reserved.');
-       durable(context, () => { ensurePrivateDir(paths.data, r.uid); ensurePrivateDir(paths.log, r.uid); });
+      const cluster = createOwner(paths, r.uid, packages.formulaPrefix!, packages.formulaVersion!, packages.pgvectorVersion!, port, candidateReference!.cluster_id);
+      durable(context, () => { ensurePrivateDir(paths.data, r.uid); ensurePrivateDir(paths.log, r.uid); });
       const defaultSocket = paths.socket;
-      const cluster = createOwner(paths, r.uid, packages.formulaPrefix!, packages.formulaVersion!, packages.pgvectorVersion!, port, context.clusterId?.());
       const shortSocketRoot = context.runtimeSocketRoot ?? (process.platform === 'darwin' ? '/private/tmp' : tmpdir());
       const socket = Buffer.byteLength(join(defaultSocket, `.s.PGSQL.${port}`)) <= SOCKET_PATH_MAX ? defaultSocket : canonicalPath(join(shortSocketRoot, `gbp-${r.uid}-${cluster.clusterId.slice(0, 12)}`));
       if (socket !== defaultSocket && existsSync(socket)) throw new Error('Managed PostgreSQL runtime socket directory already exists; no state was adopted.');
@@ -330,13 +385,21 @@ export async function provision(context: ManagedContext = {}, consent: { install
       catch { throw new Error('Managed PostgreSQL credentials could not be securely reserved; ownership reservation retained.'); }
        writeRuntimeSocketMarker(context, socket, owner, r.uid);
     } else {
-      const proof = await offlineProof(context, paths, packages);
-      if (typeof proof === 'string') throw new Error(`Managed PostgreSQL ownership proof failed (${proof}); retained state was not changed.`);
-      owner = proof.owner; creds = proof.credentials;
-       if (owner.phase === 'provisioned') {
-        const status = await verifiedStatus(context, paths, packages, owner);
-        if (status.classification !== 'ready') throw new Error(`Provisioned cluster is not fully verified (${status.classification}); no target was returned.`);
-        return target(owner);
+      if (owner!.phase === 'provisioned') {
+        const state = await pgCtlStatus(context, owner!, paths);
+        if (state === 'unknown') throw new Error('Provisioned cluster status is ambiguous; no target was returned.');
+        if (state === 'stopped') {
+          const started = await startOwned(context, paths, packages, owner!);
+          if (started !== 'ready') throw new Error(`Provisioned cluster resume failed (${started}); state retained.`);
+        } else {
+          const identity = await liveProof(context, owner!, paths, false);
+          if (identity !== 'ready') throw new Error(`Provisioned cluster identity failed (${identity}); state retained.`);
+        }
+        const capability = await liveProof(context, owner!, paths);
+        if (capability !== 'ready') throw new Error(`Provisioned cluster capability proof failed (${capability}); state retained.`);
+        checkSignal(context);
+        const reference = canonicalClusterReference(owner!.clusterId);
+        return await callback(reference);
       }
       writeRuntimeSocketMarker(context, owner.socketPath, owner, r.uid);
     }
@@ -352,11 +415,23 @@ export async function provision(context: ManagedContext = {}, consent: { install
     const capability = await liveProof(context, owner, paths);
     if (capability !== 'ready') throw new Error(`Managed PostgreSQL capability proof failed (${capability}); state retained.`);
     owner.phase = 'provisioned'; delete owner.lastFailure; durable(context, () => writeOwner(paths, owner));
-    return target(owner);
+    checkSignal(context);
+    const reference = canonicalClusterReference(owner.clusterId);
+    return await callback(reference);
   } catch (error) {
     if (error instanceof ProcessTerminationUnconfirmedError) releaseAllowed = false;
     throw error;
   } finally { if (releaseAllowed) release(); }
+}
+export async function provision(context: ManagedContext = {}, consent: { installPackages?: boolean; packagePlanFingerprint?: string } = {}): Promise<ManagedTarget> {
+  let result: ManagedTarget | undefined;
+  await withProvisionedManagedCluster(context, reference => {
+    const paths = getPaths(context), owner = readOwner(paths, runtime(context).uid);
+    if (owner.clusterId !== reference.cluster_id) throw new Error('Managed PostgreSQL owner changed during provisioning.');
+    result = target(owner);
+  }, consent);
+  if (!result) throw new Error('Managed PostgreSQL provisioning did not produce a target.');
+  return result;
 }
 async function verifiedStatus(ctx: ManagedContext, paths: ManagedPaths, packages: PackageReport, owner: OwnerMetadata): Promise<ManagedStatus> {
   const proof = await offlineProof(ctx, paths, packages);

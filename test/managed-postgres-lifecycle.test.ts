@@ -5,15 +5,16 @@
  * The runner seam prevents every test from starting a real database.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, unlinkSync, realpathSync, statSync, symlinkSync, rmdirSync, existsSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, unlinkSync, realpathSync, statSync, symlinkSync, rmdirSync, existsSync, readdirSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { inspectPrerequisites, planProvision, provision, status, start, stop } from '../src/core/managed-postgres.ts';
+import { inspectPrerequisites, planProvision, provision, status, start, stop, withProvisionedManagedCluster } from '../src/core/managed-postgres.ts';
 import type { OwnerMetadata } from '../src/core/managed-postgres.ts';
 import type { ProcessRunner } from '../src/core/managed-postgres/process.ts';
 import { ProcessCancelledError, ProcessTerminationUnconfirmedError } from '../src/core/managed-postgres/process.ts';
 import { captureInitializationReceipt, managedPaths, writeInitializationReceipt } from '../src/core/managed-postgres/ownership.ts';
+import { validateManagedPostgresReference } from '../src/core/engine-target.ts';
 
 const dirs: string[] = [];
 const privateTmp = process.platform === 'darwin' ? '/private/tmp' : tmpdir();
@@ -38,6 +39,19 @@ function addReceipt(cfg: string): void {
   writeInitializationReceipt(paths, captureInitializationReceipt(paths, owner, owner.uid, '123456789'));
 }
 function lifecycleLock(cfg: string): string { return join(cfg, 'postgres/17/.lifecycle.lock'); }
+function tree(path: string): string[] {
+  if (!existsSync(path)) return ['<absent>'];
+  const rows: string[] = [];
+  const walk = (dir: string, relative = '') => {
+    for (const name of readdirSync(dir).sort()) {
+      const full = join(dir, name), rel = join(relative, name), st = lstatSync(full);
+      rows.push(`${rel}:${st.mode & 0o777}:${st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'link' : readFileSync(full).toString('base64')}`);
+      if (st.isDirectory()) walk(full, rel);
+    }
+  };
+  walk(path);
+  return rows;
+}
 function lockSnapshot(cfg: string): { mode: number; uid: number; owner: string; ownerMode: number } {
   const path = lifecycleLock(cfg), ownerPath = join(path, 'owner');
   return { mode: statSync(path).mode & 0o777, uid: statSync(path).uid, owner: readFileSync(ownerPath, 'utf8'), ownerMode: statSync(ownerPath).mode & 0o777 };
@@ -121,6 +135,206 @@ function nativeFixture(configDir: string, failAt?: 'initdb-incomplete' | 'initdb
 }
 
 describe('managed PostgreSQL lifecycle API', () => {
+  it('holds the lifecycle lock through the scoped callback and exposes only a canonical reference', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    let enter!: () => void, settle!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { settle = resolve; });
+    const operation = withProvisionedManagedCluster(ctx, async reference => {
+      expect(validateManagedPostgresReference(reference)).toEqual(reference);
+      expect(reference.manager_id).toBe('gbrain-managed-postgres');
+      expect(Object.keys(reference).sort()).toEqual(['cluster_id', 'manager_id']);
+      expect(existsSync(lifecycleLock(cfg))).toBe(true);
+      expect(fake.calls.some(call => call.file.endsWith('/psql') && String(call.args).includes("'[1,2,3]'::vector"))).toBe(true);
+      enter(); await gate; return 'callback-result';
+    });
+    await entered;
+    await expect(start(ctx)).rejects.toThrow(/locked|ambiguous/);
+    settle();
+    await expect(operation).resolves.toBe('callback-result');
+    expect(existsSync(lifecycleLock(cfg))).toBe(false);
+  });
+  it('refuses unsupported platforms, unknown roots, and extant locks without creating filesystem artifacts', async () => {
+    const { cfg: unsupportedCfg } = home(), unsupportedFake = nativeFixture(unsupportedCfg), unsupportedCtx = { configDir: unsupportedCfg, platform: 'linux' as const, arch: 'x64', uid: process.getuid?.() ?? 1000, ...unsupportedFake };
+    const unsupportedBefore = tree(join(unsupportedCfg, 'postgres/17'));
+    await expect(provision(unsupportedCtx, {})).rejects.toThrow(/macOS/);
+    expect(tree(join(unsupportedCfg, 'postgres/17'))).toEqual(unsupportedBefore);
+
+    const { cfg: unsafeCfg } = home(), unsafeFake = nativeFixture(unsafeCfg), unsafeCtx = { configDir: unsafeCfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...unsafeFake };
+    const unsafeBefore = tree(join(unsafeCfg, 'postgres/17'));
+    chmodSync(unsafeCfg, 0o722);
+    await expect(provision(unsafeCtx, {})).rejects.toThrow(/unsafe|permissions/);
+    expect(tree(join(unsafeCfg, 'postgres/17'))).toEqual(unsafeBefore);
+    expect(unsafeFake.calls).toHaveLength(0);
+    chmodSync(unsafeCfg, 0o700);
+
+    const { cfg: unknownCfg } = home(), unknownRoot = join(unknownCfg, 'postgres/17');
+    mkdirSync(unknownRoot, { recursive: true, mode: 0o700 }); writeFileSync(join(unknownRoot, 'foreign'), 'preserve', { mode: 0o600 });
+    const unknownFake = nativeFixture(unknownCfg), unknownCtx = { configDir: unknownCfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...unknownFake };
+    const unknownBefore = tree(unknownRoot);
+    await expect(provision(unknownCtx, {})).rejects.toThrow(/unknown state/);
+    expect(tree(unknownRoot)).toEqual(unknownBefore);
+    expect(unknownFake.calls).toHaveLength(0);
+
+    const { cfg: lockedCfg } = home(), lockedRoot = join(lockedCfg, 'postgres/17'), lock = lifecycleLock(lockedCfg);
+    mkdirSync(lock, { recursive: true, mode: 0o700 }); writeFileSync(join(lock, 'owner'), `${process.pid}:${randomUUID()}`, { mode: 0o600 });
+    const lockedFake = nativeFixture(lockedCfg), lockedCtx = { configDir: lockedCfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...lockedFake };
+    const lockedBefore = tree(lockedRoot);
+    await expect(provision(lockedCtx, {})).rejects.toThrow(/locked|ambiguous/);
+    expect(tree(lockedRoot)).toEqual(lockedBefore);
+    expect(lockedFake.calls).toHaveLength(0);
+  });
+  it('refuses package preflight and consent failures before creating root, lock, owner, or credentials', async () => {
+    const cases = [
+      { label: 'missing Homebrew', configure: (ctx: ReturnType<typeof nativeFixture>) => ({ ...ctx, packageDeps: { brew: null, executable: () => false } }), consent: {} },
+      { label: 'incompatible packages', configure: (ctx: ReturnType<typeof nativeFixture>) => ctx, arch: 'x64' as const, consent: {} },
+      { label: 'missing consent', configure: (ctx: ReturnType<typeof nativeFixture>) => ctx, missing: true, consent: {} },
+      { label: 'stale consent', configure: (ctx: ReturnType<typeof nativeFixture>) => ctx, missing: true, consent: { installPackages: true, packagePlanFingerprint: 'f'.repeat(64) } },
+    ];
+    for (const item of cases) {
+      const { cfg } = home(), fake = nativeFixture(cfg, undefined, 'missing' in item && item.missing), configured = item.configure(fake);
+      const ctx = { configDir: cfg, platform: 'darwin' as const, arch: item.arch ?? 'arm64', uid: process.getuid?.() ?? 1000, ...configured };
+      const before = tree(join(cfg, 'postgres/17'));
+      await expect(provision(ctx, item.consent)).rejects.toThrow();
+      expect(tree(join(cfg, 'postgres/17'))).toEqual(before);
+      expect(fake.calls.some(call => call.file === '/brew/brew' && call.args[0] === 'install' && !call.args.includes('--dry-run'))).toBe(false);
+      expect(existsSync(join(cfg, 'postgres/17/owner.json'))).toBe(false);
+      expect(existsSync(join(cfg, 'postgres/17/credentials.json'))).toBe(false);
+    }
+  });
+  it('preserves the provisioned cluster when a scoped callback throws', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    await expect(withProvisionedManagedCluster(ctx, () => { throw new Error('callback failed'); })).rejects.toThrow('callback failed');
+    expect((await status(ctx, { probe: true })).classification).toBe('ready');
+    expect(existsSync(lifecycleLock(cfg))).toBe(false);
+  });
+  it('releases on callback cancellation and retains the exact lock on unconfirmed termination', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg), base = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    const controller = new AbortController();
+    await expect(withProvisionedManagedCluster({ ...base, signal: controller.signal }, () => { controller.abort(); throw new ProcessCancelledError(); })).rejects.toBeInstanceOf(ProcessCancelledError);
+    expect(existsSync(lifecycleLock(cfg))).toBe(false);
+    await expect(withProvisionedManagedCluster(base, () => { throw new ProcessTerminationUnconfirmedError(); })).rejects.toBeInstanceOf(ProcessTerminationUnconfirmedError);
+    const retained = lockSnapshot(cfg);
+    await expect(withProvisionedManagedCluster(base, () => undefined)).rejects.toThrow(/locked|ambiguous/);
+    expect(lockSnapshot(cfg)).toEqual(retained);
+  });
+  it('safely starts an owned provisioned-but-stopped cluster before scoped callback', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    await provision(ctx, {}); await stop(ctx);
+    const starts = fake.calls.filter(call => call.file.endsWith('/pg_ctl') && call.args.includes('start')).length;
+    const reference = await withProvisionedManagedCluster(ctx, value => value);
+    expect(reference.manager_id).toBe('gbrain-managed-postgres');
+    expect(fake.calls.filter(call => call.file.endsWith('/pg_ctl') && call.args.includes('start'))).toHaveLength(starts + 1);
+    expect((await status(ctx, { probe: true })).classification).toBe('ready');
+  });
+  it('refuses an existing owner with missing packages without attempting package installation', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg), base = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    await provision(base, {});
+    const before = fake.calls.length, missing = { ...base, packageDeps: { ...fake.packageDeps, executable: (path: string) => path === '/brew/brew' } };
+    let callbackCalled = false;
+    await expect(withProvisionedManagedCluster(missing, () => { callbackCalled = true; })).rejects.toThrow(/packages|ownership proof failed/);
+    expect(callbackCalled).toBe(false);
+    expect(fake.calls.slice(before).some(call => call.file === '/brew/brew' && call.args[0] === 'install' && !call.args.includes('--dry-run'))).toBe(false);
+  });
+  it('uses the shared lowercase UUID layout contract for injected cluster IDs', async () => {
+    for (const clusterId of ['00000000-0000-4000-8000-00000000000A', 'not-a-uuid']) {
+      const { cfg } = home(), fake = nativeFixture(cfg), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, clusterId: () => clusterId, ...fake };
+      await expect(provision(ctx, {})).rejects.toThrow(/UUID|identifier|canonical/i);
+      const root = join(cfg, 'postgres/17');
+      expect(existsSync(join(root, 'owner.json'))).toBe(false);
+      expect(existsSync(join(root, 'data'))).toBe(false);
+      expect(existsSync(join(root, 'credentials.json'))).toBe(false);
+      expect(fake.calls.some(call => call.file.endsWith('/initdb') && call.args.includes('-D'))).toBe(false);
+    }
+    const { cfg } = home(), fake = nativeFixture(cfg), clusterId = '01234567-89ab-cdef-0123-456789abcdef';
+    const ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, clusterId: () => clusterId, ...fake };
+    let observed: string | undefined;
+    await expect(withProvisionedManagedCluster(ctx, value => value, {}, { beforeMutation: state => {
+      observed = state.reference.cluster_id;
+      throw new Error('stop after reference validation');
+    } })).rejects.toThrow('stop after reference validation');
+    expect(observed).toBe(clusterId);
+  });
+  it('holds the lifecycle lock at the fresh checkpoint before package install and mutation', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg, undefined, true), clusterId = randomUUID();
+    const ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, clusterId: () => clusterId, ...fake };
+    const planned = await planProvision(ctx), root = join(cfg, 'postgres/17');
+    let enter!: () => void, settle!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; }), gate = new Promise<void>(resolve => { settle = resolve; });
+    const operation = withProvisionedManagedCluster(ctx, () => undefined, { installPackages: true, packagePlanFingerprint: planned.packagePlanFingerprint }, { beforeMutation: async state => {
+      expect(Object.isFrozen(state)).toBe(true); expect(Object.isFrozen(state.reference)).toBe(true);
+      expect(state).toEqual({ kind: 'fresh', reference: { manager_id: 'gbrain-managed-postgres', cluster_id: clusterId } });
+      expect(existsSync(lifecycleLock(cfg))).toBe(true); expect(existsSync(join(root, 'owner.json'))).toBe(false);
+      expect(fake.calls.some(call => call.file === '/brew/brew' && call.args[0] === 'install' && !call.args.includes('--dry-run'))).toBe(false);
+      enter(); await gate;
+    } });
+    await entered;
+    await expect(withProvisionedManagedCluster(ctx, () => undefined)).rejects.toThrow(/locked|ambiguous/);
+    settle(); await operation;
+    expect(fake.calls.some(call => call.file === '/brew/brew' && call.args[0] === 'install' && !call.args.includes('--dry-run'))).toBe(true);
+    expect(existsSync(join(root, 'owner.json'))).toBe(true);
+  });
+  it('refusal, cancellation, and ordinary failure at the checkpoint do not mutate fresh state', async () => {
+    for (const mode of ['throw', 'cancel', 'unconfirmed'] as const) {
+      const { cfg } = home(), fake = nativeFixture(cfg, undefined, true), controller = new AbortController();
+      const ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, signal: controller.signal, ...fake };
+      const plan = await planProvision(ctx), root = join(cfg, 'postgres/17');
+      const before = tree(root);
+      const hook = () => {
+        if (mode === 'cancel') controller.abort();
+        if (mode === 'unconfirmed') throw new ProcessTerminationUnconfirmedError();
+        throw mode === 'cancel' ? new ProcessCancelledError() : new Error('eligibility changed');
+      };
+      await expect(withProvisionedManagedCluster(ctx, () => undefined, { installPackages: true, packagePlanFingerprint: plan.packagePlanFingerprint }, { beforeMutation: hook })).rejects.toThrow();
+      expect(fake.calls.some(call => call.file === '/brew/brew' && call.args[0] === 'install' && !call.args.includes('--dry-run'))).toBe(false);
+      expect(fake.calls.some(call => call.file.endsWith('/initdb') || call.file.endsWith('/pg_ctl') || call.file.endsWith('/createdb'))).toBe(false);
+      expect(existsSync(join(root, 'owner.json'))).toBe(false); expect(existsSync(join(root, 'credentials.json'))).toBe(false);
+      if (mode === 'unconfirmed') {
+        const retained = lockSnapshot(cfg);
+        await expect(withProvisionedManagedCluster(ctx, () => undefined)).rejects.toThrow(/locked|ambiguous/);
+        expect(lockSnapshot(cfg)).toEqual(retained);
+      } else {
+        expect(existsSync(lifecycleLock(cfg))).toBe(false);
+        expect(readdirSync(root).filter(entry => entry !== '.lifecycle.lock')).toEqual([]);
+      }
+    }
+  });
+  it('runs owned checkpoint after offline proof and before stopped-cluster start', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    await provision(ctx, {}); await stop(ctx);
+    let enter!: () => void, settle!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; }), gate = new Promise<void>(resolve => { settle = resolve; });
+    const startCount = () => fake.calls.filter(call => call.file.endsWith('/pg_ctl') && call.args.includes('start')).length;
+    const initialStarts = startCount();
+    const operation = withProvisionedManagedCluster(ctx, () => undefined, {}, { beforeMutation: async state => { expect(state.kind).toBe('owned-resume'); expect(state.reference.cluster_id).toMatch(/^[0-9a-f-]{36}$/); enter(); await gate; } });
+    await entered; expect(startCount()).toBe(initialStarts); settle(); await operation; expect(startCount()).toBe(initialStarts + 1);
+  });
+  it('refuses malformed existing owner identity before start and callback', async () => {
+    const { cfg } = home(), fake = nativeFixture(cfg), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    await provision(ctx, {});
+    const ownerPath = join(cfg, 'postgres/17/owner.json'), owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as OwnerMetadata;
+    owner.clusterId = '00000000-0000-4000-7000-000000000001'; writeFileSync(ownerPath, JSON.stringify(owner), { mode: 0o600 });
+    const starts = fake.calls.filter(call => call.file.endsWith('/pg_ctl') && call.args.includes('start')).length;
+    let callbackCalled = false;
+    let hookCalled = false;
+    await expect(withProvisionedManagedCluster(ctx, () => { callbackCalled = true; }, {}, { beforeMutation: () => { hookCalled = true; } })).rejects.toThrow(/canonical|invalid|UUID|ownership|socket/);
+    expect(callbackCalled).toBe(false);
+    expect(hookCalled).toBe(false);
+    expect(fake.calls.filter(call => call.file.endsWith('/pg_ctl') && call.args.includes('start'))).toHaveLength(starts);
+  });
+  it('never calls scoped callbacks before live identity and full capability proof', async () => {
+    for (const failAt of ['capability'] as const) {
+      const { cfg } = home(), fake = nativeFixture(cfg, failAt), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+      let called = false;
+      await expect(withProvisionedManagedCluster(ctx, () => { called = true; })).rejects.toThrow(/capability proof failed/);
+      expect(called).toBe(false);
+    }
+    const { cfg } = home(), fake = nativeFixture(cfg), ctx = { configDir: cfg, platform: 'darwin' as const, arch: 'arm64', uid: process.getuid?.() ?? 1000, ...fake };
+    await provision(ctx, {}); fake.setLiveIdentity({ system_identifier: '987654321' });
+    let called = false;
+    await expect(withProvisionedManagedCluster(ctx, () => { called = true; })).rejects.toThrow(/ownership proof failed|identity failed/);
+    expect(called).toBe(false);
+  });
   it('classifies platform refusal without invoking any subprocess', async () => {
     const { cfg } = home(); let called = false;
     const report = await inspectPrerequisites({ configDir: cfg, platform: 'linux', arch: 'x64', uid: 1000, runner: async (...args) => { called = true; return emptyRunner(...args); } });

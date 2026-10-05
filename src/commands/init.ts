@@ -33,7 +33,7 @@ export async function runInit(args: string[]) {
     return;
   }
 
-  const initLane = validateInitFlags(args);
+  const initLane = validateInitFlags(args); if (typeof initLane === 'object' && initLane.lane === 'managed-postgres') { const message = 'Managed PostgreSQL init is not available yet; no changes were made.'; if (initLane.json) console.log(JSON.stringify({ status: 'error', reason: 'managed_init_unavailable', message })); else console.error(message); process.exit(1); }
 
   const isSupabase = args.includes('--supabase');
   const isPGLite = args.includes('--pglite');

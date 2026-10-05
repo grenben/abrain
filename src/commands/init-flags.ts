@@ -1,5 +1,14 @@
 import { loadConfigFileOnly } from '../core/config.ts';
 import { assertNoManagedPostgresTarget, type ManagedPostgresTargetLike } from '../core/managed-postgres-unsupported.ts';
+export { classifyManagedInitPreflight } from '../core/managed-postgres/init-preflight.ts';
+export { inspectManagedInitCommandEligibility, inspectManagedInitPreflight } from '../core/managed-postgres/init-preflight-observer.ts';
+export type {
+  InspectManagedInitCommandEligibilityInput, InspectManagedInitPreflightInput, ManagedInitCommandEligibility,
+  ManagedInitObserverTestHooks,
+} from '../core/managed-postgres/init-preflight-observer.ts';
+export type {
+  ManagedInitPreflightInput, ManagedInitPreflightResult,
+} from '../core/managed-postgres/init-preflight.ts';
 
 const INIT_BOOLEAN_FLAGS = new Set([
   '--pglite',
@@ -38,6 +47,24 @@ const INIT_VALUE_FLAGS = new Set([
   '--oauth-client-secret',
 ]);
 
+const MANAGED_INIT_FLAGS = new Set([
+  '--managed-postgres', '--yes', '--non-interactive', '--json', '--no-embedding', '--db-only', '--install-packages',
+]);
+const MANAGED_INIT_VALUE_FLAGS = new Set(['--package-plan-fingerprint']);
+const MANAGED_INIT_ERROR = 'gbrain init: invalid managed PostgreSQL init flags';
+
+export interface ManagedInitFlagSelection {
+  lane: 'managed-postgres';
+  yes: boolean;
+  nonInteractive: boolean;
+  json: boolean;
+  noEmbedding: boolean;
+  dbOnly: boolean;
+  consent: { installPackages: boolean; packagePlanFingerprint?: string };
+}
+
+export type InitFlagValidationResult = 'migrate-only' | 'regular' | ManagedInitFlagSelection;
+
 // A schema-only run may optionally request JSON output, and nothing else.
 // This includes force and remote/thin-client credentials: --force must never
 // widen the managed-target exemption.
@@ -47,13 +74,19 @@ const MIGRATE_ONLY_FLAGS = new Set(['--migrate-only', '--json']);
 export function validateInitFlags(
   args: string[],
   targetConfig?: ManagedPostgresTargetLike | null,
-): 'migrate-only' | 'regular' {
+): InitFlagValidationResult {
   if (args.includes('--help') || args.includes('-h')) return 'regular';
+  const managedSelectorCount = args.filter((arg) => arg === '--managed-postgres').length;
+  if (managedSelectorCount > 0) return parseManagedInitFlags(args);
+
+  const seenValues = new Set<string>();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (!arg.startsWith('-')) continue;
     if (INIT_BOOLEAN_FLAGS.has(arg)) continue;
     if (INIT_VALUE_FLAGS.has(arg)) {
+      if (seenValues.has(arg)) failInitFlag(`gbrain init: ${arg} may be specified only once`, args.includes('--json'));
+      seenValues.add(arg);
       if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
         failInitFlag(`gbrain init: ${arg} requires a value`, args.includes('--json'));
       }
@@ -78,6 +111,44 @@ export function validateInitFlags(
     assertNoManagedPostgresTarget(config, 'init-reinit');
   }
   return lane;
+}
+
+function parseManagedInitFlags(args: string[]): ManagedInitFlagSelection {
+  const json = args.includes('--json');
+  const seen = new Set<string>();
+  let installPackages = false;
+  let packagePlanFingerprint: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (seen.has(arg)) failInitFlag(MANAGED_INIT_ERROR, json);
+    seen.add(arg);
+    if (MANAGED_INIT_FLAGS.has(arg)) continue;
+    if (MANAGED_INIT_VALUE_FLAGS.has(arg)) {
+      const value = args[index + 1];
+      if (!value || value.startsWith('-') || seen.has(value)) failInitFlag(MANAGED_INIT_ERROR, json);
+      index++;
+      if (args.slice(index + 1).includes(value)) failInitFlag(MANAGED_INIT_ERROR, json);
+      packagePlanFingerprint = value;
+      continue;
+    }
+    failInitFlag(MANAGED_INIT_ERROR, json);
+  }
+
+  installPackages = seen.has('--install-packages');
+  if (installPackages !== (packagePlanFingerprint !== undefined) ||
+      packagePlanFingerprint !== undefined && !/^[0-9a-f]{64}$/.test(packagePlanFingerprint)) {
+    failInitFlag(MANAGED_INIT_ERROR, json);
+  }
+  if ((json || seen.has('--non-interactive')) && !seen.has('--yes')) failInitFlag(MANAGED_INIT_ERROR, json);
+  return {
+    lane: 'managed-postgres',
+    yes: seen.has('--yes'),
+    nonInteractive: seen.has('--non-interactive'),
+    json,
+    noEmbedding: seen.has('--no-embedding'),
+    dbOnly: seen.has('--db-only'),
+    consent: { installPackages, ...(packagePlanFingerprint ? { packagePlanFingerprint } : {}) },
+  };
 }
 
 export function failInitFlag(message: string, jsonOutput: boolean): never {
