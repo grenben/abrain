@@ -3,19 +3,16 @@ import { ManagedPostgresPoolError } from './managed-postgres-pool.ts';
 import { ManagedPostgresBinding, type ManagedAcquisition, type ManagedPoolCandidate, type ManagedRetirement } from './managed-postgres-binding.ts';
 
 export interface ManagedCandidate<Pool> extends ManagedPoolCandidate<Pool> {}
-interface LegacyEntry<Pool> { readonly identity: string; readonly generation: number; promise: Promise<boolean> }
 const EMPTY_RETIREMENT: ManagedRetirement = Object.freeze({ finish: async () => {} });
 
 /** Managed-only singleton slot. Its synchronous acquire reserves before proof starts. */
 export class ManagedPostgresSingleton<Pool> {
   private binding: ManagedPostgresBinding<Pool> | null = null;
-  private legacyPending: LegacyEntry<Pool> | null = null;
   private readonly releaseByLease = new WeakMap<object, ManagedRetirement>();
   private generation = 0;
   constructor(private readonly createError: (kind?: 'unavailable' | 'target_unverified') => Error, private readonly closePool: (pool: Pool) => Promise<void>) {}
 
   acquire(identity: string, config: EngineConfig, build: (config: Readonly<EngineConfig>) => Promise<ManagedCandidate<Pool>>): ManagedAcquisition<Pool> {
-    if (this.legacyPending) throw this.createError();
     if (this.binding?.state === 'revoked') this.binding = null;
     if (this.binding) {
       if (this.binding.identity !== identity || this.binding.state === 'revoked') throw this.createError();
@@ -48,39 +45,20 @@ export class ManagedPostgresSingleton<Pool> {
 
   getPool(): Pool | null { return this.binding?.peek() ?? null; }
   hasCommitted(): boolean { return this.binding?.state === 'ready' || this.binding?.state === 'refreshing'; }
-  isBusy(): boolean { return (this.binding !== null && this.binding.state !== 'revoked') || this.legacyPending !== null; }
+  isBusy(): boolean { return this.binding !== null && this.binding.state !== 'revoked'; }
   matches(identity: string): boolean { return this.binding?.identity === identity && this.binding.state !== 'revoked'; }
 
   /** Compatibility shim for legacy callers; engine authority must use acquire/beginRelease. */
   connect(identity: string, buildCandidate: () => Promise<ManagedCandidate<Pool>>): Promise<boolean> {
     if (this.binding?.state === 'revoked') this.binding = null;
-    if (this.binding) {
-      if (this.binding.identity !== identity) return Promise.reject(this.createError());
-      return this.binding.ready.then(() => false);
-    }
-    if (this.legacyPending) return this.legacyPending.identity === identity ? this.legacyPending.promise.then(() => false) : Promise.reject(this.createError());
-    const entry: LegacyEntry<Pool> = { identity, generation: ++this.generation, promise: Promise.resolve(false) };
-    this.legacyPending = entry;
-    let built: Promise<ManagedCandidate<Pool>>;
-    try { built = buildCandidate(); } catch (error) { built = Promise.reject(error); }
-    entry.promise = built.then(async candidate => {
-      if (candidate.identity !== identity || this.legacyPending !== entry || this.generation !== entry.generation) {
-        await this.closePool(candidate.pool).catch(() => {});
-        throw this.createError();
-      }
-      const config = { engine: 'postgres' } as EngineConfig;
-      const binding = new ManagedPostgresBinding(identity, config, async () => candidate, this.closePool, () => this.createError());
-      this.binding = binding;
-      this.legacyPending = null;
-      await binding.ready;
-      return true;
-    }).catch(error => {
-      if (this.legacyPending === entry) this.legacyPending = null;
-      const kind = knownFailureKind(error);
-      if (kind) throw this.createError(kind);
-      throw this.createError();
-    });
-    return entry.promise;
+    const config = Object.freeze({ engine: 'postgres' }) as EngineConfig;
+    let acquisition: ManagedAcquisition<Pool>;
+    try { acquisition = this.acquire(identity, config, async () => buildCandidate()); }
+    catch (error) { return Promise.reject(error); }
+    return acquisition.ready.then(
+      () => acquisition.owner !== null,
+      error => { const kind = knownFailureKind(error); throw this.createError(kind ?? undefined); },
+    );
   }
 
   /** Global shutdown snapshot/revoke; no post-await singleton lookup. */
@@ -88,7 +66,6 @@ export class ManagedPostgresSingleton<Pool> {
     this.generation++;
     const binding = this.binding;
     this.binding = null;
-    this.legacyPending = null;
     return binding ? binding.revoke() : { finish: async () => {} };
   }
   async disconnect(): Promise<void> { await this.beginGlobalRelease().finish(); }

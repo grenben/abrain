@@ -19,11 +19,24 @@ export type ConfigPublicationDependencies = Partial<{
   unlinkSync: typeof unlinkSync;
 }>;
 
+export type ConfigPublicationOptions = Readonly<{
+  directoryDurability?: 'strict' | 'allow-unsupported';
+}>;
+
+const UNSUPPORTED_DIRECTORY_CODES = new Set(['EISDIR', 'EINVAL', 'ENOTSUP', 'EPERM']);
+
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
 /** Durably replace one file; this leaf has no config or environment dependencies. */
 export function publishConfigFile(
   destination: string,
   payload: Uint8Array,
   dependencies: Readonly<ConfigPublicationDependencies> = {},
+  options: ConfigPublicationOptions = {},
 ): void {
   const dir = dirname(destination);
   const random = dependencies.randomBytes ?? randomBytes;
@@ -55,7 +68,9 @@ export function publishConfigFile(
     try {
       dirFd = open(dir, 0);
       sync(dirFd);
-    } catch {
+    } catch (error) {
+      if (options.directoryDurability === 'allow-unsupported'
+        && UNSUPPORTED_DIRECTORY_CODES.has(errorCode(error) ?? '')) return;
       throw new ConfigPublicationUncertainError();
     } finally {
       if (dirFd !== undefined) {

@@ -1,29 +1,35 @@
 import type { BrainEngine } from './engine.ts';
 import type { EngineConfig } from './types.ts';
 import { registerChatUsageSink, makeEngineChatUsageSink } from './ai/chat-usage.ts';
+import { validateDirectEngineTarget } from './direct-engine-target.ts';
 
 /**
  * Create an engine instance based on config.
  * Uses dynamic imports so PGLite WASM is never loaded for Postgres users.
  */
 export async function createEngine(config: EngineConfig): Promise<BrainEngine> {
+  const target = validateDirectEngineTarget(config);
   const engineType = config.engine || 'postgres';
+  if (engineType !== 'postgres' && engineType !== 'pglite') {
+    throw new Error(
+      `Unknown engine type: "${engineType}". Supported engines: postgres, pglite.` +
+      (engineType === 'sqlite' ? ' SQLite is not supported. Use pglite instead.' : '')
+    );
+  }
 
   const engine = await (async (): Promise<BrainEngine> => {
-    switch (engineType) {
+    switch (target.kind) {
       case 'pglite': {
         const { PGLiteEngine } = await import('./pglite-engine.ts');
         return new PGLiteEngine();
       }
-      case 'postgres': {
+      case 'postgres-url':
+      case 'postgres-managed': {
         const { PostgresEngine } = await import('./postgres-engine.ts');
         return new PostgresEngine();
       }
       default:
-        throw new Error(
-          `Unknown engine type: "${engineType}". Supported engines: postgres, pglite.` +
-          (engineType === 'sqlite' ? ' SQLite is not supported. Use pglite instead.' : '')
-        );
+        throw new Error('Unknown normalized engine target');
     }
   })();
 

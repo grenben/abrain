@@ -9,7 +9,7 @@ import { assertLegacyEngineMigration, assertUnmanagedCanonicalWriter } from '../
  */
 
 import { createEngine } from '../core/engine-factory.ts';
-import { loadConfigFileOnly, saveConfig, toEngineConfig, gbrainPath, effectiveEnvDatabaseUrl, type GBrainConfig } from '../core/config.ts';
+import { loadConfig, loadConfigFileOnly, saveConfig, toEngineConfig, gbrainPath, effectiveEnvDatabaseUrl, type GBrainConfig } from '../core/config.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import type { EngineConfig, Page } from '../core/types.ts';
 import { writeFileSync, readFileSync, existsSync, unlinkSync, statSync, mkdirSync, renameSync } from 'fs';
@@ -779,10 +779,10 @@ export async function quiesceAutopilot(engine?: BrainEngine): Promise<(() => voi
   return resume;
 }
 
-function loadSupportedMigrationSourceConfig(): GBrainConfig | null {
-  const config = loadConfigFileOnly();
-  if (config) assertNoManagedPostgresTarget(toEngineConfig(config), 'migration-source');
-  return config;
+export function loadSupportedMigrationSourceConfig(): GBrainConfig | null {
+  const fileConfig = loadConfigFileOnly();
+  if (fileConfig) assertNoManagedPostgresTarget(toEngineConfig(fileConfig), 'migration-source');
+  return loadConfig();
 }
 
 export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]): Promise<void> {

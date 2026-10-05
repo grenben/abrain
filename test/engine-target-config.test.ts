@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { fsyncSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { withEnv } from './helpers/with-env.ts';
@@ -125,6 +125,98 @@ describe('managed target config loading and publication', () => {
       })).toThrow(ConfigPublicationUncertainError);
       expect(JSON.parse(readFileSync(path, 'utf8')).managed_postgres).toEqual(managed);
     });
+  });
+
+  test('only ordinary targets downgrade recognized unsupported directory durability errors', async () => {
+    const codes = ['EISDIR', 'EINVAL', 'ENOTSUP', 'EPERM'];
+    for (const phase of ['open', 'fsync'] as const) {
+      for (const code of codes) {
+        for (const target of ['ordinary', 'managed'] as const) {
+          const root = home();
+          await withEnv({ GBRAIN_HOME: root }, async () => {
+            const path = join(root, '.gbrain', 'config.json');
+            saveConfig({ engine: 'postgres' });
+            const fault = Object.assign(new Error(`injected ${code}`), { code });
+            let syncCalls = 0;
+            const injected = {
+              ...(phase === 'open' ? {
+                openSync: ((file: string | Buffer, flags: number, mode?: number) => {
+                  if (String(file) === join(root, '.gbrain')) throw fault;
+                  return openSync(file, flags, mode);
+                }) as typeof openSync,
+              } : {}),
+              ...(phase === 'fsync' ? {
+                fsyncSync: (fd: number) => {
+                  syncCalls++;
+                  if (syncCalls === 2) throw fault;
+                  return fsyncSync(fd);
+                },
+              } : {}),
+            };
+            const config = target === 'managed' ? { engine: 'postgres' as const, managed_postgres: managed } : { engine: 'postgres' as const };
+            if (target === 'ordinary') {
+              expect(() => saveConfig(config, injected)).not.toThrow();
+            } else {
+              expect(() => saveConfig(config, injected)).toThrow(ConfigPublicationUncertainError);
+            }
+            expect(JSON.parse(readFileSync(path, 'utf8')).managed_postgres).toEqual(target === 'managed' ? managed : undefined);
+            expect(readdirSync(join(root, '.gbrain')).filter((name) => name.includes('.tmp-'))).toEqual([]);
+          });
+        }
+      }
+    }
+  });
+
+  test('post-rename EIO and unknown errors remain uncertain for every target', async () => {
+    for (const code of ['EIO', 'EUNKNOWN']) {
+      for (const target of ['ordinary', 'managed'] as const) {
+        const root = home();
+        await withEnv({ GBRAIN_HOME: root }, async () => {
+          const path = join(root, '.gbrain', 'config.json');
+          saveConfig({ engine: 'postgres' });
+          let syncCalls = 0;
+          const error = Object.assign(new Error(code), { code });
+          const config = target === 'managed' ? { engine: 'postgres' as const, managed_postgres: managed } : { engine: 'postgres' as const };
+          expect(() => saveConfig(config, { fsyncSync: (fd) => {
+            syncCalls++;
+            if (syncCalls === 2) throw error;
+            return fsyncSync(fd);
+          } })).toThrow(ConfigPublicationUncertainError);
+          expect(JSON.parse(readFileSync(path, 'utf8')).managed_postgres).toEqual(target === 'managed' ? managed : undefined);
+          expect(readdirSync(join(root, '.gbrain')).filter((name) => name.includes('.tmp-'))).toEqual([]);
+        });
+      }
+    }
+  });
+
+  test('recognized unsupported codes before rename remain ordinary failures', async () => {
+    for (const phase of ['open', 'write', 'fsync', 'rename'] as const) {
+      for (const code of ['EISDIR', 'EINVAL', 'ENOTSUP', 'EPERM']) {
+        for (const target of ['ordinary', 'managed'] as const) {
+          const root = home();
+          await withEnv({ GBRAIN_HOME: root }, async () => {
+            const path = join(root, '.gbrain', 'config.json');
+            saveConfig({ engine: 'postgres' });
+            const oldBytes = readFileSync(path, 'utf8');
+            const error = Object.assign(new Error(`injected ${code}`), { code });
+            const config = target === 'managed' ? { engine: 'postgres' as const, managed_postgres: managed } : { engine: 'postgres' as const };
+            const dependencies = phase === 'open'
+              ? { openSync: ((file: string | Buffer, flags: number, mode?: number) => {
+                if (String(file).includes('.tmp-')) throw error;
+                return openSync(file, flags, mode);
+              }) as typeof openSync }
+              : phase === 'write'
+                ? { writeSync: () => { throw error; } }
+                : phase === 'fsync'
+              ? { fsyncSync: () => { throw error; } }
+              : { renameSync: () => { throw error; } };
+            expect(() => saveConfig(config, dependencies)).toThrow(error);
+            expect(readFileSync(path, 'utf8')).toBe(oldBytes);
+            expect(readdirSync(join(root, '.gbrain')).filter((name) => name.includes('.tmp-'))).toEqual([]);
+          });
+        }
+      }
+    }
   });
 
   test('consecutive publications use unique temps and preserve unrelated fields', async () => {

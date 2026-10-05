@@ -7,7 +7,7 @@ import { loadConfigSnapshot } from './config-snapshot.ts';
 import { loadGbrainEnvFile } from './gbrain-env-file.ts';
 import { dotenvValuesForKey } from './env-trust.ts';
 import { REMOTE_PRIVATE_PAGES_KEY } from './search/private-visibility.ts';
-import { validateManagedTargetConfig } from './engine-target.ts';
+import { normalizeEngineTarget, validateManagedTargetConfig } from './engine-target.ts';
 import { publishConfigFile, type ConfigPublicationDependencies } from './config-publication.ts';
 export { ConfigPublicationUncertainError } from './config-publication.ts';
 export type { ConfigPublicationDependencies } from './config-publication.ts';
@@ -1679,16 +1679,16 @@ export function isConfigTruthy(raw: unknown): boolean {
   return typeof raw === 'string'
     && ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
-
 export function saveConfig(config: GBrainConfig, dependencies: Readonly<ConfigPublicationDependencies> = {}): void {
-  validateManagedTargetConfig(config);
+  const target = normalizeEngineTarget(config);
   const dir = getConfigDir(), destination = getConfigPath();
   mkdirSync(dir, { recursive: true });
   // Atomic write (tmp + rename): long-lived workers re-read this file per job
   // (gateway env refresh, keyed/keyless classification) — a truncate-then-write
   // here could be read torn, making a keyed install classify as keyless and
   // calmly consume work it should retry.
-  publishConfigFile(destination, Buffer.from(JSON.stringify(config, null, 2) + '\n', 'utf8'), dependencies);
+  publishConfigFile(destination, Buffer.from(JSON.stringify(config, null, 2) + '\n', 'utf8'), dependencies,
+    { directoryDurability: target.kind === 'postgres-managed' ? 'strict' : 'allow-unsupported' });
   ensureGitignore();
 }
 

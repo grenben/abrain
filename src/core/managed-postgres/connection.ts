@@ -27,6 +27,7 @@ export interface ManagedPostgresConnectionResolution {
   reference: { manager_id: 'gbrain-managed-postgres'; cluster_id: string };
   options: ManagedPostgresDriverOptions;
   assertPinnedState(): void;
+  hasSecurityFailure(): boolean;
   verifyLiveIdentity(value: unknown): LiveIdentity;
 }
 
@@ -82,7 +83,9 @@ export function resolveManagedPostgresConnection(
         return current;
       } catch { throw new ManagedPostgresConnectionError(); }
     };
+    let securityFailure = false;
     const assertPinnedState = (): void => { readPinnedState(); };
+    const hasSecurityFailure = (): boolean => securityFailure;
     const verifyLiveIdentity = (value: unknown): LiveIdentity => {
       readPinnedState();
       try {
@@ -92,10 +95,11 @@ export function resolveManagedPostgresConnection(
       } catch { throw new ManagedPostgresConnectionError(); }
     };
     const password = async (): Promise<string> => {
-      return readPinnedState().password;
+      try { return readPinnedState().password; }
+      catch (error) { securityFailure = true; throw error; }
     };
     return {
-      identity: managedPostgresIdentity(validReference), reference: validReference, assertPinnedState, verifyLiveIdentity,
+      identity: managedPostgresIdentity(validReference), reference: validReference, assertPinnedState, hasSecurityFailure, verifyLiveIdentity,
       options: {
         path: join(initial.owner.socketPath, `.s.PGSQL.${initial.owner.port}`), port: initial.owner.port,
         database: initial.owner.database, user: initial.owner.role, ssl: false, debug: false, password,

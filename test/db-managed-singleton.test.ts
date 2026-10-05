@@ -23,7 +23,8 @@ function dependencies(
       return {
       identity: 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000001',
        options: { path: '/private/socket/.s.PGSQL.5432', user: 'managed', database: 'app', port: 5432, password: async () => 'secret', ssl: false, debug: false, onnotice: 'resolver-notice' },
-      assertPinnedState: () => { overrides.pinned?.(); },
+       assertPinnedState: () => { overrides.pinned?.(); },
+       hasSecurityFailure: () => false,
       verifyLiveIdentity: (value: unknown) => {
         if (overrides.verify) return overrides.verify(value);
         if (!value || typeof value !== 'object' || (value as { data_directory?: string }).data_directory !== identity.data_directory) throw new Error('hostile /private/path');
@@ -95,7 +96,7 @@ describe('managed postgres candidate', () => {
     const message = 'Managed PostgreSQL pool could not be constructed or verified.';
     const cases = [
       { stage: 'factory', kind: 'unavailable', overrides: { create: () => { throw new Error('/secret/factory-path'); } }, closes: 0 },
-      { stage: 'query-valid-target', kind: 'unavailable', overrides: { query: async () => { throw new Error('/secret/query-path'); }, pinned: () => {} }, closes: 1 },
+      { stage: 'query-valid-target', kind: 'unavailable', overrides: { query: async () => { throw Object.assign(new Error('/secret/query-path'), { code: 'ECONNREFUSED' }); }, pinned: () => {} }, closes: 1 },
       { stage: 'query-tampered-target', kind: 'target_unverified', overrides: { query: async () => { throw new Error('/secret/query-path'); }, pinned: () => { throw new Error('/secret/tamper-path'); } }, closes: 1 },
       { stage: 'resolver', kind: 'target_unverified', overrides: { resolve: () => { throw new Error('/secret/resolver-path'); } }, closes: 0 },
     ] as const;
@@ -192,14 +193,17 @@ describe('managed singleton coordinator', () => {
 
   test('disconnect during build closes a late success once and never publishes it', async () => {
     let closes = 0;
-    const singleton = new ManagedPostgresSingleton<object>(managedError, async () => { closes++; });
+    let notifyClosed!: () => void;
+    const closed = new Promise<void>(resolve => { notifyClosed = resolve; });
+    const singleton = new ManagedPostgresSingleton<object>(managedError, async () => { closes++; notifyClosed(); });
     const proof = deferred<{ identity: string; pool: object }>();
     const old = singleton.connect('one', () => proof.promise);
     await singleton.disconnect();
     expect(singleton.getPool()).toBeNull();
+    await expect(old).rejects.toThrow('fixed managed refusal');
     const pool = {};
     proof.resolve(candidate('one', pool));
-    await expect(old).rejects.toThrow('fixed managed refusal');
+    await closed;
     expect(closes).toBe(1);
     expect(singleton.getPool()).toBeNull();
   });
@@ -207,14 +211,17 @@ describe('managed singleton coordinator', () => {
   test('late old success and failure cannot erase a newer committed generation', async () => {
     for (const lateFailure of [false, true]) {
       let closes = 0;
-      const singleton = new ManagedPostgresSingleton<object>(managedError, async () => { closes++; });
+      let notifyClosed!: () => void;
+      const closed = new Promise<void>(resolve => { notifyClosed = resolve; });
+      const singleton = new ManagedPostgresSingleton<object>(managedError, async () => { closes++; notifyClosed(); });
       const oldProof = deferred<{ identity: string; pool: object }>();
       const old = singleton.connect('old', () => oldProof.promise);
       await singleton.disconnect();
+      await expect(old).rejects.toThrow('fixed managed refusal');
       const freshPool = {};
       expect(await singleton.connect('new', async () => candidate('new', freshPool))).toBe(true);
       if (lateFailure) oldProof.reject(new Error('hostile secret')); else oldProof.resolve(candidate('old', {}));
-      await expect(old).rejects.toThrow('fixed managed refusal');
+      if (!lateFailure) await closed;
       expect(singleton.getPool()).toBe(freshPool);
       expect(closes).toBe(lateFailure ? 0 : 1);
     }

@@ -288,7 +288,6 @@ export function resolveDirectPoolSize(explicit?: number): number {
 export class ConnectionManager {
   private readonly opts: ConnectionManagerOpts;
   private readonly _managedIdentity: string | null;
-  private readonly _managedParent: ConnectionManager | null = null;
   private _managedSession: ManagedSession<Sql> | null = null;
   private _readPool: Sql | null = null;
   private _readPoolOwnedExternally: boolean;
@@ -330,7 +329,6 @@ export class ConnectionManager {
       if (managedSession && (!managedSession.matches(managedIdentity) || parent)) throw new ConnectionManagerTargetError();
       this.opts = opts;
       this._managedIdentity = managedIdentity;
-      this._managedParent = parent;
       this._managedSession = managedSession ?? (parent ? parent.borrowManagedSession() : null);
       this._readPool = null;
       this._readPoolOwnedExternally = true;
@@ -396,7 +394,6 @@ export class ConnectionManager {
    */
   peekReadPool(): Sql | null {
     if (this._managedSession) return this._managedSession.peek() as Sql | null;
-    if (this.isManagedMode && this._managedParent) return this._managedParent.peekReadPool();
     return this._readPool;
   }
 
@@ -418,11 +415,6 @@ export class ConnectionManager {
    */
   async getReadPool(): Promise<Sql> {
     if (this._managedSession) return this._managedSession.read() as Sql;
-    if (this.isManagedMode && this._managedParent) {
-      const pool = this._managedParent.peekReadPool();
-      if (pool) return pool;
-      throw new ConnectionManagerTargetError();
-    }
     if (this._readPool) return this._readPool;
     if (this.isManagedMode) throw new ConnectionManagerTargetError();
     if (this._readPoolOwnedExternally) {
@@ -452,11 +444,6 @@ export class ConnectionManager {
    */
   read(): Sql {
     if (this._managedSession) return this._managedSession.read() as Sql;
-    if (this.isManagedMode && this._managedParent) {
-      const pool = this._managedParent.peekReadPool();
-      if (pool) return pool;
-      throw new ConnectionManagerTargetError();
-    }
     if (!this._readPool) {
       throw new Error('connection-manager: read pool not initialized; call getReadPool() first or set externally');
     }

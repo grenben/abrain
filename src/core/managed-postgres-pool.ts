@@ -39,6 +39,17 @@ function normalizeIdentityRows(result: unknown): unknown {
   return payload;
 }
 
+function errorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+const UNAVAILABLE_CODES = new Set([
+  'ECONNREFUSED', 'ENOENT', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN',
+  'CONNECTION_CLOSED', 'CONNECTION_ENDED', 'CONNECTION_DESTROYED', 'SERVER_SHUTDOWN',
+]);
+
 /** Construct privately and prove live ownership before returning the pool. */
 export async function createManagedPostgresCandidate(
   config: EngineConfig,
@@ -73,11 +84,17 @@ export async function createManagedPostgresCandidate(
     result = deps.query
       ? await deps.query(pool, MANAGED_IDENTITY_QUERY)
       : await pool.unsafe(MANAGED_IDENTITY_QUERY);
-  } catch {
+  } catch (error) {
+    let pinned = true;
     try { resolution.assertPinnedState(); }
-    catch { await closeCandidate(pool, deps); throw new ManagedPostgresPoolError('target_unverified'); }
+    catch { pinned = false; }
     await closeCandidate(pool, deps);
-    throw new ManagedPostgresPoolError('unavailable');
+    const securityFailure = resolution.hasSecurityFailure();
+    const code = errorCode(error);
+    if (!pinned || securityFailure || code === 'SASL_SIGNATURE_MISMATCH') {
+      throw new ManagedPostgresPoolError('target_unverified');
+    }
+    throw new ManagedPostgresPoolError(code && UNAVAILABLE_CODES.has(code) ? 'unavailable' : 'target_unverified');
   }
 
   let identity: unknown;

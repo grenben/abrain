@@ -149,6 +149,7 @@ import type { ChunkWindowRequest, ChunkWindowOpts, ChunkWindowPage } from './sea
 import * as chunksImpl from './engine-sql/chunks.ts';
 import { searchKeywordCJK } from './engine-sql/cjk-search.ts';
 import { applyForwardReferenceBootstrap, pgliteBootstrapTarget } from './engine-sql/bootstrap.ts';
+import { validateDirectPgliteTarget } from './direct-engine-target.ts';
 
 /**
  * #4284 — opt-in out-of-band watchdog for a PGLite disconnect with a live
@@ -760,7 +761,6 @@ export class PGLiteEngine implements BrainEngine {
   private get engineSql(): SqlExecutor {
     return pgliteExecutor(this.db);
   }
-
   // Lifecycle
   async connect(config: EngineConfig): Promise<void> {
     return this._connectWithRootRegistration(config, true);
@@ -770,8 +770,8 @@ export class PGLiteEngine implements BrainEngine {
     if (!config.database_path || this._db || this._connectPromise) throw new Error('Restore staging requires a fresh engine and an explicit datastore path');
     return this._connectWithRootRegistration(config, false);
   }
-
   private async _connectWithRootRegistration(config: EngineConfig, registerRoots: boolean): Promise<void> {
+    validateDirectPgliteTarget(config);
     if (this._disconnectRequested || this._closingWork || this._closePoison) throw this._closePoison ?? new PgliteClosingError();
     if (this._db || this._connectPromise) {
       if ((this._savedConfig?.database_path || undefined) !== (config.database_path || undefined)) {

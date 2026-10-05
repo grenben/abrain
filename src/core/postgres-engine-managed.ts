@@ -15,6 +15,12 @@ import { drainBackgroundWorkBeforeDisconnect } from './background-work.ts';
 export type EnginePool = ReturnType<typeof postgres>;
 export type ManagedCandidate = Pick<ManagedPostgresCandidate, 'pool' | 'identity'>;
 type EngineConfigEx = EngineConfig & { poolSize?: number; parentConnectionManager?: ConnectionManager };
+export interface ManagedAttachmentSignature {
+  readonly identity: string;
+  readonly style: 'instance' | 'module' | 'parent';
+  readonly parent: ConnectionManager | null;
+  readonly poolSize: number | null;
+}
 
 export interface ManagedEngineRuntime {
   identity: string | null;
@@ -25,10 +31,13 @@ export interface ManagedEngineRuntime {
   lifecycle: 'connecting' | 'attached' | 'closing' | 'disconnected';
   work: Promise<void> | null;
   reconnectWork: Promise<void> | null;
-  style: 'instance' | 'module' | null;
+  style: 'instance' | 'module' | 'parent' | null;
+  parent: ConnectionManager | null;
+  signature: ManagedAttachmentSignature | null;
+  revokedIdentity: string | null;
 }
 export function createManagedEngineRuntime(): ManagedEngineRuntime {
-  return { identity: null, generation: 0, session: null, lease: null, binding: null, lifecycle: 'disconnected', work: null, reconnectWork: null, style: null };
+  return { identity: null, generation: 0, session: null, lease: null, binding: null, lifecycle: 'disconnected', work: null, reconnectWork: null, style: null, parent: null, signature: null, revokedIdentity: null };
 }
 
 export interface ManagedEngineHost {
@@ -88,8 +97,13 @@ export async function connectManagedIfTarget(host: ManagedEngineHost, config: En
   try { target = normalizeEngineTarget(config); }
   catch (error) { if (config.managed_postgres !== undefined) throw new ManagedPostgresPoolError('target_unverified'); throw error; }
   if (target.kind !== 'postgres-managed') return false;
-  const identity = managedPostgresIdentity(target.managed_postgres);
-  if (host.runtime.lifecycle === 'connecting' && host.runtime.identity === identity && host.runtime.work) { await host.runtime.work; return true; }
+  const signature = managedAttachmentSignature(config, managedPostgresIdentity(target.managed_postgres));
+  if (host.runtime.revokedIdentity !== null) throw new ManagedPostgresPoolError('target_unverified');
+  if (host.runtime.lifecycle === 'connecting' && host.runtime.work) {
+    if (!sameAttachment(host.runtime.signature, signature)) throw new ManagedPostgresPoolError('target_unverified');
+    await host.runtime.work;
+    return true;
+  }
   const work = connectManaged(host, config, target.managed_postgres);
   host.runtime.work = work;
   try { await work; } finally { if (host.runtime.work === work) host.runtime.work = null; }
@@ -97,41 +111,46 @@ export async function connectManagedIfTarget(host: ManagedEngineHost, config: En
 }
 
 export async function connectManaged(host: ManagedEngineHost, config: EngineConfigEx, reference: { manager_id: 'gbrain-managed-postgres'; cluster_id: string }): Promise<void> {
+  const identity = managedPostgresIdentity(reference);
+  const signature = managedAttachmentSignature(config, identity);
+  const parent = signature.parent;
+  const style = signature.style;
   if (host.runtime.lifecycle === 'closing') throw new ManagedPostgresPoolError('target_unverified');
+  if (host.runtime.revokedIdentity !== null) throw new ManagedPostgresPoolError('target_unverified');
   if (host.runtime.lifecycle === 'attached') {
-    if (host.runtime.identity === managedPostgresIdentity(reference)) return;
+    const { session } = host.runtime;
+    if (sameAttachment(host.runtime.signature, signature) && session?.isAttached()) {
+      try { session.read(); return; } catch { /* revoked/unusable; refuse */ }
+    }
     throw new ManagedPostgresPoolError('target_unverified');
   }
-  if (host.runtime.lifecycle === 'connecting' && host.runtime.identity !== managedPostgresIdentity(reference)) throw new ManagedPostgresPoolError('target_unverified');
-  const identity = managedPostgresIdentity(reference), generation = ++host.runtime.generation;
+  if (host.runtime.lifecycle !== 'disconnected') throw new ManagedPostgresPoolError('target_unverified');
+  const generation = ++host.runtime.generation;
   host.runtime.lifecycle = 'connecting';
-  const parent = config.parentConnectionManager;
-  let session: ManagedSession<EnginePool>;
+  host.runtime.identity = identity;
+  host.runtime.signature = signature;
+  let session: ManagedSession<EnginePool> | null = null;
   let lease: ManagedOwnerLease | null = null;
   let binding: ManagedPostgresBinding<EnginePool> | null = null;
-  let ready: Promise<void>;
-  if (parent) {
-    try {
-      if (!parent.isManagedMode || parent.managedIdentity !== identity) throw new Error();
+  try {
+    let ready: Promise<void>;
+    if (parent) {
+      if (!parent.isManagedMode || parent.managedIdentity !== identity) throw new ManagedPostgresPoolError('target_unverified');
       session = parent.borrowManagedSession();
       ready = Promise.resolve();
-    } catch { throw new ManagedPostgresPoolError('target_unverified'); }
-  } else if (config.poolSize) {
-    const deps = host.deps;
-    binding = new ManagedPostgresBinding(identity, configForBinding(config), async immutable => {
-      const candidate = await deps.createCandidate(immutable, managedInstanceOptions(config));
-      return candidate;
-    }, deps.closePool, kind => new ManagedPostgresPoolError(kind));
-    session = binding.attach(); lease = binding.owner; ready = binding.ready;
-  } else {
-    const build = (immutable: Readonly<EngineConfig>) => host.deps.createCandidate(immutable, managedModuleOptions());
-    const acquisition = host.deps.acquireManaged
-      ? host.deps.acquireManaged(identity, configForBinding(config), build)
-      : coordinator(host).acquire(identity, configForBinding(config), build);
-    session = acquisition.session; lease = acquisition.owner; ready = acquisition.ready;
-  }
-  host.runtime.session = session; host.runtime.lease = lease; host.runtime.binding = binding; host.runtime.identity = identity;
-  try {
+    } else if (config.poolSize) {
+      const deps = host.deps;
+      binding = new ManagedPostgresBinding(identity, configForBinding(config), immutable =>
+      deps.createCandidate(immutable, managedInstanceOptions(config)), deps.closePool, kind => new ManagedPostgresPoolError(kind));
+      session = binding.attach(); lease = binding.owner; ready = binding.ready;
+    } else {
+      const build = (immutable: Readonly<EngineConfig>) => host.deps.createCandidate(immutable, managedModuleOptions());
+      const acquisition = host.deps.acquireManaged
+        ? host.deps.acquireManaged(identity, configForBinding(config), build)
+        : coordinator(host).acquire(identity, configForBinding(config), build);
+      session = acquisition.session; lease = acquisition.owner; ready = acquisition.ready;
+    }
+    host.runtime.session = session; host.runtime.lease = lease; host.runtime.binding = binding; host.runtime.parent = parent;
     await ready;
     if (host.runtime.generation !== generation || host.runtime.lifecycle !== 'connecting' || !session.isAttached()) throw new ManagedPostgresPoolError('target_unverified');
     const manager = managedManager(identity, session, host.deps);
@@ -140,19 +159,30 @@ export async function connectManaged(host: ManagedEngineHost, config: EngineConf
     }
     host.manager = manager;
     host.sql = config.poolSize && !parent ? session.read() : null;
-    host.runtime.style = config.poolSize || parent ? 'instance' : 'module';
+    host.runtime.style = style;
     host.runtime.lifecycle = 'attached';
   } catch (error) {
-    session.detach();
+    session?.detach();
     if (lease) {
-      const retirement = config.poolSize ? binding?.beginRelease(lease) : (host.deps.beginManagedRelease?.(lease) ?? coordinator(host).beginRelease(lease));
+      const retirement = binding?.beginRelease(lease) ?? (host.deps.beginManagedRelease?.(lease) ?? coordinator(host).beginRelease(lease));
       if (retirement) await retirement.finish();
     }
     if (host.runtime.generation === generation) {
-      host.runtime.session = null; host.runtime.lease = null; host.runtime.binding = null; host.runtime.lifecycle = 'disconnected';
+      host.manager?.disconnect(); host.manager = null; host.sql = null;
+      host.runtime.session = null; host.runtime.lease = null; host.runtime.binding = null; host.runtime.identity = null; host.runtime.parent = null; host.runtime.style = null; host.runtime.signature = null; host.runtime.lifecycle = 'disconnected';
     }
     throw classifyManagedError(error);
   }
+}
+
+function managedAttachmentSignature(config: EngineConfigEx, identity: string): ManagedAttachmentSignature {
+  const parent = config.parentConnectionManager ?? null;
+  if (parent && config.poolSize !== undefined) throw new ManagedPostgresPoolError('target_unverified');
+  const style = parent ? 'parent' : config.poolSize ? 'instance' : 'module';
+  return Object.freeze({ identity, style, parent, poolSize: style === 'instance' ? config.poolSize! : null });
+}
+function sameAttachment(left: ManagedAttachmentSignature | null, right: ManagedAttachmentSignature): boolean {
+  return left !== null && left.identity === right.identity && left.style === right.style && left.parent === right.parent && left.poolSize === right.poolSize;
 }
 
 export function managedInstanceOptions(config: EngineConfigEx): Record<string, unknown> {
@@ -183,13 +213,24 @@ export function managedEnginePool(identity: string, manager: ConnectionManager |
 }
 
 export async function disconnectManaged(host: ManagedEngineHost): Promise<void> {
-  if (host.runtime.lifecycle === 'closing' || host.runtime.lifecycle === 'disconnected') return;
-  const style = host.runtime.style, manager = host.manager, lease = host.runtime.lease, binding = host.runtime.binding;
+  if (host.runtime.lifecycle === 'closing') return;
+  if (host.runtime.lifecycle === 'disconnected') {
+    host.runtime.revokedIdentity = null;
+    host.runtime.identity = null;
+    host.runtime.signature = null;
+    return;
+  }
+  const style = host.runtime.style === 'parent' ? 'instance' : host.runtime.style;
+  const manager = host.manager, lease = host.runtime.lease, binding = host.runtime.binding;
   host.runtime.lifecycle = 'closing'; host.runtime.generation++;
   host.runtime.reconnectWork = null;
   host.runtime.session?.detach(); host.runtime.session = null;
   host.manager = null; host.sql = null; host.runtime.lease = null; host.runtime.binding = null;
   host.runtime.style = null;
+  host.runtime.parent = null;
+  host.runtime.identity = null;
+  host.runtime.signature = null;
+  host.runtime.revokedIdentity = null;
   let retirement = lease ? (binding ? binding.beginRelease(lease) : (host.deps.beginManagedRelease?.(lease) ?? coordinator(host).beginRelease(lease))) : null;
   try { logDbDisconnect('postgres', style ?? 'unknown'); } catch { /* best effort */ }
   const timeout = host.deps.teardownTimeoutMs ?? 2000;
@@ -229,11 +270,12 @@ async function reconnectManagedWork(host: ManagedEngineHost, config: EngineConfi
     if (classified.kind === 'target_unverified' && host.runtime.generation === generation) {
       const lease = host.runtime.lease;
       const binding = host.runtime.binding;
+      host.runtime.revokedIdentity = host.runtime.identity;
       const retirement = lease
         ? binding?.beginRelease(lease) ?? (host.deps.beginManagedRelease?.(lease) ?? coordinator(host).beginRelease(lease))
         : null;
       session.detach(); host.runtime.session = null; host.manager?.disconnect(); host.manager = null;
-      host.sql = null; host.runtime.lease = null; host.runtime.binding = null; host.runtime.lifecycle = 'disconnected';
+      host.sql = null; host.runtime.lease = null; host.runtime.binding = null; host.runtime.signature = null; host.runtime.parent = null; host.runtime.style = null; host.runtime.lifecycle = 'disconnected';
       if (retirement) await retirement.finish();
     }
     try { logPoolRecovery('reconnect_failed', classified); } catch { /* audit */ }

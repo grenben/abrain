@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import postgres from '#postgres';
 import { ConnectionManager } from '../src/core/connection-manager.ts';
+import { ManagedPostgresSingleton } from '../src/core/managed-postgres-singleton.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
 import { createManagedPostgresCandidate, ManagedPostgresPoolError } from '../src/core/managed-postgres-pool.ts';
 import { managedInstanceOptions, managedModuleOptions, type ManagedEngineDependencies } from '../src/core/postgres-engine-managed.ts';
@@ -12,7 +13,12 @@ const identity = `postgres-managed:v1:gbrain-managed-postgres:${target.cluster_i
 const config = (parentConnectionManager?: ConnectionManager): EngineConfig & { parentConnectionManager?: ConnectionManager } => ({ engine: 'postgres', managed_postgres: target, ...(parentConnectionManager ? { parentConnectionManager } : {}) });
 const engines: PostgresEngine[] = [];
 afterEach(async () => { await Promise.all(engines.splice(0).map(engine => engine.disconnect())); });
-function fakePool(name: string) { const value = { name, closes: 0, end: async () => { value.closes++; }, unsafe: async () => [] }; return value as unknown as ReturnType<typeof postgres> & typeof value; }
+function fakePool(name: string) {
+  let notifyClosed!: () => void;
+  const closed = new Promise<void>(resolve => { notifyClosed = resolve; });
+  const value = { name, closes: 0, closed, end: async () => { value.closes++; notifyClosed(); }, unsafe: async () => [] };
+  return value as unknown as ReturnType<typeof postgres> & typeof value;
+}
 function harness(build: ManagedEngineDependencies['createCandidate'], overrides: Partial<ManagedEngineDependencies> = {}) {
   const closed: unknown[] = [];
   const deps: ManagedEngineDependencies = {
@@ -41,6 +47,7 @@ describe('managed binding real composition', () => {
     const late = fakePool('late'); proof.resolve(candidate(late));
     expect(await firstResult).toBeInstanceOf(ManagedPostgresPoolError);
     expect(await secondResult).toBeInstanceOf(ManagedPostgresPoolError);
+    await late.closed;
     expect(late.closes).toBe(1);
     expect(borrower.connectionManager).toBeNull();
   });
@@ -58,6 +65,19 @@ describe('managed binding real composition', () => {
     expect(old.closes).toBe(1);
     await child.disconnect();
     expect(replacement.closes).toBe(0);
+  });
+
+  test('exact healthy same-config managed connect is idempotent and preserves manager and pool', async () => {
+    const pool = fakePool('idempotent-managed'); let builds = 0;
+    const h = harness(async () => { builds++; return candidate(pool); });
+    const engine = h.create(), applied = config();
+    await engine.connect(applied);
+    const manager = engine.connectionManager;
+    await engine.connect(applied);
+    expect(builds).toBe(1);
+    expect(engine.connectionManager).toBe(manager);
+    expect(engine.sql).toBe(pool);
+    expect((engine as unknown as { _savedConfig: EngineConfig })._savedConfig).toBe(applied);
   });
 
   test('same-engine concurrent reconnect joins the deferred refresh outcome', async () => {
@@ -107,6 +127,34 @@ describe('managed binding real composition', () => {
     expect(old.closes).toBe(1); expect(engine.connectionManager).toBeNull();
   });
 
+  test('real candidate signature mismatch revokes the established managed session', async () => {
+    const old = fakePool('signature-old'), failed = fakePool('signature-failed');
+    let attempts = 0, queries = 0;
+    const h = harness(async engineConfig => createManagedPostgresCandidate(engineConfig, {}, {
+      configDir: () => '/private/test-config',
+      resolve: (() => ({
+        identity,
+        options: { path: '/private/socket/.s.PGSQL.5432', user: 'gbrain', database: 'brain', port: 5432, ssl: false, debug: false, password: async () => 'not-used' },
+        assertPinnedState() {}, hasSecurityFailure() { return false; },
+        verifyLiveIdentity(value: unknown) { return value as never; },
+      })) as never,
+      create: (() => ++attempts === 1 ? old : failed) as never,
+      end: async pool => { await pool.end({ timeout: 2 }); },
+      query: async () => {
+        if (++queries === 2) throw Object.assign(new Error('must not escape'), { code: 'SASL_SIGNATURE_MISMATCH' });
+        return [{ identity: { live: true } }];
+      },
+    }));
+    const engine = h.create();
+    await engine.connect(config());
+    const originalManager = engine.connectionManager;
+    await expect(engine.reconnect()).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(engine.connectionManager).not.toBe(originalManager);
+    expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
+    expect(old.closes).toBe(1);
+    expect(failed.closes).toBe(1);
+  });
+
   test('target_unverified revokes owner, borrower, and descendants before pool close', async () => {
     const old = fakePool('revoked-old'); let attempt = 0;
     const h = harness(async () => {
@@ -135,6 +183,176 @@ describe('managed binding real composition', () => {
     expect(parentPool.closes).toBe(1);
   });
 
+  test('disconnected parent-mode manager has no parent route fallback', async () => {
+    const pool = fakePool('parent-only');
+    const h = harness(async () => candidate(pool));
+    const parent = h.create(); await parent.connect(config());
+    const child = h.create(); await child.connect(config(parent.connectionManager!));
+    const childManager = child.connectionManager!;
+    await child.disconnect();
+    expect(childManager.peekReadPool()).toBeNull();
+    expect(await childManager.getReadPool().catch(() => null)).toBeNull();
+    expect(() => childManager.read()).toThrow();
+    expect(parent.connectionManager?.read()).toBe(pool);
+    expect(pool.closes).toBe(0);
+    await parent.disconnect();
+  });
+
+  test('legacy singleton connect retains its real factory for engine refresh', async () => {
+    const first = fakePool('legacy-first'), replacement = fakePool('legacy-replacement');
+    let builds = 0;
+    const singleton = new ManagedPostgresSingleton<object>(kind => new ManagedPostgresPoolError(kind), async pool => { await (pool as typeof first).end(); });
+    const build = async () => candidate(++builds === 1 ? first : replacement) as unknown as { pool: object; identity: string };
+    expect(await singleton.connect(identity, build)).toBe(true);
+    const deps: ManagedEngineDependencies = {
+      createCandidate: build as ManagedEngineDependencies['createCandidate'],
+      closePool: async pool => { await pool.end({ timeout: 2 }); },
+      createManager: options => new ConnectionManager(options),
+      acquireManaged: singleton.acquire.bind(singleton) as typeof db.acquireManaged,
+      beginManagedRelease: singleton.beginRelease.bind(singleton),
+    };
+    const engine = new PostgresEngine(deps); engines.push(engine);
+    await engine.connect(config());
+    expect(engine.connectionManager?.read()).toBe(first);
+    await engine.reconnect();
+    expect(builds).toBe(2);
+    expect(engine.connectionManager?.read()).toBe(replacement);
+    expect(first.closes).toBe(1);
+    expect(replacement.closes).toBe(0);
+    await engine.disconnect();
+    await singleton.disconnect();
+    expect(replacement.closes).toBe(1);
+  });
+
+  test('initial disconnect promptly rejects all waiters and later closes an eventual candidate once', async () => {
+    const proof = deferred<{ pool: ReturnType<typeof postgres>; identity: string }>();
+    const singleton = new ManagedPostgresSingleton<ReturnType<typeof postgres>>(kind => new ManagedPostgresPoolError(kind), async pool => { await pool.end({ timeout: 2 }); });
+    const deps: ManagedEngineDependencies = {
+      createCandidate: async () => proof.promise,
+      closePool: async pool => { await pool.end({ timeout: 2 }); },
+      createManager: options => new ConnectionManager(options),
+      acquireManaged: singleton.acquire.bind(singleton),
+      beginManagedRelease: singleton.beginRelease.bind(singleton),
+      teardownTimeoutMs: 5,
+    };
+    const owner = new PostgresEngine(deps), borrower = new PostgresEngine(deps); engines.push(owner, borrower);
+    const ownerConnect = owner.connect(config()).then(() => 'resolved', () => 'rejected');
+    const borrowerConnect = borrower.connect(config()).then(() => 'resolved', () => 'rejected');
+    const closing = owner.disconnect();
+    expect(await ownerConnect).toBe('rejected');
+    expect(await borrowerConnect).toBe('rejected');
+    await closing;
+    const current = fakePool('new-after-pending');
+    const next = singleton.acquire(identity, config(), async () => candidate(current));
+    await next.ready;
+    const late = fakePool('late-after-pending'); proof.resolve(candidate(late)); await late.closed;
+    expect(late.closes).toBe(1);
+    expect(singleton.getPool()).toBe(current);
+    await singleton.beginRelease(next.owner!).finish();
+  });
+
+  test('disconnect promptly rejects unresolved refresh waiters and preserves a newer singleton', async () => {
+    const old = fakePool('refresh-original'), late = fakePool('refresh-late'), current = fakePool('refresh-current');
+    const proof = deferred<{ pool: ReturnType<typeof postgres>; identity: string }>();
+    let builds = 0;
+    const singleton = new ManagedPostgresSingleton<ReturnType<typeof postgres>>(kind => new ManagedPostgresPoolError(kind), async pool => { await pool.end({ timeout: 2 }); });
+    const build = async () => ++builds === 1 ? candidate(old) : proof.promise;
+    const deps: ManagedEngineDependencies = {
+      createCandidate: build,
+      closePool: async pool => { await pool.end({ timeout: 2 }); },
+      createManager: options => new ConnectionManager(options),
+      acquireManaged: singleton.acquire.bind(singleton),
+      beginManagedRelease: singleton.beginRelease.bind(singleton),
+      teardownTimeoutMs: 5,
+    };
+    const owner = new PostgresEngine(deps), borrower = new PostgresEngine(deps); engines.push(owner, borrower);
+    await owner.connect(config()); await borrower.connect(config());
+    const reconnect1 = owner.reconnect().then(() => 'resolved', () => 'rejected');
+    const reconnect2 = borrower.reconnect().then(() => 'resolved', () => 'rejected');
+    await Promise.resolve();
+    const closing = owner.disconnect();
+    expect(await reconnect1).toBe('rejected');
+    expect(await reconnect2).toBe('rejected');
+    await closing;
+    const newer = singleton.acquire(identity, config(), async () => candidate(current));
+    await newer.ready;
+    proof.resolve(candidate(late)); await late.closed;
+    expect(late.closes).toBe(1);
+    expect(old.closes).toBe(1);
+    expect(singleton.getPool()).toBe(current);
+    await singleton.beginRelease(newer.owner!).finish();
+  });
+
+  test('active URL resources reject managed connect without changing the applied connection', async () => {
+    const urlPool = fakePool('url-active');
+    const engine = new PostgresEngine();
+    const manager = new ConnectionManager({ url: 'postgresql://localhost/brain', readPoolOwnedExternally: true });
+    manager.setReadPool(urlPool);
+    const state = engine as unknown as { _sql: ReturnType<typeof postgres> | null; connectionManager: ConnectionManager | null; _connectionStyle: 'instance' | 'module' | null; _savedConfig: EngineConfig | null };
+    state._sql = urlPool; state.connectionManager = manager; state._connectionStyle = 'instance';
+    state._savedConfig = { engine: 'postgres', database_url: 'postgresql://localhost/brain' };
+    const applied = state._savedConfig;
+    await expect(engine.connect(config())).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(engine.sql).toBe(urlPool);
+    expect(state._savedConfig).toBe(applied);
+    await engine.disconnect();
+    expect(urlPool.closes).toBe(1);
+  });
+
+  test('managed attachment rejects style and parent changes while preserving saved config', async () => {
+    const h = harness(async () => candidate(fakePool('style-check')));
+    const engine = h.create(); await engine.connect({ ...config(), poolSize: 2 });
+    const state = engine as unknown as { _savedConfig: (EngineConfig & { poolSize?: number }) | null };
+    const applied = state._savedConfig;
+    await expect(engine.connect({ ...config(), poolSize: 3 })).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(state._savedConfig).toBe(applied);
+    expect(state._savedConfig?.poolSize).toBe(2);
+    const anotherParent = h.create(); await anotherParent.connect(config());
+    await expect(engine.connect(config(anotherParent.connectionManager!))).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(state._savedConfig).toBe(applied);
+    await anotherParent.disconnect(); await engine.disconnect();
+  });
+
+  test('conflicting concurrent managed connect rejects before it can join or overwrite first config', async () => {
+    const pool = fakePool('first-module-connect');
+    const proof = deferred<{ pool: ReturnType<typeof postgres>; identity: string }>();
+    let builds = 0;
+    const h = harness(async () => { builds++; return proof.promise; });
+    const engine = h.create();
+    const firstConfig = config();
+    const first = engine.connect(firstConfig);
+    await Promise.resolve();
+    const conflicting = engine.connect({ ...config(), poolSize: 2 });
+    await expect(conflicting).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect((engine as unknown as { _savedConfig: EngineConfig | null })._savedConfig).toBeNull();
+    expect(builds).toBe(1);
+    proof.resolve(candidate(pool));
+    await first;
+    expect(engine.connectionManager?.read()).toBe(pool);
+    expect((engine as unknown as { _savedConfig: EngineConfig })._savedConfig).toBe(firstConfig);
+    expect(builds).toBe(1);
+  });
+
+  test('parent/acquisition conflicts leave engine disconnected and retryable', async () => {
+    const h = harness(async () => candidate(fakePool('retry')));
+    const engine = h.create();
+    const invalidParent = new ConnectionManager({ url: 'postgresql://localhost/brain' });
+    await expect(engine.connect(config(invalidParent))).rejects.toMatchObject({ kind: 'target_unverified' });
+    await expect(engine.connect(config())).resolves.toBeUndefined();
+    expect(engine.connectionManager?.read()).toBeTruthy();
+  });
+
+  test('revoked attached session cannot make same-target connect idempotent', async () => {
+    const first = fakePool('revoked-same-target'); let attempts = 0;
+    const h = harness(async () => { if (++attempts === 1) return candidate(first); throw new ManagedPostgresPoolError('target_unverified'); });
+    const owner = h.create(), borrower = h.create();
+    await owner.connect(config()); await borrower.connect(config());
+    await expect(owner.reconnect()).rejects.toMatchObject({ kind: 'target_unverified' });
+    await expect(borrower.connect(config())).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(borrower.connectionManager).not.toBeNull();
+    await owner.disconnect(); await borrower.disconnect();
+  });
+
   test('manager construction failure releases only its creator lease; instance retirement is isolated', async () => {
     const first = fakePool('module'), instance = fakePool('instance'); let builds = 0, managers = 0;
     const h = harness(async () => candidate(++builds === 1 ? first : instance));
@@ -156,7 +374,7 @@ describe('managed binding real composition', () => {
     const engine = h.create();
     await expect(engine.connect(config())).rejects.toMatchObject({ kind: 'target_unverified' });
     expect(owned.closes).toBe(1);
-    expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
+    expect(engine.connectionManager).toBeNull();
   });
 
   test('unknown construction failures become fixed secret-free target_unverified errors', async () => {
@@ -202,6 +420,7 @@ describe('managed binding real composition', () => {
             identity,
             options: { path: '/private/socket/.s.PGSQL.5432', user: 'gbrain', database: 'brain', port: 5432, ssl: false, debug: false, password: async () => credential },
             assertPinnedState() {},
+            hasSecurityFailure() { return false; },
             verifyLiveIdentity(value: unknown) { return value as never; },
           };
         }) as never,
@@ -256,7 +475,7 @@ describe('managed binding real composition', () => {
     const retirement = db.beginManagedRelease(acquisition.owner!);
     await retirement.finish();
     const late = fakePool('late-db-adapter');
-    proof.resolve(candidate(late));
+    proof.resolve(candidate(late)); await late.closed;
     await expect(acquisition.ready).rejects.toBeInstanceOf(ManagedPostgresPoolError);
     await expect(borrower.ready).rejects.toBeInstanceOf(ManagedPostgresPoolError);
     expect(late.closes).toBe(1);
@@ -273,7 +492,7 @@ describe('managed binding real composition', () => {
     await db.beginManagedRelease(old.owner!).finish();
     expect(db.getConnection()).toBe(currentPool);
     const latePool = fakePool('old-late-module');
-    oldProof.resolve(candidate(latePool));
+    oldProof.resolve(candidate(latePool)); await latePool.closed;
     await expect(old.ready).rejects.toBeInstanceOf(ManagedPostgresPoolError);
     expect(latePool.closes).toBe(1);
     expect(db.getConnection()).toBe(currentPool);
@@ -288,7 +507,7 @@ describe('managed binding real composition', () => {
     const current = db.acquireManaged(identity, config(), async () => candidate(currentPool));
     await current.ready;
     const oldPool = fakePool('late-global-candidate');
-    oldProof.resolve(candidate(oldPool));
+    oldProof.resolve(candidate(oldPool)); await oldPool.closed;
     await expect(old.ready).rejects.toBeInstanceOf(ManagedPostgresPoolError);
     await shutdown;
     expect(oldPool.closes).toBe(1);

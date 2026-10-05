@@ -1982,7 +1982,7 @@ async function handleCliOnly(command: string, args: string[]) {
  * @cliPipelineStage
  */
 async function routeCliOnlyBeforeTable(command: string, args: string[]): Promise<boolean> {
-  runPreConnectGuard(findCliCommand(command)?.preConnectGuard);
+  runPreConnectGuard(findCliCommand(command)?.preConnectGuard, args);
 
   // Refuse DB-bound thin-client commands with an actionable hint. Try
   // routable subcommands via MCP first; unhandled ones fall through.

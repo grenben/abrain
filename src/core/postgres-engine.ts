@@ -330,6 +330,10 @@ export class PostgresEngine implements BrainEngine {
   // Lifecycle
   async connect(config: EngineConfig & { poolSize?: number; parentConnectionManager?: ConnectionManager }): Promise<void> {
     this.vectorIterativeScan = undefined;
+    let target: ReturnType<typeof normalizeEngineTarget>;
+    try { target = normalizeEngineTarget(config); }
+    catch (error) { if (config.managed_postgres !== undefined) throw new ManagedPostgresPoolError('target_unverified'); throw error; }
+    if (target.kind === 'postgres-managed' && this._managedRuntime.lifecycle === 'disconnected' && (this._sql !== null || this.connectionManager !== null || (this._connectionStyle === 'module' && this._ownsModuleSingleton))) throw new ManagedPostgresPoolError('target_unverified');
     const managedWork = connectManagedIfTarget(this.managedHost(), config);
     if (await managedWork) { this._savedConfig = config; return; }
     if (this._managedRuntime.lifecycle !== 'disconnected') throw new ManagedPostgresPoolError('target_unverified');
@@ -427,6 +431,7 @@ export class PostgresEngine implements BrainEngine {
 
   private async disconnectInternal(): Promise<void> {
     if (this._managedRuntime.identity !== null) return disconnectManagedRuntime(this.managedHost());
+    if (this._managedRuntime.lifecycle !== 'attached' && this._savedConfig && normalizeEngineTarget(this._savedConfig).kind === 'postgres-managed') return;
     for (const stop of this._beforeDisconnect) await stop();
     // v0.41.25.0 (#1570) — instrument disconnect calls to identify the
     // mid-process caller behind the singleton-null bug. The audit log

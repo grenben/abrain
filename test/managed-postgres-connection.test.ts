@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveManagedPostgresConnection, ManagedPostgresConnectionError } from '../src/core/managed-postgres/connection.ts';
+import { createManagedPostgresCandidate, ManagedPostgresPoolError } from '../src/core/managed-postgres-pool.ts';
 import { renderManagedPostgresConfig, verifyManagedPostgresLiveIdentity, type LiveIdentity } from '../src/core/managed-postgres/identity.ts';
 import { captureInitializationReceipt, createOwner, managedPaths, NATIVE_POSTGRES_AUTO_CONF, readOwner, writeInitializationReceipt, writeOwner } from '../src/core/managed-postgres/ownership.ts';
 
@@ -142,5 +143,61 @@ describe('managed PostgreSQL connection resolver', () => {
     for (const patch of invalid) expect(verifyManagedPostgresLiveIdentity({ ...good, ...patch }, f.owner, f.paths, 'gbrain')).toBeNull();
     const missing = { ...good } as Record<string, unknown>; delete missing.role;
     expect(verifyManagedPostgresLiveIdentity(missing, f.owner, f.paths, 'gbrain')).toBeNull();
+  });
+});
+
+describe('managed PostgreSQL candidate query classification', () => {
+  async function attempt(f: ReturnType<typeof fixture>, query: (pool: unknown, password: () => Promise<string>) => Promise<unknown>) {
+    const pool = { unsafe: async () => [], end: async () => {} };
+    let closes = 0;
+    let password: (() => Promise<string>) | undefined;
+    const error = await createManagedPostgresCandidate(
+      { engine: 'postgres', managed_postgres: f.reference } as never,
+      {},
+      {
+        resolve: resolveManagedPostgresConnection,
+        configDir: () => f.configDir,
+        create: ((options: Record<string, unknown>) => { password = options.password as () => Promise<string>; return pool; }) as never,
+        end: async () => { closes++; },
+        query: ((value: unknown) => query(value, password!)) as never,
+      },
+    ).then(() => null, reason => reason);
+    return { error, closes };
+  }
+
+  it('classifies signature mismatch as target_unverified and closes once', async () => {
+    const f = fixture();
+    const outcome = await attempt(f, async () => { throw Object.assign(new Error('sensitive driver text'), { code: 'SASL_SIGNATURE_MISMATCH' }); });
+    expect(outcome.error).toBeInstanceOf(ManagedPostgresPoolError);
+    expect(outcome.error).toMatchObject({ kind: 'target_unverified', message: 'Managed PostgreSQL pool could not be constructed or verified.' });
+    expect(outcome.closes).toBe(1);
+  });
+
+  it('latches callback refusal even when pinned files are restored before query rejection', async () => {
+    const f = fixture();
+    const ownerBytes = readFileSync(f.paths.owner);
+    const outcome = await attempt(f, async (_pool, password) => {
+      writeFileSync(f.paths.owner, '{}', { mode: 0o600 });
+      await expect(password()).rejects.toBeInstanceOf(ManagedPostgresConnectionError);
+      writeFileSync(f.paths.owner, ownerBytes, { mode: 0o600 });
+      throw Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' });
+    });
+    expect(outcome.error).toMatchObject({ kind: 'target_unverified' });
+    expect(outcome.closes).toBe(1);
+  });
+
+  it('keeps the unavailable classification only for recognized transport codes', async () => {
+    const outcome = await attempt(fixture(), async () => { throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }); });
+    expect(outcome.error).toMatchObject({ kind: 'unavailable' });
+    expect(outcome.closes).toBe(1);
+  });
+
+  it('fails unknown secret-bearing query errors closed without reflecting details', async () => {
+    const f = fixture();
+    const rawUuid = f.owner.clusterId;
+    const outcome = await attempt(f, async () => { throw new Error(`postgres://user:${secret}@${f.paths.socket}/${rawUuid}`); });
+    expect(outcome.error).toMatchObject({ kind: 'target_unverified', message: 'Managed PostgreSQL pool could not be constructed or verified.' });
+    expect(JSON.stringify(outcome.error)).not.toMatch(new RegExp(`${secret}|${f.paths.root}|${rawUuid}|postgres:`));
+    expect(outcome.closes).toBe(1);
   });
 });

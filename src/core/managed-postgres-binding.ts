@@ -35,12 +35,14 @@ export class ManagedPostgresBinding<Pool> {
   private revision = 0;
   private current: RecordEntry<Pool> | null = null;
   private pending: Promise<void> | null = null;
+  private pendingWaiter: { promise: Promise<void>; resolve(): void; reject(error: unknown): void } | null = null;
   private readonly records = new Set<RecordEntry<Pool>>();
   private readonly sessions = new Set<ManagedSession<Pool>>();
   private retirement: ManagedRetirement | null = null;
   private ownerConsumed = false;
   readonly view: ManagedPoolView<Pool>;
   readonly ready: Promise<void>;
+  private readyWaiter: { promise: Promise<void>; resolve(): void; reject(error: unknown): void };
   get poolRevision(): number { return this.revision; }
 
   constructor(
@@ -53,7 +55,9 @@ export class ManagedPostgresBinding<Pool> {
     this.identity = identity;
     this.config = freezeCopy(config);
     this.view = Object.freeze({ identity, read: () => this.read(), peek: () => this.peek() });
-    this.ready = this.buildInitial();
+    this.readyWaiter = deferred();
+    this.ready = this.readyWaiter.promise;
+    void this.runCandidate(false, this.readyWaiter);
   }
 
   attach(parent?: ManagedSession<Pool>): ManagedSession<Pool> {
@@ -83,15 +87,22 @@ export class ManagedPostgresBinding<Pool> {
     if (this.state === 'building') return this.ready;
     if (this.pending) return this.pending;
     this.state = 'refreshing';
-    const work = Promise.resolve().then(() => this.buildCandidate(true));
-    this.pending = work;
-    void work.finally(() => { if (this.pending === work) this.pending = null; }).catch(() => {});
-    return work;
+    const waiter = deferred();
+    this.pendingWaiter = waiter;
+    this.pending = waiter.promise;
+    void this.runCandidate(true, waiter).finally(() => {
+      if (this.pending === waiter.promise) this.pending = null;
+      if (this.pendingWaiter === waiter) this.pendingWaiter = null;
+    }).catch(() => {});
+    return waiter.promise;
   }
 
   revoke(): ManagedRetirement {
     if (this.retirement) return this.retirement;
     this.state = 'revoked';
+    const refusal = this.failure('target_unverified');
+    this.readyWaiter.reject(refusal);
+    this.pendingWaiter?.reject(refusal);
     for (const session of this.sessions) session.invalidate();
     const captured = [...this.records];
     this.current = null;
@@ -107,30 +118,30 @@ export class ManagedPostgresBinding<Pool> {
     return this.revoke();
   }
 
-  private async buildInitial(): Promise<void> {
-    await Promise.resolve();
-    await this.buildCandidate(false);
-  }
-  private async buildCandidate(refresh: boolean): Promise<void> {
+  private async runCandidate(refresh: boolean, waiter: { resolve(): void; reject(error: unknown): void }): Promise<void> {
     let candidate: ManagedPoolCandidate<Pool>;
     try { candidate = await this.build(this.config); }
     catch (error) {
       const kind = classify(error);
-      if (refresh && kind === 'unavailable' && this.state !== 'revoked') this.state = 'ready';
-      else { await this.revoke().finish(); }
-      throw this.failure(kind);
+      if (this.state === 'revoked') return;
+      waiter.reject(this.failure(kind));
+      if (refresh && kind === 'unavailable') this.state = 'ready';
+      else await this.revoke().finish();
+      return;
     }
     const record: RecordEntry<Pool> = { pool: candidate.pool, closePromise: null };
     this.records.add(record);
     if (candidate.identity !== this.identity || this.state === 'revoked') {
       await this.closeRecord(record);
-      if (candidate.identity !== this.identity) { await this.revoke().finish(); throw this.failure('target_unverified'); }
-      throw this.failure('target_unverified');
+      waiter.reject(this.failure('target_unverified'));
+      if (candidate.identity !== this.identity) await this.revoke().finish();
+      return;
     }
     const old = this.current;
     this.current = record;
     this.revision++;
     this.state = 'ready';
+    waiter.resolve();
     if (old) await this.closeRecord(old);
   }
   private async closeRecord(record: RecordEntry<Pool>): Promise<void> {
@@ -160,6 +171,13 @@ export class ManagedSession<Pool> {
 function classify(error: unknown): ManagedFailureKind {
   if (!(error instanceof ManagedPostgresPoolError)) return 'target_unverified';
   return error.kind === 'unavailable' ? 'unavailable' : 'target_unverified';
+}
+function deferred(): { promise: Promise<void>; resolve(): void; reject(error: unknown): void } {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void promise.catch(() => {});
+  return { promise, resolve, reject };
 }
 function freezeCopy<T>(value: T): Readonly<T> {
   if (!value || typeof value !== 'object') return value as Readonly<T>;
