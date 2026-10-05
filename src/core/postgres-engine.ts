@@ -330,6 +330,7 @@ export class PostgresEngine implements BrainEngine {
   // Lifecycle
   async connect(config: EngineConfig & { poolSize?: number; parentConnectionManager?: ConnectionManager }): Promise<void> {
     this.vectorIterativeScan = undefined;
+    if (this._managedRuntime.routingMode === 'managed' && config.managed_postgres === undefined) throw new ManagedPostgresPoolError('target_unverified');
     let target: ReturnType<typeof normalizeEngineTarget>;
     try { target = normalizeEngineTarget(config); }
     catch (error) {

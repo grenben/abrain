@@ -127,14 +127,20 @@ describe('managed binding real composition', () => {
   test('production adapter: failed borrower manager attachment refuses singleton fallback', async () => {
     const pool = fakePool('manager-owner');
     const ownerHarness = productionHarness(async () => candidate(pool));
+    let urlCreates = 0;
     const failedHarness = productionHarness(async () => { throw new Error('borrower must not build'); }, {
       createManager: () => { throw new Error('injected manager failure'); },
+      createUrlPool: () => { urlCreates++; throw new Error('URL candidate must not run'); },
     });
     const owner = ownerHarness.create(), failed = failedHarness.create();
     await owner.connect(config());
     await expect(failed.connect(config())).rejects.toMatchObject({ kind: 'target_unverified' });
     expect(() => failed.sql).toThrow(ManagedPostgresPoolError);
+    await expect(failed.connect({ engine: 'postgres', database_url: 'postgresql://user:secret@localhost/brain', poolSize: 2 })).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(urlCreates).toBe(0);
+    expect(() => failed.sql).toThrow(ManagedPostgresPoolError);
     expect(owner.sql).toBe(pool);
+    expect(db.getConnection()).toBe(pool);
   });
 
   test('production adapter: delayed old disconnect never routes through a newer module binding', async () => {
@@ -154,24 +160,16 @@ describe('managed binding real composition', () => {
     expect(newEngine.sql).toBe(newPool);
   });
 
-  test('production adapter: security revocation requires disconnect before URL mode can publish', async () => {
+  test('managed routing permanently refuses URL connect before and after explicit disconnect', async () => {
     const first = fakePool('revoked-source'), replacement = fakePool('unrelated-managed-owner');
     let builds = 0, urlAttempts = 0;
-    const urlProof = deferred<void>(), madeUrlPool = deferred<void>();
-    const urlPools: { connected?: ReturnType<typeof postgres> & { closes: number }; failed?: ReturnType<typeof postgres> & { closes: number } } = {};
     const revokedHarness = productionHarness(async () => {
       if (++builds === 1) return candidate(first);
       throw new ManagedPostgresPoolError('target_unverified');
     }, {
       createUrlPool: () => {
         urlAttempts++;
-        if (urlAttempts === 1) {
-          urlPools.failed = callableUrlPool('failed-url', async () => { throw new Error('stubbed URL attach failure'); });
-          return urlPools.failed!;
-        }
-        urlPools.connected = callableUrlPool('url-after-reset', async () => { await urlProof.promise; return []; });
-        madeUrlPool.resolve();
-        return urlPools.connected!;
+        throw new Error('URL candidate must not run');
       },
     });
     const engine = revokedHarness.create();
@@ -183,17 +181,52 @@ describe('managed binding real composition', () => {
     await expect(engine.connect(urlConfig)).rejects.toMatchObject({ kind: 'target_unverified' });
     expect(urlAttempts).toBe(0);
     await engine.disconnect();
-    await expect(engine.connect(urlConfig)).rejects.toThrow('stubbed URL attach failure');
+    await expect(engine.connect(urlConfig)).rejects.toMatchObject({ kind: 'target_unverified' });
     expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
-    expect(urlPools.failed?.closes).toBe(1);
+    const firstCall = engine.connect(urlConfig), secondCall = engine.connect(urlConfig);
+    await expect(firstCall).rejects.toMatchObject({ kind: 'target_unverified' });
+    await expect(secondCall).rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(urlAttempts).toBe(0);
     expect(owner.sql).toBe(replacement);
-    const connectingUrl = engine.connect(urlConfig);
-    await madeUrlPool.promise;
+    await engine.connect(config());
+    expect(engine.sql).toBe(replacement);
+    expect(owner.sql).toBe(replacement);
+  });
+
+  test('production adapter: successful managed disconnect remains SQL-refusing with owner alive', async () => {
+    const pool = fakePool('disconnect-routing-owner');
+    const ownerHarness = productionHarness(async () => candidate(pool));
+    const borrowerHarness = productionHarness(async () => { throw new Error('borrower must not construct'); });
+    const owner = ownerHarness.create(), borrower = borrowerHarness.create();
+    await owner.connect(config()); await borrower.connect(config());
+    await borrower.disconnect();
+    expect(() => borrower.sql).toThrow(ManagedPostgresPoolError);
+    expect(owner.sql).toBe(pool);
+    expect(db.getConnection()).toBe(pool);
+  });
+
+  test('production adapter: disconnected managed owner refuses URL before any URL construction', async () => {
+    const pool = fakePool('managed-owner-disconnect'); let urlCreates = 0;
+    const h = productionHarness(async () => candidate(pool), {
+      createUrlPool: () => { urlCreates++; throw new Error('URL creation must not start'); },
+    });
+    const engine = h.create(); await engine.connect(config()); await engine.disconnect();
+    await expect(engine.connect({ engine: 'postgres', database_url: 'postgresql://user:secret@localhost/brain', poolSize: 2 }))
+      .rejects.toMatchObject({ kind: 'target_unverified' });
+    expect(urlCreates).toBe(0);
     expect(() => engine.sql).toThrow(ManagedPostgresPoolError);
-    urlProof.resolve();
-    await connectingUrl;
-    expect(engine.sql).toBe(urlPools.connected!);
-    expect(owner.sql).toBe(replacement);
+  });
+
+  test('fresh never-managed engine still attaches an ordinary URL pool', async () => {
+    const urlPool = callableUrlPool('ordinary-url');
+    let creates = 0;
+    const h = productionHarness(async () => { throw new Error('managed candidate not expected'); }, {
+      createUrlPool: () => { creates++; return urlPool; },
+    });
+    const engine = h.create();
+    await engine.connect({ engine: 'postgres', database_url: 'postgresql://user:secret@localhost/brain', poolSize: 2 });
+    expect(creates).toBe(1);
+    expect(engine.sql).toBe(urlPool);
   });
 
   test('same-engine concurrent reconnect joins the deferred refresh outcome', async () => {

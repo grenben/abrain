@@ -36,10 +36,9 @@ export interface ManagedEngineRuntime {
   signature: ManagedAttachmentSignature | null;
   revokedIdentity: string | null;
   routingMode: 'url' | 'managed';
-  managedResetAllowed: boolean;
 }
 export function createManagedEngineRuntime(): ManagedEngineRuntime {
-  return { identity: null, generation: 0, session: null, lease: null, binding: null, lifecycle: 'disconnected', work: null, reconnectWork: null, style: null, parent: null, signature: null, revokedIdentity: null, routingMode: 'url', managedResetAllowed: false };
+  return { identity: null, generation: 0, session: null, lease: null, binding: null, lifecycle: 'disconnected', work: null, reconnectWork: null, style: null, parent: null, signature: null, revokedIdentity: null, routingMode: 'url' };
 }
 
 export interface ManagedEngineHost {
@@ -178,7 +177,6 @@ export async function connectManaged(host: ManagedEngineHost, config: EngineConf
     host.runtime.style = style;
     host.runtime.lifecycle = 'attached';
     host.runtime.revokedIdentity = null;
-    host.runtime.managedResetAllowed = false;
   } catch (error) {
     session?.detach();
     if (lease) {
@@ -204,46 +202,26 @@ function sameAttachment(left: ManagedAttachmentSignature | null, right: ManagedA
 }
 
 export async function connectUrl(host: ManagedEngineHost, config: EngineConfigEx): Promise<void> {
-  const switchingFromManaged = host.runtime.routingMode === 'managed';
-  if (switchingFromManaged && (!host.runtime.managedResetAllowed || host.runtime.lifecycle !== 'disconnected')) {
-    throw new ManagedPostgresPoolError('target_unverified');
-  }
-  if (!switchingFromManaged) host.saveConfig(config);
-  try {
-    const url = config.database_url;
-    if (config.poolSize) {
-      if (!url) throw new GBrainError('No database URL', 'database_url is missing', 'Provide --url');
-      host.sql = host.createUrlPool(url, config);
-      await host.sql`SELECT 1`;
-      await db.setSessionDefaults(host.sql);
-      host.connectionStyle = 'instance';
+  if (host.runtime.routingMode === 'managed') throw new ManagedPostgresPoolError('target_unverified');
+  host.saveConfig(config);
+  const url = config.database_url;
+  if (config.poolSize) {
+    if (!url) throw new GBrainError('No database URL', 'database_url is missing', 'Provide --url');
+    host.sql = host.createUrlPool(url, config);
+    await host.sql`SELECT 1`;
+    await db.setSessionDefaults(host.sql);
+    host.connectionStyle = 'instance';
+    host.manager = new ConnectionManager({ url, parent: config.parentConnectionManager, readPoolOwnedExternally: true });
+    host.manager.setReadPool(host.sql);
+  } else {
+    host.ownsModuleSingleton = await db.connect(config);
+    host.connectionStyle = 'module';
+    if (url) {
       host.manager = new ConnectionManager({ url, parent: config.parentConnectionManager, readPoolOwnedExternally: true });
-      host.manager.setReadPool(host.sql);
-    } else {
-      host.ownsModuleSingleton = await db.connect(config);
-      host.connectionStyle = 'module';
-      if (url) {
-        host.manager = new ConnectionManager({ url, parent: config.parentConnectionManager, readPoolOwnedExternally: true });
-        host.manager.setReadPool(db.getConnection());
-      }
+      host.manager.setReadPool(db.getConnection());
     }
-    host.saveConfig(config);
-    if (switchingFromManaged) {
-      host.runtime.identity = null;
-      host.runtime.signature = null;
-      host.runtime.revokedIdentity = null;
-      host.runtime.routingMode = 'url';
-      host.runtime.managedResetAllowed = false;
-    }
-  } catch (error) {
-    if (!switchingFromManaged) throw error;
-    await host.manager?.disconnect().catch(() => {});
-    host.manager = null;
-    if (host.sql) { await db.endPoolBounded(host.sql); host.sql = null; }
-    if (host.ownsModuleSingleton) { await db.disconnect(); host.ownsModuleSingleton = false; }
-    host.connectionStyle = null;
-    throw error;
   }
+  host.saveConfig(config);
 }
 
 export function managedInstanceOptions(config: EngineConfigEx): Record<string, unknown> {
@@ -280,7 +258,6 @@ export async function disconnectManaged(host: ManagedEngineHost): Promise<void> 
     host.runtime.identity = null;
     host.runtime.signature = null;
     host.runtime.routingMode = 'managed';
-    host.runtime.managedResetAllowed = true;
     return;
   }
   const style = host.runtime.style === 'parent' ? 'instance' : host.runtime.style;
@@ -295,7 +272,6 @@ export async function disconnectManaged(host: ManagedEngineHost): Promise<void> 
   host.runtime.signature = null;
   host.runtime.revokedIdentity = null;
   host.runtime.routingMode = 'managed';
-  host.runtime.managedResetAllowed = true;
   let retirement = lease ? (binding ? binding.beginRelease(lease) : (host.deps.beginManagedRelease?.(lease) ?? coordinator(host).beginRelease(lease))) : null;
   try { logDbDisconnect('postgres', style ?? 'unknown'); } catch { /* best effort */ }
   const timeout = host.deps.teardownTimeoutMs ?? 2000;
