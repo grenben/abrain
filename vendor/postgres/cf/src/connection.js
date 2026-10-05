@@ -689,8 +689,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
       return (query.resolve(query.statement), write(Sync))
   }
 
-  async function Authentication(x, type = x.readUInt32BE(5)) {
-    (
+  function Authentication(x, type = x.readUInt32BE(5)) {
+    const handler = (
       type === 3 ? AuthenticationCleartextPassword :
       type === 5 ? AuthenticationMD5Password :
       type === 10 ? SASL :
@@ -698,7 +698,20 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
       type === 12 ? SASLFinal :
       type !== 0 ? UnknownAuth :
       noop
-    )(x, type)
+    )
+
+    try {
+      const result = handler(x, type)
+      if (result && typeof result.then === 'function')
+        Promise.resolve(result).catch(authenticationFailed)
+    } catch {
+      authenticationFailed()
+    }
+
+    function authenticationFailed() {
+      errored(Errors.generic('AUTHENTICATION_FAILED', 'Password callback failed'))
+      socket && socket.destroy()
+    }
   }
 
   /* c8 ignore next 5 */

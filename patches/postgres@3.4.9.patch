@@ -842,3 +842,83 @@ index 13c3432f761e2c2ee5b7dc1bdafe93e49f993dc7..5d8903e3246e1f596e717019db76e870
      release(): void;
    }
  }
+
+diff --git a/cjs/src/connection.js b/cjs/src/connection.js
+--- a/cjs/src/connection.js
++++ b/cjs/src/connection.js
+@@ -690,11 +690,24 @@
+-  async function Authentication(x, type = x.readUInt32BE(5)) {
+-    (
+-      type === 3 ? AuthenticationCleartextPassword :
+-      type === 5 ? AuthenticationMD5Password :
+-      type === 10 ? SASL :
+-      type === 11 ? SASLContinue :
+-      type === 12 ? SASLFinal :
+-      type !== 0 ? UnknownAuth :
+-      noop
+-    )(x, type)
+-  }
++  function Authentication(x, type = x.readUInt32BE(5)) {
++    const handler = (
++      type === 3 ? AuthenticationCleartextPassword :
++      type === 5 ? AuthenticationMD5Password :
++      type === 10 ? SASL :
++      type === 11 ? SASLContinue :
++      type === 12 ? SASLFinal :
++      type !== 0 ? UnknownAuth :
++      noop
++    )
++
++    try {
++      const result = handler(x, type)
++      if (result && typeof result.then === 'function')
++        Promise.resolve(result).catch(authenticationFailed)
++    } catch {
++      authenticationFailed()
++    }
++
++    function authenticationFailed() {
++      errored(Errors.generic('AUTHENTICATION_FAILED', 'Password callback failed'))
++      socket && socket.destroy()
++    }
++  }
+
+diff --git a/src/connection.js b/src/connection.js
+--- a/src/connection.js
++++ b/src/connection.js
+@@ -690,11 +690,24 @@
+-  async function Authentication(x, type = x.readUInt32BE(5)) {
+-    (
+-      type === 3 ? AuthenticationCleartextPassword :
+-      type === 5 ? AuthenticationMD5Password :
+-      type === 10 ? SASL :
+-      type === 11 ? SASLContinue :
+-      type === 12 ? SASLFinal :
+-      type !== 0 ? UnknownAuth :
+-      noop
+-    )(x, type)
+-  }
++  function Authentication(x, type = x.readUInt32BE(5)) {
++    const handler = (
++      type === 3 ? AuthenticationCleartextPassword :
++      type === 5 ? AuthenticationMD5Password :
++      type === 10 ? SASL :
++      type === 11 ? SASLContinue :
++      type === 12 ? SASLFinal :
++      type !== 0 ? UnknownAuth :
++      noop
++    )
++
++    try {
++      const result = handler(x, type)
++      if (result && typeof result.then === 'function')
++        Promise.resolve(result).catch(authenticationFailed)
++    } catch {
++      authenticationFailed()
++    }
++
++    function authenticationFailed() {
++      errored(Errors.generic('AUTHENTICATION_FAILED', 'Password callback failed'))
++      socket && socket.destroy()
++    }
++  }
