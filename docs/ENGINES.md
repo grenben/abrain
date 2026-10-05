@@ -227,7 +227,80 @@ The non-owner `NOBYPASSRLS` isolation test is
 ## Local Postgres
 
 Self-hosted Postgres + pgvector gives you the PostgresEngine without a Supabase
-account. Two paths:
+account. GBrain's managed local cluster is an opt-in lifecycle tool and does not
+change engine selection or `gbrain init` defaults. It is separate from the
+user-managed Homebrew/Docker recipes below.
+
+### GBrain-managed local PostgreSQL (macOS, opt-in)
+
+`gbrain postgres plan|provision|status|start|stop` manages a dedicated
+GBrain-owned PostgreSQL 17 + pgvector cluster. These commands run locally before
+engine connection and do not use Docker, Homebrew services, `sudo`, or a source
+build. The cluster is rooted beneath the resolved GBrain config directory
+(normally `~/.gbrain/postgres/17`); its data, socket, logs, credentials, and
+ownership metadata are kept in the dedicated managed root. Provisioning does
+not write GBrain engine configuration, initialize a GBrain schema, import data,
+or adopt a foreign cluster.
+
+`gbrain postgres plan [--json]` checks prerequisites and reports the exact
+Homebrew package impact (including dependency installs, upgrades, and
+reinstalls) and its SHA-256 package-plan fingerprint. It never installs
+formulae, starts a service/database, or creates the managed cluster. However,
+Homebrew's dry-run inspection may fetch metadata/manifests and populate its
+cache. The call sets `HOMEBREW_NO_AUTO_UPDATE=1`; it does not clean that cache.
+This possible Homebrew cache activity is not package-install consent. Review the
+report before any provisioning:
+
+```bash
+gbrain postgres plan
+```
+
+`gbrain postgres provision --yes [--json]` explicitly consents to creation of
+the dedicated durable cluster. If the required packages are missing, package
+installation has separate consent and must include both flags with the exact
+fingerprint from the current plan:
+
+```bash
+gbrain postgres provision --yes --install-packages \
+  --package-plan-fingerprint <sha256>
+```
+
+The fingerprint binds the exact parsed package actions and names. Provisioning
+recomputes the impact before installing; unknown impact or plan drift fails
+closed without running the install. `--yes` alone never authorizes package
+installation. There is no Homebrew bootstrap, service management, source-build
+fallback, or automatic package upgrade policy in this command.
+
+`gbrain postgres status [--json]` reports recorded state without probing the
+server; `status --probe` verifies prerequisites, ownership, and live identity
+and capabilities. `start` succeeds only when the owned cluster is verified
+ready; `stop` succeeds only when it is verified stopped. Start and stop use the
+managed cluster's version-matched lifecycle tools, not a port or PID alone.
+Stopping preserves the cluster and its data. The Phase 1 surface provides no
+foreign-cluster adoption, purge, backup/restore, launch-at-login (launchd), or
+major-version upgrade command.
+
+Ownership is fail-closed: private metadata and filesystem containment are
+checked alongside PostgreSQL's offline data-directory version/system identity
+and bounded live server identity. A port, process, or readiness response by
+itself does not establish ownership. Ambiguous state, identity mismatch, or
+package-plan drift is refused; existing data is not reinitialized or deleted.
+
+This path remains opt-in. Existing PGLite brains and bare `gbrain init` behavior
+are unchanged, and an existing brain is never silently repointed. Moving an
+existing brain remains an explicit guarded migration (`gbrain migrate`); cluster
+provisioning does not perform that migration. Native package and cluster
+execution has not been validated on the current Mac by operator choice. The
+deterministic tests use injected process dependencies and do not establish
+native Homebrew or cluster behavior. Native execution evidence remains
+outstanding; any such release validation belongs on isolated macOS CI, a VM,
+or dedicated test hardware, not the operator's current Mac.
+
+### User-managed local Postgres
+
+The following recipes are a separate, user-managed Postgres path. In particular,
+`brew services` and compiling pgvector are instructions for an operator-owned
+server; they do not provision or control GBrain's dedicated managed cluster.
 
 **Homebrew (macOS)**:
 

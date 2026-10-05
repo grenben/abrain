@@ -107,6 +107,8 @@ export const CLI_COMMANDS: readonly CliCommandRecord[] = [  // Pre-connect: disp
   // selfHelp: db-availability loop: both print their own help (engine-free).
   { name: 'engine', phase: 'pre-connect', thinClient: 'none', selfHelp: true, load: () => import('./commands/engine.ts') },
   { name: 'db-repair', phase: 'pre-connect', thinClient: 'none', selfHelp: true, load: () => import('./commands/db-repair.ts') },
+  // Managed local PostgreSQL lifecycle is deliberately pre-connect and local-only.
+  { name: 'postgres', phase: 'pre-connect', thinClient: 'none', selfHelp: true, load: () => import('./commands/postgres.ts') },
   // selfHelp: #4003: auth ships its own detailed usage (token/OAuth-client commands + flags) in its
   // `default:` switch case, hit whenever the subcommand isn't one of create/list/revoke/etc —
   // including --help. Without this entry the generic short-circuit fires first and that usage block

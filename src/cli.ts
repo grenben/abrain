@@ -2891,7 +2891,8 @@ SETUP
   init --prefer-postgres [--allow-docker]
                                      Postgres-first install ladder (env URL >
                                      Supabase token > local PG > docker > PGLite)
-  engine status [--json] [--probe]   Which engine + URL source, engine-free
+  engine status [--json] [--probe]   Which engine and URL source
+  postgres <plan|provision|status|start|stop>  Manage GBrain-owned local PostgreSQL
   db-repair [--yes] [--json]         Diagnose/fix Postgres access, engine-free
                                      (--yes --apply-rewrites for config rewrites)
   migrate --to <supabase|pglite>     Transfer brain between engines

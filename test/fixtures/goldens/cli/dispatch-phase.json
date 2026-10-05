@@ -1089,6 +1089,25 @@
         "thinClient": "none",
         "thinClientRoutedSubcommands": []
       },
+      "postgres": {
+        "hasSwitchCase": false,
+        "phase": "pre-connect",
+        "preConnectRules": [
+          {
+            "condition": "command === 'postgres'",
+            "connectsEngine": false,
+            "refusesThinClient": false,
+            "routesThinClient": false,
+            "terminates": true,
+            "thinClientCheck": false,
+            "unconditionalFor": [
+              "postgres"
+            ]
+          }
+        ],
+        "thinClient": "none",
+        "thinClientRoutedSubcommands": []
+      },
       "protocol": {
         "hasSwitchCase": false,
         "phase": "pre-connect",
