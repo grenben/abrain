@@ -1,12 +1,16 @@
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
-import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
+import type { EngineConfig, EmbeddingColumnConfig, ManagedPostgresReference } from './types.ts';
 import { applyDbPlaneReadSideMerge, type DbPlaneEngineReader } from './config-db-merge.ts';
 import { loadConfigSnapshot } from './config-snapshot.ts';
 import { loadGbrainEnvFile } from './gbrain-env-file.ts';
 import { dotenvValuesForKey } from './env-trust.ts';
 import { REMOTE_PRIVATE_PAGES_KEY } from './search/private-visibility.ts';
+import { validateManagedTargetConfig } from './engine-target.ts';
+import { publishConfigFile, type ConfigPublicationDependencies } from './config-publication.ts';
+export { ConfigPublicationUncertainError } from './config-publication.ts';
+export type { ConfigPublicationDependencies } from './config-publication.ts';
 
 /**
  * Where is the active DB URL coming from? Pure introspection, no connection
@@ -71,6 +75,7 @@ export interface GBrainConfig {
   backup?: { check_enabled?: boolean | string; check_interval_days?: number | string };
   database_url?: string;
   database_path?: string;
+  managed_postgres?: ManagedPostgresReference;
   openai_api_key?: string;
   anthropic_api_key?: string;
   /**
@@ -610,13 +615,16 @@ function migrateLegacyEmbeddingConfig(raw: Record<string, unknown>): Record<stri
  * v0.37 fix wave (CDX-5 from round 1). Pinned by test/config-file-only-loader.test.ts.
  */
 export function loadConfigFileOnly(): GBrainConfig | null {
+  let parsed: Record<string, unknown>;
   try {
     const raw = readFileSync(getConfigPath(), 'utf-8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return migrateLegacyEmbeddingConfig(parsed) as unknown as GBrainConfig;
+    parsed = JSON.parse(raw) as Record<string, unknown>;
   } catch {
     return null;
   }
+  const config = migrateLegacyEmbeddingConfig(parsed) as unknown as GBrainConfig;
+  validateManagedTargetConfig(config);
+  return config;
 }
 
 /**
@@ -697,6 +705,9 @@ export function loadConfig(): GBrainConfig | null {
   // Try env vars (cwd-.env-origin DATABASE_URL excluded — see #427 guard above)
   const dbUrl = effectiveEnvDatabaseUrl();
 
+  // Deliberate URL overrides bypass malformed managed references without rewriting the file.
+  if (fileConfig && !dbUrl) validateManagedTargetConfig(fileConfig);
+
   if (!fileConfig && !dbUrl) return null;
 
   // Infer engine type. A DATABASE_URL-style env var is always a Postgres
@@ -715,6 +726,7 @@ export function loadConfig(): GBrainConfig | null {
     engine: inferredEngine,
     ...(dbUrl ? { database_url: dbUrl } : {}),
     ...(dbUrl ? { database_path: undefined } : {}),
+    ...(dbUrl ? { managed_postgres: undefined } : {}),
     ...(process.env.OPENAI_API_KEY ? { openai_api_key: process.env.OPENAI_API_KEY } : {}),
     ...(process.env.ANTHROPIC_API_KEY ? { anthropic_api_key: process.env.ANTHROPIC_API_KEY } : {}),
     ...(process.env.OPENROUTER_API_KEY ? { openrouter_api_key: process.env.OPENROUTER_API_KEY } : {}),
@@ -1668,26 +1680,15 @@ export function isConfigTruthy(raw: unknown): boolean {
     && ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
-export function saveConfig(config: GBrainConfig): void {
-  mkdirSync(getConfigDir(), { recursive: true });
+export function saveConfig(config: GBrainConfig, dependencies: Readonly<ConfigPublicationDependencies> = {}): void {
+  validateManagedTargetConfig(config);
+  const dir = getConfigDir(), destination = getConfigPath();
+  mkdirSync(dir, { recursive: true });
   // Atomic write (tmp + rename): long-lived workers re-read this file per job
   // (gateway env refresh, keyed/keyless classification) — a truncate-then-write
   // here could be read torn, making a keyed install classify as keyless and
   // calmly consume work it should retry.
-  const tmp = `${getConfigPath()}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
-  renameSync(tmp, getConfigPath());
-  try {
-    chmodSync(getConfigPath(), 0o600);
-  } catch {
-    // chmod may fail on some platforms
-  }
-  // v0.35.8.0: ensure the per-home `.gitignore` exists on every config-write
-  // path. Cheap, idempotent, doesn't clobber user edits. Catches the case
-  // where `~/.gbrain/` lives inside a git worktree (Conductor + gstack
-  // workspaces hit this) so `git add` doesn't accidentally stage the brain.
-  // The doctor check `home_dir_in_worktree` surfaces vectors this can't
-  // close (already-tracked files, screenshots, backups, `git add -f`).
+  publishConfigFile(destination, Buffer.from(JSON.stringify(config, null, 2) + '\n', 'utf8'), dependencies);
   ensureGitignore();
 }
 
@@ -1743,6 +1744,7 @@ export function toEngineConfig(config: GBrainConfig): EngineConfig {
     engine: config.engine,
     database_url: config.database_url,
     database_path: config.database_path,
+    managed_postgres: config.managed_postgres,
   };
 }
 
@@ -1765,9 +1767,7 @@ export function configDir(): string {
   return join(homedir(), '.gbrain');
 }
 
-export function configPath(): string {
-  return join(configDir(), 'config.json');
-}
+export function configPath(): string { return join(configDir(), 'config.json'); }
 
 /**
  * Sugar for joining paths under the active gbrain home. Use this anywhere you

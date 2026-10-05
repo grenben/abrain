@@ -2068,10 +2068,10 @@ export interface HybridSearchMeta {
 }
 
 // Config
+export type ManagedPostgresReference = { manager_id: 'gbrain-managed-postgres'; cluster_id: string };
+
 export interface EngineConfig {
-  database_url?: string;
-  database_path?: string;
-  engine?: 'postgres' | 'pglite';
+  database_url?: string; database_path?: string; engine?: 'postgres' | 'pglite'; managed_postgres?: ManagedPostgresReference;
 }
 
 // Errors
