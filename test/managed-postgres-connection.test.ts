@@ -41,6 +41,12 @@ function live(f: ReturnType<typeof fixture>, patch: Partial<LiveIdentity> = {}):
 }
 
 describe('managed PostgreSQL connection resolver', () => {
+  it('marks the fixed public resolver error as target_unverified', () => {
+    const error = new ManagedPostgresConnectionError();
+    expect(error.code).toBe('target_unverified');
+    expect(error.message).toBe('Managed PostgreSQL connection target is unavailable or could not be verified.');
+  });
+
   it('resolves a provisioned app database to a secret-free full socket filename', async () => {
     const f = fixture();
     const result = resolveManagedPostgresConnection(f.reference, { configDir: f.configDir, uid: f.uid });
@@ -50,6 +56,7 @@ describe('managed PostgreSQL connection resolver', () => {
     expect(result).not.toHaveProperty('url'); expect(result).not.toHaveProperty('password');
     expect(result).not.toHaveProperty('paths'); expect(result).not.toHaveProperty('expectedOwner'); expect(result).not.toHaveProperty('expectedLiveIdentity');
     expect(await result.options.password()).toBe(secret);
+    expect(() => result.assertPinnedState()).not.toThrow();
     expect(verifyManagedPostgresLiveIdentity(live(f), f.owner, f.paths, 'gbrain')).not.toBeNull();
     expect(verifyManagedPostgresLiveIdentity(live(f), f.owner, f.paths, 'postgres')).toBeNull();
     expect(result.verifyLiveIdentity(live(f))).toEqual(live(f));
@@ -116,8 +123,9 @@ describe('managed PostgreSQL connection resolver', () => {
     const f = fixture(), resolution = resolveManagedPostgresConnection(f.reference, { configDir: f.configDir, uid: f.uid });
     const changed = readOwner(f.paths, f.uid); changed.binaryVersion = '17.6'; writeOwner(f.paths, changed);
     await expect(resolution.options.password()).rejects.toMatchObject({
-      name: 'ManagedPostgresConnectionError', message: 'Managed PostgreSQL connection target is unavailable or could not be verified.',
+      name: 'ManagedPostgresConnectionError', code: 'target_unverified', message: 'Managed PostgreSQL connection target is unavailable or could not be verified.',
     });
+    expect(() => resolution.assertPinnedState()).toThrow(ManagedPostgresConnectionError);
     expect(() => resolution.verifyLiveIdentity(live(f))).toThrow('Managed PostgreSQL connection target is unavailable or could not be verified.');
   });
 

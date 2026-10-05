@@ -9,6 +9,7 @@ import {
   isNetworkUnreachableError,
   resolveDirectPoolSize,
   ConnectionManager,
+  ConnectionManagerTargetError,
   DEFAULT_DIRECT_POOL_SIZE,
 } from '../src/core/connection-manager.ts';
 
@@ -35,6 +36,97 @@ describe('isSupabasePoolerUrl', () => {
 
   test('handles malformed URL gracefully', () => {
     expect(isSupabasePoolerUrl('not a url')).toBe(false);
+  });
+});
+
+describe('ConnectionManager — managed single-pool mode', () => {
+  type Pool = ReturnType<typeof ConnectionManager.prototype.read>;
+  const managedPool = (end?: () => Promise<void>) => ({ end } as unknown as Pool);
+  const identity = 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000001';
+
+  test('read, DDL and bulk all use the verified pool despite hostile direct URL env', async () => {
+    const original = process.env.GBRAIN_DIRECT_DATABASE_URL;
+    try {
+      process.env.GBRAIN_DIRECT_DATABASE_URL = 'postgresql://u:p@host.invalid:5432/db';
+      const pool = managedPool();
+      const cm = new ConnectionManager({ managedIdentity: identity, managedPool: pool });
+      let directCalls = 0;
+      (cm as unknown as { initDirectPool(): Promise<Pool> }).initDirectPool = async () => { directCalls++; return pool; };
+      expect(cm.read()).toBe(pool);
+      expect(await cm.getReadPool()).toBe(pool);
+      expect(await cm.ddl()).toBe(pool);
+      expect(await cm.bulk()).toBe(pool);
+      expect(directCalls).toBe(0);
+      expect(cm.isDualPoolActive()).toBe(false);
+      expect(cm.describeMode().mode).toBe('managed single-pool');
+      expect(cm.describeMode().direct_host).toBeUndefined();
+      expect(cm.describeMode().direct_pool_size).toBe(0);
+      expect(cm.managedIdentity).toBe(identity);
+      expect(cm.isManagedMode).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.GBRAIN_DIRECT_DATABASE_URL;
+      else process.env.GBRAIN_DIRECT_DATABASE_URL = original;
+    }
+  });
+
+  test('managed disconnect never ends the externally owned pool; setReadPool refreshes it', async () => {
+    let ends = 0;
+    const first = managedPool(async () => { ends++; });
+    const refreshed = managedPool(async () => { ends++; });
+    const cm = new ConnectionManager({ managedIdentity: identity, managedPool: first });
+    cm.setReadPool(refreshed);
+    expect(cm.read()).toBe(refreshed);
+    expect(await cm.getReadPool()).toBe(refreshed);
+    await cm.disconnect();
+    expect(ends).toBe(0);
+    expect(cm.managedIdentity).toBe(identity);
+  });
+
+  test('same-identity parent shares pool; other identities and target modes refuse', () => {
+    const pool = managedPool();
+    const parent = new ConnectionManager({ managedIdentity: identity, managedPool: pool });
+    expect(new ConnectionManager({ managedIdentity: identity, parent }).read()).toBe(pool);
+    expect(new ConnectionManager({ managedIdentity: identity, parent, managedPool: pool }).read()).toBe(pool);
+    expect(() => new ConnectionManager({ managedIdentity: 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000002', parent })).toThrow(ConnectionManagerTargetError);
+    expect(() => new ConnectionManager({ managedIdentity: identity, parent, managedPool: managedPool() })).toThrow(ConnectionManagerTargetError);
+    expect(() => new ConnectionManager({ url: 'postgresql://u:p@localhost/db', parent })).toThrow(ConnectionManagerTargetError);
+    expect(() => new ConnectionManager({ managedIdentity: identity, managedPool: pool, parent: new ConnectionManager({ url: 'postgresql://u:p@localhost/db' }) })).toThrow(ConnectionManagerTargetError);
+  });
+
+  test('managed children follow parent refresh and cannot fork their pool', async () => {
+    const first = managedPool();
+    const refreshed = managedPool();
+    const parent = new ConnectionManager({ managedIdentity: identity, managedPool: first });
+    const child = new ConnectionManager({ managedIdentity: identity, parent });
+    expect(child.read()).toBe(first);
+    expect(await child.getReadPool()).toBe(first);
+    parent.setReadPool(refreshed);
+    expect(child.peekReadPool()).toBe(refreshed);
+    expect(child.read()).toBe(refreshed);
+    expect(await child.getReadPool()).toBe(refreshed);
+    child.setReadPool(refreshed);
+    expect(child.read()).toBe(refreshed);
+    expect(() => child.setReadPool(first)).toThrow(ConnectionManagerTargetError);
+  });
+
+  test('malformed mixed or missing managed options fail with fixed redacted error', () => {
+    for (const options of [
+      { managedIdentity: identity },
+      { managedIdentity: identity, managedPool: managedPool(), url: 'postgresql://secret@host/path' },
+      { managedIdentity: identity, managedPool: managedPool(), directUrl: 'postgresql://secret@host/path' },
+      { managedIdentity: 'postgres-managed:v1:gbrain-managed-postgres:fixture', managedPool: managedPool() },
+      { managedIdentity: '/private/secret/path', managedPool: managedPool(), extra: 'secret' },
+    ]) {
+      try {
+        new ConnectionManager(options as never);
+        throw new Error('expected invalid managed options to refuse');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConnectionManagerTargetError);
+        expect((error as Error).message).toBe('connection-manager: invalid or incompatible target');
+        expect((error as Error).message).not.toContain('secret');
+        expect((error as Error).message).not.toContain('/private');
+      }
+    }
   });
 });
 

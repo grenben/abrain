@@ -1,6 +1,7 @@
 import type { EngineConfig, ManagedPostgresReference } from './types.ts';
 
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MANAGED_IDENTITY = new RegExp(`^postgres-managed:v1:gbrain-managed-postgres:${CANONICAL_UUID.source.slice(1, -1)}$`);
 
 export type NormalizedEngineTarget =
   | { kind: 'pglite'; database_path?: string }
@@ -39,7 +40,16 @@ export function validateManagedPostgresReference(value: unknown): ManagedPostgre
 
 export function managedPostgresIdentity(reference: unknown): string {
   const valid = validateManagedPostgresReference(reference);
-  return `postgres-managed:v1:${valid.manager_id}:${valid.cluster_id}`;
+  return validateManagedPostgresIdentity(`postgres-managed:v1:${valid.manager_id}:${valid.cluster_id}`);
+}
+
+/** Validate the stable, non-secret identity used to bind managed pool targets. */
+export function validateManagedPostgresIdentity(value: unknown): string {
+  if (typeof value !== 'string') throw new EngineTargetError('managed PostgreSQL identity is invalid');
+  if (!MANAGED_IDENTITY.test(value)) {
+    throw new EngineTargetError('managed PostgreSQL identity is invalid');
+  }
+  return value;
 }
 
 /** Pure normalization: does not consult environment variables or the filesystem. */

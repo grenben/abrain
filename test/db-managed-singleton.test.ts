@@ -12,7 +12,10 @@ function dependencies(
   result: unknown,
   optionsSeen: (value: unknown) => void,
   closed: () => void,
-  overrides: { resolve?: (reference: unknown) => unknown; verify?: (value: unknown) => void; query?: () => Promise<unknown> } = {},
+  overrides: {
+    resolve?: (reference: unknown) => unknown; verify?: (value: unknown) => void;
+    query?: () => Promise<unknown>; pinned?: () => void; create?: () => never;
+  } = {},
 ) {
   return {
     resolve: ((reference: unknown) => {
@@ -20,12 +23,13 @@ function dependencies(
       return {
       identity: 'postgres-managed:v1:gbrain-managed-postgres:00000000-0000-4000-8000-000000000001',
       options: { path: '/private/socket/.s.PGSQL.5432', user: 'managed', database: 'app', port: 5432, password: async () => 'secret', ssl: false, debug: false },
+      assertPinnedState: () => { overrides.pinned?.(); },
       verifyLiveIdentity: (value: unknown) => {
         if (overrides.verify) return overrides.verify(value);
         if (!value || typeof value !== 'object' || (value as { data_directory?: string }).data_directory !== identity.data_directory) throw new Error('hostile /private/path');
       },
     }; }) as never,
-    create: ((...args: unknown[]) => { optionsSeen(args); return pool; }) as never,
+    create: ((...args: unknown[]) => { optionsSeen(args); if (overrides.create) return overrides.create(); return pool; }) as never,
     end: async () => { closed(); },
     configDir: () => '/private/config',
     query: async (_pool: unknown, query: string) => { expect(query).toBe(MANAGED_IDENTITY_QUERY); return overrides.query ? overrides.query() : result; },
@@ -63,7 +67,7 @@ describe('managed postgres candidate', () => {
     expect(result.pool).toBe(pool);
   });
 
-  test('rejects invalid identity results and hostile query/verifier errors with one close', async () => {
+  test('classifies malformed rows and verifier failures as target_unverified with one close', async () => {
     const malformed = [
       [], [{ identity: '{}' }, { identity: '{}' }], [{}], [{ identity: '{}', extra: 'hostile /private/path' }],
       [{ identity: null }], [{ identity: [] }], [{ identity: 42 }], [{ identity: '{hostile-secret' }],
@@ -71,7 +75,6 @@ describe('managed postgres candidate', () => {
     const cases: Array<{ query?: () => Promise<unknown>; verify?: (value: unknown) => void; result?: unknown }> = [
       ...malformed.map(result => ({ result })),
       { result: [{ identity }], verify: () => { throw new Error('/private/hostile-secret'); } },
-      { query: async () => { throw new Error('/private/hostile-secret'); } },
     ];
     for (const scenario of cases) {
       let closes = 0;
@@ -80,8 +83,33 @@ describe('managed postgres candidate', () => {
       let error: unknown;
       try { await failure; } catch (caught) { error = caught; }
       expect(error).toBeInstanceOf(ManagedPostgresPoolError);
+      expect((error as ManagedPostgresPoolError).kind).toBe('target_unverified');
+      expect((error as Error).message).toBe('Managed PostgreSQL pool could not be constructed or verified.');
       expect(String(error)).not.toMatch(/private|hostile|secret/i);
       expect(closes).toBe(1);
+    }
+  });
+
+  test('classifies factory, query, and resolver stages without exposing causes', async () => {
+    const message = 'Managed PostgreSQL pool could not be constructed or verified.';
+    const cases = [
+      { stage: 'factory', kind: 'unavailable', overrides: { create: () => { throw new Error('/secret/factory-path'); } }, closes: 0 },
+      { stage: 'query-valid-target', kind: 'unavailable', overrides: { query: async () => { throw new Error('/secret/query-path'); }, pinned: () => {} }, closes: 1 },
+      { stage: 'query-tampered-target', kind: 'target_unverified', overrides: { query: async () => { throw new Error('/secret/query-path'); }, pinned: () => { throw new Error('/secret/tamper-path'); } }, closes: 1 },
+      { stage: 'resolver', kind: 'target_unverified', overrides: { resolve: () => { throw new Error('/secret/resolver-path'); } }, closes: 0 },
+    ] as const;
+    for (const scenario of cases) {
+      let closes = 0;
+      const failure = createManagedPostgresCandidate(
+        validConfig, {}, dependencies([{ identity }], () => {}, () => closes++, scenario.overrides),
+      );
+      let error: unknown;
+      try { await failure; } catch (caught) { error = caught; }
+      expect(error).toBeInstanceOf(ManagedPostgresPoolError);
+      expect((error as ManagedPostgresPoolError).kind).toBe(scenario.kind);
+      expect((error as Error).message).toBe(message);
+      expect(String(error)).not.toMatch(/secret|path|tamper/i);
+      expect(closes).toBe(scenario.closes);
     }
   });
 
@@ -98,6 +126,8 @@ describe('managed postgres candidate', () => {
       let error: unknown;
       try { await createManagedPostgresCandidate(config as never, {}, deps); } catch (caught) { error = caught; }
       expect(error).toBeInstanceOf(ManagedPostgresPoolError);
+      expect((error as ManagedPostgresPoolError).kind).toBe('target_unverified');
+      expect((error as Error).message).toBe('Managed PostgreSQL pool could not be constructed or verified.');
       expect(String(error)).not.toMatch(/hostile|secret/i);
       expect([resolves, creates, closes]).toEqual([0, 0, 0]);
     }

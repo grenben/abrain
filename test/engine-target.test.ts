@@ -3,6 +3,7 @@ import {
   EngineTargetError,
   managedPostgresIdentity,
   normalizeEngineTarget,
+  validateManagedPostgresIdentity,
   validateManagedPostgresReference,
 } from '../src/core/engine-target.ts';
 
@@ -31,7 +32,9 @@ describe('managed PostgreSQL engine target', () => {
   });
 
   test('exports a stable identity and normalizes managed/url/PGLite targets', () => {
-    expect(managedPostgresIdentity(reference)).toBe(`postgres-managed:v1:gbrain-managed-postgres:${cluster}`);
+    const identity = managedPostgresIdentity(reference);
+    expect(identity).toBe(`postgres-managed:v1:gbrain-managed-postgres:${cluster}`);
+    expect(validateManagedPostgresIdentity(identity)).toBe(identity);
     expect(normalizeEngineTarget({ engine: 'postgres', managed_postgres: reference })).toEqual({
       kind: 'postgres-managed', managed_postgres: reference,
     });
@@ -41,6 +44,24 @@ describe('managed PostgreSQL engine target', () => {
     expect(normalizeEngineTarget({ engine: 'pglite', database_path: '/tmp/brain' })).toEqual({
       kind: 'pglite', database_path: '/tmp/brain',
     });
+  });
+
+  test('managed identity validator rejects malformed, noncanonical, and unknown identities without reflection', () => {
+    const secret = 'secret-value';
+    for (const invalid of [
+      null,
+      `postgres-managed:v1:gbrain-managed-postgres:${cluster.toUpperCase()}`,
+      `postgres-managed:v2:gbrain-managed-postgres:${cluster}`,
+      `postgres-managed:v1:other:${cluster}`,
+      `postgres-managed:v1:gbrain-managed-postgres:${secret}`,
+      `postgres-managed:v1:gbrain-managed-postgres:${cluster}:extra`,
+    ]) {
+      try { validateManagedPostgresIdentity(invalid); throw new Error('expected identity refusal'); } catch (error) {
+        expect(error).toBeInstanceOf(EngineTargetError);
+        expect((error as Error).message).not.toContain(secret);
+        expect((error as Error).message).not.toContain(String(invalid));
+      }
+    }
   });
 
   test('rejects managed target conflicts without reflecting target contents', () => {

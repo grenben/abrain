@@ -5,6 +5,7 @@ import { renderManagedPostgresConfig, verifyManagedPostgresLiveIdentity, type Li
 import { assertPrivateFile, managedPaths, readCredentials, readInitializationReceipt, readOwner, validateManagedDirectories, type ManagedPaths, type OwnerMetadata } from './ownership.ts';
 
 export class ManagedPostgresConnectionError extends Error {
+  readonly code = 'target_unverified' as const;
   constructor() {
     super('Managed PostgreSQL connection target is unavailable or could not be verified.');
     this.name = 'ManagedPostgresConnectionError';
@@ -25,6 +26,7 @@ export interface ManagedPostgresConnectionResolution {
   identity: string;
   reference: { manager_id: 'gbrain-managed-postgres'; cluster_id: string };
   options: ManagedPostgresDriverOptions;
+  assertPinnedState(): void;
   verifyLiveIdentity(value: unknown): LiveIdentity;
 }
 
@@ -73,24 +75,27 @@ export function resolveManagedPostgresConnection(
     const initial = proveConnectionState(validReference, configDir, uid);
     // Pin provenance as well as connection fields; lastFailure is diagnostic and may change independently.
     const { lastFailure: _ignoredFailure, ...pinnedOwner } = initial.owner;
-    const verifyLiveIdentity = (value: unknown): LiveIdentity => {
+    const readPinnedState = () => {
       try {
         const current = proveConnectionState(validReference, configDir, uid);
         if (!samePinnedOwner(current.owner, pinnedOwner)) throw new Error();
+        return current;
+      } catch { throw new ManagedPostgresConnectionError(); }
+    };
+    const assertPinnedState = (): void => { readPinnedState(); };
+    const verifyLiveIdentity = (value: unknown): LiveIdentity => {
+      readPinnedState();
+      try {
         const verified = verifyManagedPostgresLiveIdentity(value, pinnedOwner, initial.paths, pinnedOwner.database);
         if (!verified) throw new Error();
         return verified;
       } catch { throw new ManagedPostgresConnectionError(); }
     };
     const password = async (): Promise<string> => {
-      try {
-        const current = proveConnectionState(validReference, configDir, uid);
-        if (!samePinnedOwner(current.owner, pinnedOwner)) throw new Error();
-        return current.password;
-      } catch { throw new ManagedPostgresConnectionError(); }
+      return readPinnedState().password;
     };
     return {
-      identity: managedPostgresIdentity(validReference), reference: validReference, verifyLiveIdentity,
+      identity: managedPostgresIdentity(validReference), reference: validReference, assertPinnedState, verifyLiveIdentity,
       options: {
         path: join(initial.owner.socketPath, `.s.PGSQL.${initial.owner.port}`), port: initial.owner.port,
         database: initial.owner.database, user: initial.owner.role, ssl: false, debug: false, password,

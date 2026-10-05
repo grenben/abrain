@@ -5,9 +5,11 @@ import { MANAGED_IDENTITY_QUERY } from './managed-postgres/identity.ts';
 import { normalizeEngineTarget } from './engine-target.ts';
 
 export class ManagedPostgresPoolError extends Error {
-  constructor() {
+  readonly kind: 'unavailable' | 'target_unverified';
+  constructor(kind: 'unavailable' | 'target_unverified' = 'target_unverified') {
     super('Managed PostgreSQL pool could not be constructed or verified.');
     this.name = 'ManagedPostgresPoolError';
+    this.kind = kind;
   }
 }
 
@@ -43,24 +45,50 @@ export async function createManagedPostgresCandidate(
   poolOptions: Record<string, unknown>,
   deps: ManagedPostgresPoolDependencies,
 ): Promise<ManagedPostgresCandidate> {
-  let pool: Pool | null = null;
+  let target;
   try {
-    const target = normalizeEngineTarget(config);
+    target = normalizeEngineTarget(config);
     if (target.kind !== 'postgres-managed') throw new Error();
-    const resolution: ManagedPostgresConnectionResolution = deps.resolve(
-      target.managed_postgres,
-      { configDir: deps.configDir() },
-    );
-    // Resolver-owned connection fields deliberately override any shared options.
+  } catch {
+    throw new ManagedPostgresPoolError('target_unverified');
+  }
+
+  let resolution: ManagedPostgresConnectionResolution;
+  try {
+    resolution = deps.resolve(target.managed_postgres, { configDir: deps.configDir() });
+  } catch {
+    throw new ManagedPostgresPoolError('target_unverified');
+  }
+
+  let pool: Pool;
+  try {
+    // Resolver-owned connection fields deliberately override shared options.
     pool = deps.create({ ...poolOptions, ...resolution.options } as never);
-    const result = deps.query
+  } catch {
+    throw new ManagedPostgresPoolError('unavailable');
+  }
+
+  let result: unknown;
+  try {
+    result = deps.query
       ? await deps.query(pool, MANAGED_IDENTITY_QUERY)
       : await pool.unsafe(MANAGED_IDENTITY_QUERY);
-    const identity = normalizeIdentityRows(result);
-    resolution.verifyLiveIdentity(identity);
-    return { pool, identity: resolution.identity };
   } catch {
-    if (pool) await deps.end(pool).catch(() => {});
-    throw new ManagedPostgresPoolError();
+    try { resolution.assertPinnedState(); }
+    catch { await closeCandidate(pool, deps); throw new ManagedPostgresPoolError('target_unverified'); }
+    await closeCandidate(pool, deps);
+    throw new ManagedPostgresPoolError('unavailable');
   }
+
+  let identity: unknown;
+  try { identity = normalizeIdentityRows(result); }
+  catch { await closeCandidate(pool, deps); throw new ManagedPostgresPoolError('target_unverified'); }
+
+  try { resolution.verifyLiveIdentity(identity); }
+  catch { await closeCandidate(pool, deps); throw new ManagedPostgresPoolError('target_unverified'); }
+  return { pool, identity: resolution.identity };
+}
+
+async function closeCandidate(pool: Pool, deps: ManagedPostgresPoolDependencies): Promise<void> {
+  try { await deps.end(pool); } catch { /* cleanup cannot alter classification */ }
 }

@@ -40,10 +40,11 @@ import postgres from '#postgres'
 import { resolvePrepare, resolveSessionTimeouts, resolvePoolSize, resolveMaxLifetimeSeconds, endPoolBounded } from './db.ts';
 import { redactPgUrl } from './url-redact.ts';
 import { logConnectionEvent } from './connection-audit.ts';
+import { validateManagedPostgresIdentity } from './engine-target.ts';
 
 export type Sql = ReturnType<typeof postgres>;
 
-export interface ConnectionManagerOpts {
+interface UrlConnectionManagerOpts {
   /** Primary URL — usually the pooler (port 6543) on Supabase. */
   url: string;
   /**
@@ -71,6 +72,28 @@ export interface ConnectionManagerOpts {
    * not call .end() on disconnect(). Default false (we own both pools).
    */
   readPoolOwnedExternally?: boolean;
+}
+
+/** A verified managed pool is supplied by its owner; this manager never owns it. */
+export interface ManagedConnectionManagerOpts {
+  managedIdentity: string;
+  managedPool?: Sql;
+  parent?: ConnectionManager;
+  url?: never;
+  directUrl?: never;
+  readPoolSize?: never;
+  directPoolSize?: never;
+  readPoolOwnedExternally?: never;
+}
+
+export type ConnectionManagerOpts = UrlConnectionManagerOpts | ManagedConnectionManagerOpts;
+
+/** Fixed, secret/path-free refusal for malformed or incompatible targets. */
+export class ConnectionManagerTargetError extends Error {
+  constructor() {
+    super('connection-manager: invalid or incompatible target');
+    this.name = 'ConnectionManagerTargetError';
+  }
 }
 
 /** Default direct-pool size (P1 raised from 2 to 3). Override via env. */
@@ -263,6 +286,8 @@ export function resolveDirectPoolSize(explicit?: number): number {
 
 export class ConnectionManager {
   private readonly opts: ConnectionManagerOpts;
+  private readonly _managedIdentity: string | null;
+  private readonly _managedParent: ConnectionManager | null = null;
   private _readPool: Sql | null = null;
   private _readPoolOwnedExternally: boolean;
   private _directInit: Promise<Sql | null> | null = null;
@@ -278,7 +303,53 @@ export class ConnectionManager {
   private _sessionFallbackLogged = false;
 
   constructor(opts: ConnectionManagerOpts) {
+    const rawOpts = opts as unknown as Record<string, unknown>;
+    const managed = Object.prototype.hasOwnProperty.call(rawOpts, 'managedIdentity');
+    if (managed) {
+      let managedIdentity: string;
+      try { managedIdentity = validateManagedPostgresIdentity(rawOpts.managedIdentity); }
+      catch { throw new ConnectionManagerTargetError(); }
+      if (Object.keys(rawOpts).some(key => !['managedIdentity', 'managedPool', 'parent'].includes(key)) ||
+          Object.prototype.hasOwnProperty.call(rawOpts, 'url') ||
+          Object.prototype.hasOwnProperty.call(rawOpts, 'directUrl') ||
+          Object.prototype.hasOwnProperty.call(rawOpts, 'readPoolSize') ||
+          Object.prototype.hasOwnProperty.call(rawOpts, 'directPoolSize') ||
+          Object.prototype.hasOwnProperty.call(rawOpts, 'readPoolOwnedExternally')) {
+        throw new ConnectionManagerTargetError();
+      }
+      const parent = rawOpts.parent;
+      let pool = rawOpts.managedPool as Sql | undefined;
+      if (parent !== undefined) {
+        if (!(parent instanceof ConnectionManager) || parent.managedIdentity !== managedIdentity) {
+          throw new ConnectionManagerTargetError();
+        }
+        const parentPool = parent.peekReadPool();
+        if (!parentPool || (pool !== undefined && pool !== parentPool)) throw new ConnectionManagerTargetError();
+        pool = parentPool;
+      } else if (!pool) {
+        throw new ConnectionManagerTargetError();
+      }
+      if (!pool) throw new ConnectionManagerTargetError();
+      this.opts = opts;
+      this._managedIdentity = managedIdentity;
+      this._managedParent = parent instanceof ConnectionManager ? parent : null;
+      this._readPool = this._managedParent ? null : pool;
+      this._readPoolOwnedExternally = true;
+      this._killSwitch = false;
+      this._isSupabase = false;
+      this._directUrl = null;
+      return;
+    }
+    if (typeof rawOpts.url !== 'string' || rawOpts.url.length === 0 ||
+        Object.prototype.hasOwnProperty.call(rawOpts, 'managedPool')) {
+      throw new ConnectionManagerTargetError();
+    }
+    if (rawOpts.parent !== undefined &&
+        (!(rawOpts.parent instanceof ConnectionManager) || rawOpts.parent.isManagedMode)) {
+      throw new ConnectionManagerTargetError();
+    }
     this.opts = opts;
+    this._managedIdentity = null;
     this._readPoolOwnedExternally = opts.readPoolOwnedExternally === true;
 
     // A2: kill-switch resolution. Parent overrides env when present.
@@ -291,12 +362,12 @@ export class ConnectionManager {
       this._readPoolOwnedExternally = true; // never end the parent's pool
     } else {
       this._killSwitch = readKillSwitchEnv();
-      this._isSupabase = isSupabasePoolerUrl(opts.url);
+      this._isSupabase = isSupabasePoolerUrl(opts.url!);
       // Direct URL: explicit override > env > derive > null. Pooler-shaped
       // overrides are normalized to a real direct host (or dropped).
       const envOverride = process.env.GBRAIN_DIRECT_DATABASE_URL;
       const override = opts.directUrl ?? envOverride;
-      this._directUrl = normalizeDirectUrl(opts.url, override);
+      this._directUrl = normalizeDirectUrl(opts.url!, override);
       // #1915: an operator override is respected as-is — never second-guessed
       // with the session-pooler retry. Only auto-derived URLs may fall back.
       this._directUrlAutoDerived = override == null;
@@ -313,6 +384,9 @@ export class ConnectionManager {
   }
 
   isSupabase(): boolean { return this._isSupabase; }
+  /** Read-only target identity for validating child engine targets. */
+  get managedIdentity(): string | null { return this._managedIdentity; }
+  get isManagedMode(): boolean { return this._managedIdentity !== null; }
   isKillSwitchActive(): boolean { return this._killSwitch; }
   resolveDirectUrl(): string | null { return this._directUrl; }
   isDirectUrlAutoDerived(): boolean { return this._directUrlAutoDerived; }
@@ -321,13 +395,25 @@ export class ConnectionManager {
    * Internal: peek at the read pool without forcing init. Used by parent
    * inheritance to share the same instance.
    */
-  peekReadPool(): Sql | null { return this._readPool; }
+  peekReadPool(): Sql | null {
+    if (this.isManagedMode && this._managedParent) return this._managedParent.peekReadPool();
+    return this._readPool;
+  }
 
   /**
    * Set the read pool. Used by db.ts:connect or PostgresEngine.connect when
    * they own the pool externally (and connection-manager is just routing).
    */
   setReadPool(sql: Sql): void {
+    if (this.isManagedMode) {
+      if (this._managedParent) {
+        if (sql !== this._managedParent.peekReadPool()) throw new ConnectionManagerTargetError();
+        return;
+      }
+      this._readPool = sql;
+      this._readPoolOwnedExternally = true;
+      return;
+    }
     this._readPool = sql;
     this._readPoolOwnedExternally = true;
   }
@@ -337,7 +423,13 @@ export class ConnectionManager {
    * we don't double-create when db.ts:connect already owns the singleton.
    */
   async getReadPool(): Promise<Sql> {
+    if (this.isManagedMode && this._managedParent) {
+      const pool = this._managedParent.peekReadPool();
+      if (pool) return pool;
+      throw new ConnectionManagerTargetError();
+    }
     if (this._readPool) return this._readPool;
+    if (this.isManagedMode) throw new ConnectionManagerTargetError();
     if (this._readPoolOwnedExternally) {
       throw new Error('connection-manager: read pool marked as externally-owned but not provided');
     }
@@ -351,9 +443,9 @@ export class ConnectionManager {
     };
     const timeouts = resolveSessionTimeouts();
     if (Object.keys(timeouts).length > 0) opts.connection = timeouts;
-    const prepare = resolvePrepare(this.opts.url);
+    const prepare = resolvePrepare(this.opts.url!);
     if (typeof prepare === 'boolean') opts.prepare = prepare;
-    this._readPool = postgres(this.opts.url, opts);
+    this._readPool = postgres(this.opts.url!, opts);
     logConnectionEvent({ pool: 'read', op: 'init' });
     return this._readPool;
   }
@@ -364,6 +456,11 @@ export class ConnectionManager {
    * Throws if pool not ready.
    */
   read(): Sql {
+    if (this.isManagedMode && this._managedParent) {
+      const pool = this._managedParent.peekReadPool();
+      if (pool) return pool;
+      throw new ConnectionManagerTargetError();
+    }
     if (!this._readPool) {
       throw new Error('connection-manager: read pool not initialized; call getReadPool() first or set externally');
     }
@@ -378,6 +475,7 @@ export class ConnectionManager {
    * await the same init instead of racing two pool constructions.
    */
   async ddl(): Promise<Sql> {
+    if (this.isManagedMode) return this.read();
     if (!this.isDualPoolActive()) {
       return this.getReadPool();
     }
@@ -391,6 +489,7 @@ export class ConnectionManager {
    * + caller-side timeout SET LOCAL).
    */
   async bulk(_timeoutSeconds?: number): Promise<Sql> {
+    if (this.isManagedMode) return this.read();
     if (!this.isDualPoolActive()) {
       return this.getReadPool();
     }
@@ -438,7 +537,7 @@ export class ConnectionManager {
             if (this._sessionInit) {
               return await this._sessionInit;
             }
-            const sessionUrl = deriveSessionPoolerUrl(this.opts.url);
+            const sessionUrl = deriveSessionPoolerUrl(this.opts.url!);
             if (sessionUrl && sessionUrl !== this._directUrl) {
               const prevHost = this._directUrl ? this.hostOnly(this._directUrl) : 'unknown host';
               this._directUrl = sessionUrl;
@@ -561,6 +660,7 @@ export class ConnectionManager {
    * (db.ts singleton path). Direct pool is always ours.
    */
   async disconnect(): Promise<void> {
+    if (this.isManagedMode) return;
     // #1972: end both pools concurrently with a gbrain-owned hard bound, so the
     // per-pool drains don't STACK (sequential 2s waits → ~4-6s once the
     // instance/module pool is added downstream) and neither can hang teardown
@@ -582,21 +682,22 @@ export class ConnectionManager {
    * Diagnostic snapshot for doctor / get_health surfaces.
    */
   describeMode(): {
-    mode: 'split' | 'single (kill-switch)' | 'single (non-supabase)' | 'single (no-direct-url)';
+    mode: 'split' | 'single (kill-switch)' | 'single (non-supabase)' | 'single (no-direct-url)' | 'managed single-pool';
     direct_host?: string;
     kill_switch_active: boolean;
     direct_pool_size: number;
   } {
-    let mode: 'split' | 'single (kill-switch)' | 'single (non-supabase)' | 'single (no-direct-url)';
-    if (this.isDualPoolActive()) mode = 'split';
+    let mode: 'split' | 'single (kill-switch)' | 'single (non-supabase)' | 'single (no-direct-url)' | 'managed single-pool';
+    if (this.isManagedMode) mode = 'managed single-pool';
+    else if (this.isDualPoolActive()) mode = 'split';
     else if (this._killSwitch && (this._isSupabase || this._directUrl)) mode = 'single (kill-switch)';
     else if (!this._isSupabase) mode = 'single (non-supabase)';
     else mode = 'single (no-direct-url)';
     return {
       mode,
-      direct_host: this._directUrl ? this.hostOnly(this._directUrl) : undefined,
+      direct_host: !this.isManagedMode && this._directUrl ? this.hostOnly(this._directUrl) : undefined,
       kill_switch_active: this._killSwitch,
-      direct_pool_size: resolveDirectPoolSize(this.opts.directPoolSize),
+      direct_pool_size: this.isManagedMode ? 0 : resolveDirectPoolSize(this.opts.directPoolSize),
     };
   }
 
