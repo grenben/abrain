@@ -158,7 +158,7 @@ RRF fusion, multi-query expansion, and 4-layer dedup are engine-agnostic. They o
 - JSONB for frontmatter with GIN index
 - Connection pooling via Supabase Supavisor (port 6543)
 
-**Hosting:** Supabase Pro ($25/mo, zero-ops, pgvector built in) is the managed path; self-hosted Postgres + pgvector (Docker or Homebrew — see the "Local Postgres" section below) works the same.
+**Hosting:** Supabase Pro ($25/mo, pgvector built in) is the hosted zero-operations path; GBrain-managed local PostgreSQL is a separate macOS opt-in lifecycle. Self-hosted Postgres + pgvector (Docker or Homebrew — see the "Local Postgres" section below) works the same.
 
 Current-projection filters use `(text_projection_revision = knowledge_revision)
 IS TRUE` with matching expression statistics, rather than relying on the

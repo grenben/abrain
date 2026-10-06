@@ -1,11 +1,12 @@
 # CLAUDE.md
 
-GBrain is a personal knowledge brain and GStack mod for agent platforms. Pluggable
-engines: PGLite (embedded Postgres via WASM, zero-config default) or Postgres + pgvector
-+ hybrid search in a managed Supabase instance. `gbrain init` defaults to PGLite;
-suggests Supabase for 1000+ files. GStack teaches agents how to code. GBrain teaches
-agents everything else: brain ops, signal detection, content ingestion, enrichment,
-cron scheduling, reports, identity, and access control.
+> **Read and follow canonical [`AGENTS.md`](./AGENTS.md) first.** This file is
+> repository orientation and Claude-specific compatibility.
+
+GBrain: a knowledge-brain GStack mod. Engines: PGLite (embedded
+Postgres/WASM, zero-config default) or Postgres + pgvector/hybrid search in
+Supabase. Init suggests Supabase at 1000+ files. GStack teaches coding; GBrain
+covers brain ops, signals, ingestion/enrichment, scheduling, reports, identity/access.
 
 ## North Star
 
@@ -140,15 +141,15 @@ Per-file detail is in `docs/architecture/KEY_FILES.md`.
 
 ## Reference map (load on demand)
 
-CLAUDE.md is the always-loaded orientation + dispatcher. Detailed reference loads
-on demand — read the linked doc before working in that area.
+After canonical `AGENTS.md`, CLAUDE.md is Claude's always-loaded compatibility and
+orientation layer. Load detailed references on demand before working in that area.
 
 | When you're working on... | Read first |
 |---|---|
 | any file in `src/` (what it does + its invariants) | `docs/architecture/KEY_FILES.md` — choose the subsystem, then find the file's entry |
 | search / ranking / hybrid / retrieval | `docs/architecture/RETRIEVAL.md` + the `search/*` entries in `KEY_FILES.md` |
 | search modes / cost knobs | `docs/guides/search-modes.md` |
-| engine detection / Postgres adoption / DB-access repair / degraded serve (`engine status`, `db-repair`, `init --prefer-postgres`, `GBRAIN_DB_ACCESS`) | `docs/ENGINES.md` ("Engine detection and access repair" + "Local Postgres") |
+| engine detection / Postgres adoption / DB-access repair / degraded serve (`engine status`, `db-repair`, `init --prefer-postgres`, `init --managed-postgres`, managed lifecycle, `GBRAIN_DB_ACCESS`) | `docs/ENGINES.md` ("Engine detection and access repair" + "Local Postgres") |
 | embedding spend gates / cost gate / `spend.posture` / off switches | `docs/operations/spend-controls.md` |
 | the monthly backup-coverage check (`gbrain backup`, render channels, nag budget) | `docs/operations/backup-check.md` + the `backup/*` entries in `KEY_FILES.md` |
 | push-based context (volunteer/watch/reflex window) | `docs/guides/push-context.md` |

@@ -76,6 +76,35 @@ The init flow detects your repo size and suggests Supabase for brains > 1000 mar
 gbrain init --prefer-postgres    # env URL → Supabase token discovery → local Postgres → opt-in docker → PGLite
 ```
 
+### Optional: GBrain-managed local PostgreSQL (macOS)
+
+For a fresh brain on macOS, explicitly choose `gbrain init --managed-postgres` to
+use a GBrain-owned native PostgreSQL 17 + pgvector cluster. It needs neither
+Docker nor Supabase. Bare `gbrain init` and `--prefer-postgres` are unchanged;
+the connection ladder does not provision this cluster. This is only for a fresh
+GBrain-owned setup: it does not adopt or convert an existing PGLite brain, or
+repoint manual-URL, remote, thin-client, or foreign/user-managed Postgres config.
+
+First establishment is database-only, keyless, and defers embeddings. It does
+not onboard content, providers, or search mode, nor start login-start or a
+background service. If packages are already ready, run:
+
+```bash
+gbrain init --managed-postgres --yes
+```
+
+If init reports missing packages, review the plan and rerun with the exact
+`<fingerprint>` it printed:
+
+```bash
+gbrain init --managed-postgres --yes --install-packages \
+  --package-plan-fingerprint <fingerprint>
+```
+
+`--yes` does not authorize package installation by itself. For pre-commit
+failure, publication uncertainty, and committed-cleanup outcomes, follow the
+recovery guidance in [Fresh database with managed init](ENGINES.md#fresh-database-with-managed-init).
+
 To switch later:
 
 ```bash
@@ -210,6 +239,10 @@ version of the recovery ladder:
    `gbrain pglite-repair --yes`.
 3. **Rebuild:** `gbrain reinit-pglite`.
 4. **Switch engines:** Supabase or native Homebrew Postgres + pgvector.
+
+`gbrain init --managed-postgres` is not a repair or switch path for an existing
+PGLite brain. Use the guarded migration flow to move an existing brain; managed
+init is only for fresh GBrain-owned local databases.
 
 The full ladder — safety bounds, kill-switches, when WAL repair can't help,
 and the Homebrew Postgres recipe — lives in

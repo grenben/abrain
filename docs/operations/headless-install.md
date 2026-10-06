@@ -2,6 +2,13 @@
 
 `gbrain init --pglite` in a non-TTY context (Docker `RUN`, CI step, postinstall hook) with no embedding-provider API key continues **keyless** (keyword-only search) with a loud notice — a first-class supported end state, not an error (Pattern 3 below). Init reads keys from the environment or from `~/.gbrain/config.json` (env wins). Two fail-louds remain: a near-miss env var name (e.g. `OPENAPI_API_KEY`) exits 1 with the corrected spelling instead of being silently ignored, and multiple keys with no canonical candidate exit 1 asking for an explicit `--embedding-model`.
 
+The patterns on this page are PGLite/container-oriented. macOS CI explicitly
+choosing GBrain-managed native PostgreSQL should follow
+[Fresh database with managed init](../ENGINES.md#fresh-database-with-managed-init):
+it requires `--yes` and, when packages are missing, separate consent with the
+exact package-plan fingerprint. This is not a Docker/Linux replacement and does
+not configure login-start.
+
 Three patterns work for headless installs. Pick whichever fits your image lifecycle.
 
 ## Pattern 1: Provider key available at image build time

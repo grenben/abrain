@@ -1,8 +1,10 @@
 # Agents working on GBrain
 
-This is your install + operating protocol. Claude Code reads `./CLAUDE.md` automatically.
-Everyone else (Codex, Cursor, OpenClaw, Aider, Continue, or an LLM fetching via URL):
-start here.
+This is the canonical shared install + operating protocol for all agents. Claude Code
+auto-loads `./CLAUDE.md`, which points here; Claude Code must read and follow this file
+first. Codex, Cursor, Hermes, OpenClaw, and other agents should start here directly or
+be explicitly configured to load it. Discovery depends on the harness, not the model
+provider or subscription; do not assume Hermes automatically loads this file.
 
 > **Default: add memory to the existing agent.** Preserve its identity and unrelated instructions. Start keyless; automatic capture and paid enrichment are opt-in. No bootstrap interview or private repository is required.
 >
