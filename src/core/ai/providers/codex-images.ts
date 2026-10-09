@@ -1,4 +1,5 @@
 import { CODEX_PROPOSAL_LIMITS as limits, CodexProposalError } from './codex-contract.ts';
+import { validatePngContainer } from './codex-png.ts';
 
 export interface CodexImage { mime: 'image/png' | 'image/jpeg' | 'image/webp'; bytes: Uint8Array }
 
@@ -45,6 +46,7 @@ export function validateCodexImages(images: readonly CodexImage[]): CodexImage[]
       } else return fail();
     } else return fail();
     if (!width || !height || width * height > limits.imagePixels) return fail();
+    if (image.mime === 'image/png') validatePngContainer(b);
     return { mime: image.mime, bytes: b };
   });
 }

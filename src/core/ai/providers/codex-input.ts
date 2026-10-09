@@ -4,9 +4,10 @@ import { prepareCodexSchema } from './codex-schema.ts';
 import { validateCodexImages } from './codex-images.ts';
 import { codexEnvironment } from './codex-process.ts';
 import type { CodexProposalInput } from './codex-proposal.ts';
+import { decodePngPixels } from './codex-png.ts';
 
 /** Validate and snapshot before admission/hashing or any await. */
-export function prepareCodexInput(input: CodexProposalInput) {
+export async function prepareCodexInput(input: CodexProposalInput) {
   if (input.signal?.aborted) throw new CodexProposalError('aborted');
   const prepared = prepareCodexSchema(input.schema);
   const timeoutMs = input.timeoutMs ?? limits.timeoutMs;
@@ -19,6 +20,12 @@ export function prepareCodexInput(input: CodexProposalInput) {
     throw new CodexProposalError('invalid_input');
   }
   const images = validateCodexImages(input.images ?? []);
-  return { prepared, input: { ...input, schema:prepared.schema, images, timeoutMs, maxOutputBytes,
-    env:codexEnvironment(input.env ?? process.env) } };
+  const snapshot = { ...input, schema:prepared.schema, images, timeoutMs, maxOutputBytes,
+    env:codexEnvironment(input.env ?? process.env) };
+  for (const image of images) {
+    if (snapshot.signal?.aborted) throw new CodexProposalError('aborted');
+    if (image.mime === 'image/png') await decodePngPixels(image.bytes);
+  }
+  if (snapshot.signal?.aborted) throw new CodexProposalError('aborted');
+  return { prepared, input: snapshot };
 }

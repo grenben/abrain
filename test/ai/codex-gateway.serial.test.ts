@@ -9,6 +9,7 @@ import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { BudgetTracker } from '../../src/core/budget/budget-tracker.ts';
+import { PNG_PIXEL, syntheticPng } from '../helpers/codex-image-fixtures.ts';
 const root=mkdtempSync(join(tmpdir(),'codex-gateway-')); const bin=join(root,'fixture.mjs'), capture=join(root,'capture.jsonl');
 const saved=Object.fromEntries(['GBRAIN_HOME','HOME','CODEX_HOME'].map(k=>[k,process.env[k]]));
 const originalFetch=globalThis.fetch;
@@ -59,7 +60,7 @@ test('gateway transports caller schema to the real adapter and retains unknown m
 });
 test('valid empty expansion/OCR remains distinct from provider failure and uses image argv',async()=>{
   expect(await withRun(()=>expand('synthetic search'))).toEqual(['synthetic search']);
-  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=','base64');
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPgUbL4DwACCgFmeGgpMwAAAABJRU5ErkJggg==','base64');
   expect(await withRun(()=>generateOcrText(png,'image/png'))).toBe('');
   const last=JSON.parse(readFileSync(capture,'utf8').trim().split('\n').at(-1)!);expect(last.args).toContain('--image');
 });
@@ -68,6 +69,18 @@ test('one-shot callers do not acquire native tools, exhaustion refuses a second 
   await withRun(async()=>{
     await chat({messages:[{role:'user',content:'first'}]});
     await expect(chat({messages:[{role:'user',content:'second'}]})).rejects.toMatchObject({code:'subscription_exhausted'});
+  },1);
+});
+
+test('corrupt OCR pixels consume no attempt and never reach the executable',async()=>{
+  const callsBefore=readFileSync(capture,'utf8');
+  const before=await engine.executeRaw<{n:number|string}>('SELECT COUNT(*) AS n FROM codex_subscription_attempts');
+  await withRun(async()=>{
+    await expect(generateOcrText(syntheticPng({pixels:Uint8Array.of(0)}),'image/png')).rejects.toMatchObject({reason:'invalid_input'});
+    expect(readFileSync(capture,'utf8')).toBe(callsBefore);
+    const after=await engine.executeRaw<{n:number|string}>('SELECT COUNT(*) AS n FROM codex_subscription_attempts');
+    expect(Number(after[0]!.n)).toBe(Number(before[0]!.n));
+    expect(await generateOcrText(PNG_PIXEL,'image/png')).toBe('');
   },1);
 });
 

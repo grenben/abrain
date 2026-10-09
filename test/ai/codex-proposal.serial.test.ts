@@ -10,7 +10,7 @@ const root = await mkdtemp(join(tmpdir(), 'codex-proposal-test-'));
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
 const env = { PATH: '/usr/bin:/bin', HOME: root, CODEX_HOME: root, OPENAI_API_KEY: 'synthetic-tripwire', ANTHROPIC_API_KEY: 'synthetic-tripwire' };
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=', 'base64');
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPgUbL4DwACCgFmeGgpMwAAAABJRU5ErkJggg==', 'base64');
 let sequence = 0;
 async function fake(mode: string): Promise<{ bin: string; capture: string }> {
   const bin = join(root, `codex-${mode}-${sequence++}.mjs`);

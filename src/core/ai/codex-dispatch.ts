@@ -11,7 +11,7 @@ export async function dispatchCodexProposal(original: CodexProposalInput): Promi
   const context = codexSubscriptionContext();
   if (!context) throw new SubscriptionAdmissionError('subscription_required');
   const signals = [original.signal, context.signal].filter((s): s is AbortSignal => s !== undefined);
-  const { input } = prepareCodexInput({ ...original, signal: signals.length ? AbortSignal.any(signals) : undefined });
+  const { input } = await prepareCodexInput({ ...original, signal: signals.length ? AbortSignal.any(signals) : undefined });
   await context.checkAuthority?.();
   await assertCodexRuntimeQualified(input.bin);
   const requestHash = createHash('sha256').update(JSON.stringify({protocol:'codex-proposal-v1',bin:input.bin,model:input.model,prompt:input.prompt,schema:input.schema,timeoutMs:input.timeoutMs,maxOutputBytes:input.maxOutputBytes,

@@ -26,7 +26,7 @@ export interface CodexProposalResult {
 
 /** Hold durable admission until settled; termination_unconfirmed retains its lane. */
 export async function runCodexProposal(original: CodexProposalInput): Promise<CodexProposalResult> {
-  const { input, prepared } = prepareCodexInput(original);
+  const { input, prepared } = await prepareCodexInput(original);
   const { images, timeoutMs, maxOutputBytes } = input;
   await assertCodexRuntimeQualified(input.bin);
   const scratch = await mkdtemp(join(tmpdir(), 'gbrain-codex-proposal-'));

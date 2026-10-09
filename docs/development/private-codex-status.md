@@ -36,7 +36,7 @@ The installed artifact has not changed. Private activation and live verification
 
 | Area | Installed | Source before | Source now | Evidence / remaining work |
 |---|---|---|---|---|
-| A. Schema/image transport and lifecycle | absent | partial prototype | partial | `codex-proposal`, `codex-input`, `codex-schema`, `codex-lifecycle`, `codex-process` and fake executable tests. Real schema file/argv, JSONL completion, local validation, private scratch, filtered env, process-group settlement. Runtime native-action/instruction isolation remains unqualified; image validation currently checks bounded container headers/dimensions, not a full codec decode. Windows process trees unsupported. |
+| A. Schema/image transport and lifecycle | absent | partial prototype | partial | `codex-proposal`, `codex-input`, `codex-schema`, `codex-lifecycle`, `codex-process` and fake executable tests. Real schema file/argv, JSONL completion, local validation, private scratch, filtered env, process-group settlement. Runtime native-action/instruction isolation remains unqualified; PNG validation checks complete chunks, bounded inflation and decoded pixels before admission; JPEG/WebP still have header/dimension checks only. Windows process trees unsupported. |
 | B. Strict routing | absent | absent | partial | `private-policy`, gateway/provider construction guards, `model-config`, special atom resolver, and legacy subagent entry gate. Explicit conflicting pins fail; default roles choose the configured Codex model. Complete queue/eval/pin-plane coverage remains open. |
 | C. Subscription accounting | absent | absent | partial | `subscription-admission`, migration v223, `codex-dispatch`, async host scopes, honest null costs, independent auxiliary USD guards. PGLite and native PostgreSQL tests cover account concurrency, immutable envelopes, bounds, stale ownership and unresolved retention. Queue/worker binding is implemented below; explicit CLI and two scheduled producers now issue allowances; other producers and durable operator reconciliation remain open. The lane is shared within one brain DB, not across unrelated DBs. |
 | D. Bounded feature coverage | absent | absent | partial | Actual gateway chat/expansion/OCR use the proposal path; schema/image transport and valid empty outcomes tested. `private-roles` inventories roles without claiming feature acceptance. Semantic validation, citations, cache identity and failure/watermark behavior require role-by-role fixtures and fixes. |
@@ -178,6 +178,9 @@ hooks fail; inherited managed configuration/instructions/plugins cannot change
 that; images are handled only through the verified image interface; and process
 containment settles descendants, including attempts to detach. Fake tests prove
 GBrain transport and accounting, not those native runtime properties.
+
+The [image-validation follow-up](private-codex-images.md) records the current
+runtime blocker and complete PNG checks; JPEG/WebP pixel decoding remains pending.
 
 ## Verification
 

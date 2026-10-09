@@ -25,6 +25,8 @@ import { readFileSync } from 'node:fs';
 
 import heicDecode from 'heic-decode';
 import avifDecode, { init as initAvif } from '@jsquash/avif/decode.js';
+import { prepareCodexInput } from '../src/core/ai/providers/codex-input.ts';
+import { PNG_PIXEL, syntheticPng } from '../test/helpers/codex-image-fixtures.ts';
 
 interface DecodeResult {
   ok: boolean;
@@ -75,6 +77,18 @@ async function decodeAvif(): Promise<DecodeResult> {
 
 const heic = await decodeHeic();
 const avif = await decodeAvif();
-const allOk = heic.ok && avif.ok;
-console.log(JSON.stringify({ heic, avif, ok: allOk }));
+// Exercise production PNG preparation, including the embedded WASM, without
+// calling a model or allowing a decoder to fetch a remote asset.
+globalThis.fetch = (() => { throw new Error('decoder network forbidden'); }) as unknown as typeof fetch;
+const pngInput = (bytes: Uint8Array) => ({ bin: '/synthetic/never-executed', model: 'fixture', prompt: 'fixture',
+  schema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+  images: [{ mime: 'image/png' as const, bytes }], env: {} });
+let codexPng = false;
+try {
+  await prepareCodexInput(pngInput(PNG_PIXEL));
+  try { await prepareCodexInput(pngInput(syntheticPng({ pixels: Uint8Array.of(0) }))); }
+  catch (error) { codexPng = (error as {reason?: string}).reason === 'invalid_input'; }
+} catch { /* Report a sanitized failure, never raw codec diagnostics. */ }
+const allOk = heic.ok && avif.ok && codexPng;
+console.log(JSON.stringify({ heic, avif, codex_png: { ok: codexPng }, ok: allOk }));
 process.exit(allOk ? 0 : 1);
