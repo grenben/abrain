@@ -93,7 +93,10 @@ test('a real worker carries the grant through gateway dispatch and fenced comple
   } finally { worker.stop(); await running; }
 });
 test('payload subscription fields and USD consent do not authorize subscription calls', async () => {
-  const job = await claimed(false, true); job.data.codexSubscription = grant();
+  const spendAuthorization = jobSpendAuthorization({ consented_effects: ['paid'], cap_usd: 0.01, cap_source: 'user', via: 'yes' }, { command: 'enrich' });
+  await expect(queue.add('enrich', { codexSubscription: grant() }, {}, { spendAuthorization })).rejects.toMatchObject({ code: 'subscription_required' });
+  expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+  config(false); const job = await claimed(false, true); config(); job.data.codexSubscription = grant();
   await expect(runWithJobSpend(engine, job, ctxFor(job), call)).rejects.toMatchObject({ code: 'subscription_required' });
   expect(count()).toBe(0);
 });
@@ -112,7 +115,9 @@ test('invalid grants roll back insertion; coalescing cannot enlarge allowances o
   await expect(queue.add('enrich', { sourceId: 'default', prompt: 'changed' }, options, { codexSubscription: g })).rejects.toThrow('subscription_identity_conflict');
 });
 test('legacy coalesced jobs cannot silently adopt the subscription protocol', async () => {
+  config(false);
   await queue.add('enrich', {}, { idempotency_key: 'legacy-fixture' });
+  config();
   await expect(queue.add('enrich', {}, { idempotency_key: 'legacy-fixture' }, { codexSubscription: grant() })).rejects.toMatchObject({ code: 'subscription_required' });
   expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
 });

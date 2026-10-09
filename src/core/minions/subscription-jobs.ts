@@ -31,6 +31,12 @@ export async function preflightSubscriptionJob(engine: BrainEngine, name: string
   if (name === 'subagent') throw new PrivateRoutingError('job:subagent', 'private_native_loop_unsupported');
 }
 
+/** Do not enqueue unfenced private work that an older worker could claim. */
+export async function preflightSubscriptionSubmit(engine: BrainEngine, name: string, data: Record<string, unknown>, grant?: JobSubscriptionAuthorization) {
+  await preflightSubscriptionJob(engine, name, data);
+  if (readPrivateCodexConfig() && !grant) throw new SubscriptionAdmissionError('subscription_required');
+}
+
 /** Versioned identity includes the durable payload, authority, route and source incarnation. */
 async function runIdentity(engine: BrainEngine, job: MinionJob): Promise<string> {
   const policy = readPrivateCodexConfig();

@@ -83,6 +83,9 @@ the stored payload, submission authority, configured model/binary and explicit
 source incarnation. Reusing a job with changed inputs or larger limits refuses;
 coalesced legacy jobs cannot silently adopt the protocol. Retries reuse the
 original allowance. Queue preflight reports conflicting job/global pins.
+Private generative submissions without a trusted allowance refuse before insertion,
+so they cannot leave an unfenced job available to an older worker. Previously queued
+legacy jobs still need an explicit drain/park/resubmit disposition before activation.
 
 `runWithJobSpend` carries this grant in both inline and isolated worker handlers.
 It rechecks the live job lease, durable payload, authority, source incarnation and
@@ -127,6 +130,9 @@ trigger, and its entire file (`test/minions-submission-authority.test.ts`) passe
 `bun run verify` passed 75 checks (including typecheck), with the admin build still
 explicitly skipped for its additional unlocked install. `bun run build` passed.
 These counts overlap. The isolated PostgreSQL cluster was stopped afterward.
+The final submission-time refusal also passed 44 tests across
+`test/ai/codex-jobs.serial.test.ts` and `test/minions-admission.test.ts`, plus all
+14 native PostgreSQL job-contract tests on a fresh isolated cluster, stopped afterward.
 
 ## Dream triage follow-up
 
