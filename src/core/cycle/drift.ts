@@ -1,3 +1,4 @@
+import { formatCycleCost } from './budget-meter.ts';
 /**
  * Drift dream phase (#2653 — wired v0.42.x; scaffold shipped v0.28).
  *
@@ -395,7 +396,7 @@ export async function runPhaseDrift(
     (reportHold === 'contention' ? ' (report not admitted: database contention; the next cycle writes it)' : '') +
     (budgetExhausted ? ' (budget exhausted)' : '') +
     (failed > 0 ? ` (${failed} judge failure(s))` : '') +
-    `. Cumulative cost: $${meter.totalSpent.toFixed(4)} / $${config.budgetUsd.toFixed(2)}` +
+    `. Cumulative cost: ${formatCycleCost(meter.totalSpent)} / $${config.budgetUsd.toFixed(2)}` +
     `. Report-only: auto_update=${config.autoUpdate} mutates nothing in v1.`;
 
   return {

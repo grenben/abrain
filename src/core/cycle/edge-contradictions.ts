@@ -1,3 +1,4 @@
+import { formatCycleCost } from './budget-meter.ts';
 /**
  * Dream phase `edge_contradictions`: an LLM flags which live state
  * relationships of one subject cannot both hold now ("works_at acme-example"
@@ -348,7 +349,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
     (config.mode === 'apply' ? `, ${totals.applied} applied` : ' (mode propose: review with gbrain edge-proposals list)') +
     `, ${totals.compatible} compatible, ${totals.undated_unresolved} undated, ${totals.ambiguous_same_date} same-date` +
     (totals.errors ? `, ${totals.errors} judge error(s)` : '') + (budgetExhausted ? ' (budget exhausted)' : '') +
-    `. Cost: $${meter.totalSpent.toFixed(4)} / $${config.budgetUsd.toFixed(2)} with ${model}${declaredDetail}`;
+    `. Cost: ${formatCycleCost(meter.totalSpent)} / $${config.budgetUsd.toFixed(2)} with ${model}${declaredDetail}`;
   const status = budgetExhausted || totals.errors ? (totals.judged ? 'partial' : 'failed') : 'complete';
   return done(status, detail, withDeclared(totals));
 }

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, afterAll, test, expect } from 'bun:test';
+import { beforeAll, beforeEach, afterAll, test, expect, spyOn } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,12 @@ import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/code
 import { withAIInvocationGuard, invokeAI } from '../../src/core/ai/invocation-guard.ts';
 import { runJobInChild } from '../../src/core/minions/child-job-runner.ts';
 import { noteChildSubscriptionEnforcement } from '../../src/core/minions/subscription-child.ts';
+import { runJobsSubmit } from '../../src/commands/jobs/submit.ts';
+import { SOURCE_FRESHNESS_PHASES } from '../../src/core/cycle/phase-scope.ts';
+import { dispatchGlobalMaintenance } from '../../src/commands/autopilot-fanout.ts';
+import { scheduledCodexSubmit } from '../../src/core/minions/subscription-schedules.ts';
+import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
+import { BudgetMeter } from '../../src/core/cycle/budget-meter.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
 const root = mkdtempSync(join(tmpdir(), 'codex-jobs-'));
@@ -183,5 +189,120 @@ test('older isolated children are rejected before any subprocess can start', asy
     invocation: { cmd: '/must-not-execute', argsPrefix: [] }, tiniPath: '',
     abortSignal: new AbortController().signal, shutdownSignal: new AbortController().signal,
   })).rejects.toMatchObject({ reasonCode: 'child_protocol_incompatible' });
+});
+
+test('CLI grant reaches the durable queue and the production gateway scope', async () => {
+  const g = grant(), args = ['submit', 'enrich', '--queue-only', '--params', '{"sourceId":"default"}',
+    '--codex-max-attempts', String(g.maxAttempts), '--codex-max-turns', String(g.maxTurns), '--codex-deadline', g.deadline.toISOString(), '--idempotency-key', 'cli-codex'];
+  const output: unknown[][] = [], log = spyOn(console, 'log').mockImplementation((...line) => { output.push(line); });
+  try {
+    await runJobsSubmit({ args: [...args, '--dry-run'], engine, engineOrNull: engine, queue });
+    expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+    expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+    expect(JSON.stringify(output)).toContain('monetary_cost_usd');
+    await runJobsSubmit({ args, engine, engineOrNull: engine, queue });
+    await runJobsSubmit({ args, engine, engineOrNull: engine, queue });
+    expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(1);
+    const job = (await queue.claim('cli-worker', 60_000, 'default', ['enrich']))!;
+    expect(job.spend_authorization).toBeNull();
+    expect((await runWithJobSpend(engine, job, ctxFor(job), call)).text).toBe('fixture');
+    expect(count()).toBe(1);
+  } finally { log.mockRestore(); }
+});
+test('CLI refuses missing, malformed, enlarged and misplaced subscription allowances before writes', async () => {
+  const deadline = grant().deadline.toISOString();
+  const base = ['submit', 'enrich', '--queue-only', '--codex-max-attempts', '2', '--codex-max-turns', '2', '--codex-deadline', deadline];
+  for (const args of [
+    ['submit', 'enrich', '--yes', '--max-usd', '1', '--dry-run'],
+    [...base, '--codex-max-turns', '1'],
+    base.map(v => v === '2' ? '2junk' : v),
+    base.map(v => v === deadline ? '2099-01-01T00:00:00Z' : v),
+    base.map(v => v === 'enrich' ? 'lint' : v),
+    [...base, '--max-usd', 'off'],
+  ]) await expect(runJobsSubmit({ args, engine, engineOrNull: engine, queue })).rejects.toThrow();
+  expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+  expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+});
+test('CLI auxiliary USD cap stays independent of the subscription allowance', async () => {
+  const log = spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    await runJobsSubmit({ args: ['submit', 'enrich', '--queue-only', '--codex-max-attempts', '2', '--codex-max-turns', '2',
+      '--codex-deadline', grant().deadline.toISOString(), '--max-usd', '0.01'], engine, engineOrNull: engine, queue });
+    const job = (await queue.claim('mixed-cli', 60_000, 'default', ['enrich']))!;
+    expect(job.spend_authorization?.cap_usd).toBe(0.01);
+    expect((await runWithJobSpend(engine, job, ctxFor(job), call)).text).toBe('fixture');
+    let dispatched = false;
+    await expect(runWithJobSpend(engine, job, ctxFor(job), () => invokeAI({ operation: 'fixture', kind: 'embedding',
+      model: 'openai:text-embedding-3-small', maxInputTokens: 10_000_000, maxOutputTokens: 0 },
+    async () => { dispatched = true; }, () => null))).rejects.toThrow();
+    expect(dispatched).toBe(false);
+  } finally { log.mockRestore(); }
+});
+test('deterministic freshness and stored-fact parsing need no model configuration or grant', async () => {
+  // Invalid private config is a tripwire: these jobs must not even consult it.
+  writeFileSync(join(root, '.gbrain', 'config.json'), '{invalid');
+  for (const name of ['autopilot-cycle', 'extract_facts', 'subagent_aggregator']) {
+    const data = name === 'autopilot-cycle' ? { source_id: 'default', phases: SOURCE_FRESHNESS_PHASES } : {};
+    await queue.add(name, data, {}, { allowProtectedSubmit: true });
+    const job = (await queue.claim(`deterministic-${name}`, 60_000, 'default', [name]))!;
+    expect(await runWithJobSpend(engine, job, ctxFor(job), async () => 'deterministic')).toBe('deterministic');
+  }
+  expect(count()).toBe(0);
+});
+test('global maintenance and unspecified cycle phases cannot bypass private admission', async () => {
+  for (const [name, data] of [['autopilot-global-maintenance', {}], ['autopilot-cycle', {}],
+    ['autopilot-cycle', { phases: [] }], ['autopilot-cycle', { phases: ['unknown-phase'] }]] as const) {
+    await expect(queue.add(name, data)).rejects.toMatchObject({ code: 'subscription_required' });
+  }
+  expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+});
+test('the real global scheduler requires explicit file consent and reuses the occurrence allowance', async () => {
+  const slot = new Date().toISOString(), opts = { repoPath: '/synthetic', slot, timeoutMs: 300000, jsonMode: false, log: () => {} };
+  await expect(dispatchGlobalMaintenance(engine, queue, opts)).rejects.toMatchObject({ code: 'subscription_required' });
+  expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    scheduled_jobs: { 'autopilot-global-maintenance': { maxAttempts: 2, maxTurns: 2, windowMs: 600000 } } } }));
+  expect((await dispatchGlobalMaintenance(engine, queue, opts)).dispatched).toBe(true);
+  expect((await dispatchGlobalMaintenance(engine, queue, opts)).coalesced).toBe(true);
+  const [run] = await engine.executeRaw<{ deadline: Date | string; max_attempts: number }>('SELECT deadline,max_attempts FROM codex_subscription_runs');
+  expect(new Date(run!.deadline).getTime()).toBe(Date.parse(slot) + 600000);
+  const job = (await queue.claim('scheduled', 60000, 'default', ['autopilot-global-maintenance']))!;
+  expect((await runWithJobSpend(engine, job, ctxFor(job), call)).text).toBe('fixture');
+  // A later occurrence cannot extend a still-active coalesced job's deadline.
+  const later = new Date(Date.parse(slot) + 1).toISOString();
+  await expect(dispatchGlobalMaintenance(engine, queue, { ...opts, slot: later })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(1);
+});
+test('schedule limits reject malformed opt-ins, expired slots and inferred authorization', async () => {
+  const write = (scheduled_jobs: unknown) => writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin, scheduled_jobs } }));
+  for (const scheduled_jobs of [[], { unknown: {} }, { 'autopilot-cycle': { maxAttempts: 1, maxTurns: 2, windowMs: 600000 } },
+    { 'autopilot-cycle': { maxAttempts: 1, maxTurns: 1, windowMs: 86400001 } },
+    { 'autopilot-cycle': { maxAttempts: 1, maxTurns: 1, windowMs: 600000, auxiliaryMaxUsd: 0 } }]) {
+    write(scheduled_jobs); expect(readPrivateCodexConfig).toThrow('private_config_invalid');
+  }
+  write({ 'autopilot-cycle': { maxAttempts: 1, maxTurns: 1, windowMs: 600000, auxiliaryMaxUsd: 0.02 } });
+  const trusted = scheduledCodexSubmit('autopilot-cycle', {}, new Date().toISOString());
+  expect(trusted?.spendAuthorization?.cap_usd).toBe(0.02);
+  expect(() => scheduledCodexSubmit('autopilot-cycle', {}, new Date(Date.now() - 700000).toISOString())).toThrow('subscription_exhausted');
+  expect(scheduledCodexSubmit('autopilot-cycle', { phases: SOURCE_FRESHNESS_PHASES }, 'unused')).toBeUndefined();
+});
+test('cycle budgets require subscription authority and never fabricate prices, even with overrides', async () => {
+  const estimate = { modelId: 'codex-cli:gpt-test', estimatedInputTokens: 100, maxOutputTokens: 100 };
+  const meter = new BudgetMeter({ budgetUsd: 0.01, phase: 'fixture', auditPath: join(root, 'cycle-budget.jsonl'),
+    allowUnpriced: true, pricingOverrides: { 'codex-cli:gpt-test': { input: 0, output: 0 } } });
+  expect(meter.check(estimate)).toMatchObject({ allowed: false, billing: 'subscription', estimatedCostUsd: null, cumulativeCostUsd: null });
+  const job = await claimed();
+  await runWithJobSpend(engine, job, ctxFor(job), async () => {
+    expect(meter.check(estimate)).toMatchObject({ allowed: true, estimatedCostUsd: null });
+    expect((await call()).text).toBe('fixture');
+    expect((await call()).text).toBe('fixture');
+    // Cycle preflight does not replace the gateway's durable exhaustion gate.
+    await expect(call()).rejects.toMatchObject({ code: 'subscription_exhausted' });
+    expect(meter.check({ modelId: 'openai:gpt-4o', estimatedInputTokens: 10000000, maxOutputTokens: 10000 }).allowed).toBe(false);
+  });
+  expect(meter.totalSpent).toBeNull();
+  const entries = readFileSync(join(root, 'cycle-budget.jsonl'), 'utf8').trim().split('\n').map(s => JSON.parse(s));
+  expect(entries.filter(e => e.event === 'subscription_preflight').every(e => e.estimated_cost_usd === null && e.remaining_quota === null)).toBe(true);
 });
 }

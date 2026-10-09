@@ -1,3 +1,4 @@
+import { scheduledCodexSubmit } from '../core/minions/subscription-schedules.ts';
 /**
  * src/commands/autopilot-fanout.ts — per-source autopilot dispatch (v0.38).
  *
@@ -500,6 +501,7 @@ export async function dispatchPerSource(
         timeout_ms: opts.timeoutMs,
         maxPending: 1,
       },
+      scheduledCodexSubmit('autopilot-cycle', { repoPath: opts.repoPath }, opts.slot),
     );
     if (job.coalesced) {
       if (opts.jsonMode) {
@@ -750,6 +752,7 @@ export async function dispatchGlobalMaintenance(
       timeout_ms: timeoutMs,
       maxPending: 1,
     },
+    scheduledCodexSubmit('autopilot-global-maintenance', { repoPath: opts.repoPath, phases: MAINTENANCE_PHASES }, opts.slot),
   );
   if (job.coalesced) {
     if (opts.jsonMode) {

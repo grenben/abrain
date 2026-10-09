@@ -13,4 +13,6 @@
 
 - `src/core/minions/subscription-jobs.ts` — trusted queue subscription grants, immutable versioned job/authority/model/source-incarnation binding, per-call worker fencing and cancellation. `subscription-job-schema.ts` supplies migration v224 and the bootstrap claim fence; older workers cannot claim subscription jobs. `subscription-child.ts` tracks child readiness and blocks older child binaries. `queue-model-admission.ts` preserves the legacy native-tool capability check extracted from the queue.
 
+- `src/commands/jobs/subscription.ts` — explicit CLI call/turn/deadline limits, separate auxiliary USD consent and no-write preview; help lives in `jobs/help.ts`. `ai/private-schedules.ts` validates file-only recurring allowances; `minions/subscription-schedules.ts` binds automatic cycle grants to an absolute slot deadline. `subscription-job-kinds.ts` separates deterministic freshness from possible generation. `cycle/subscription-budget.ts` keeps cycle subscription admission separate from USD estimates, with null totals and gateway enforcement.
+
 See [private Codex status and acceptance gaps](../../development/private-codex-status.md).

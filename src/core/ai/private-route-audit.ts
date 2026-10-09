@@ -24,6 +24,7 @@ export async function auditPrivateRoutes(engine?: ConfigReader) {
     runtime:{qualification:'unverified',live_verified:false},
     planes:{file:'inspected',environment:'inspected',database:engine?'inspected applicable model keys':'uninspected',workers:'uninspected',queued_jobs:'uninspected'},
     budgets:{subscription:'explicit durable envelope required',account_concurrency:1,monetary_cost_usd:null,remaining_quota:null,
+      scheduled_job_allowances:policy?.scheduled_jobs ?? {},
       auxiliary_usd:'independent API admission required'},
     coverage:{complete:false,reason:'Feature semantics, worker/job pins and runtime isolation are not fully qualified.'},roles};
 }

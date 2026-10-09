@@ -5,17 +5,12 @@ import { withAIInvocationGuard } from '../ai/invocation-guard.ts';
 import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, PrivateRoutingError } from '../ai/private-policy.ts';
 import { authorityDigest, authorizeJobExecution } from './submission-authority.ts';
 import { rowToMinionJob, type MinionJob, type MinionJobContext } from './types.ts';
+import { jobMayGenerate } from './subscription-job-kinds.ts';
+export { CODEX_GENERATIVE_JOBS, jobMayGenerate } from './subscription-job-kinds.ts';
 
 /** Only a trusted host argument can grant this allowance. No USD conversion or quota estimate. */
 export type JobSubscriptionAuthorization = Pick<SubscriptionEnvelope, 'maxAttempts' | 'maxTurns' | 'deadline'>;
 export const CODEX_JOB_ACCOUNT_LANE = 'codex-subscription';
-// This is a queue boundary inventory, not proof of all feature semantics.
-export const CODEX_GENERATIVE_JOBS = new Set([
-  'subagent', 'skillopt', 'extract-conversation-facts', 'enrich', 'facts-absorb',
-  'contextual_reindex_per_chunk', 'autopilot-cycle', 'synthesize', 'patterns',
-  'consolidate', 'extract_facts', 'extract-atoms-drain', 'extract-takes-from-pages',
-  'chronicle_extract', 'loops_extract',
-]);
 
 /** Refuse explicit job pins before insertion or handler construction. No discovery. */
 export async function preflightSubscriptionJob(engine: BrainEngine, name: string, data: Record<string, unknown>) {
@@ -77,10 +72,10 @@ export async function bindJobSubscription(engine: BrainEngine, job: MinionJob, g
 
 /** Shared by inline and isolated worker children through runWithJobSpend. */
 export async function runWithJobSubscription<T>(engine: BrainEngine, job: MinionJob, ctx: MinionJobContext, run: () => Promise<T>): Promise<T> {
-  // Avoid adding any model/config dependency to deterministic job handlers.
-  if (!CODEX_GENERATIVE_JOBS.has(job.name)) return run();
-  const policy = readPrivateCodexConfig();
   const rows = await engine.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-job:${job.id}:%`]);
+  // A changed payload cannot evade a pre-existing binding by looking deterministic.
+  if (!jobMayGenerate(job.name, job.data ?? {}) && rows.length === 0) return run();
+  const policy = readPrivateCodexConfig();
   if (!policy && rows.length === 0) return run();
   await preflightSubscriptionJob(engine, job.name, job.data ?? {});
   if (!policy || rows.length !== 1) throw new SubscriptionAdmissionError('subscription_required');

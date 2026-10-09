@@ -90,10 +90,11 @@ export async function runPhaseStandingQuestions(engine: BrainEngine, opts: Stand
   }
   if (!opts.dryRun) await engine.setConfig(LAST_PHASE_RUN_KEY, new Date().toISOString());
   const status = tally.failed > 0 || tally.blocked > 0 ? 'warn' : candidates.length === 0 && pagesSynced === 0 ? 'skipped' : 'ok';
+  const spentLabel = meter.totalSpent === null ? 'subscription usage (unpriced)' : `$${meter.totalSpent.toFixed(4)}`;
   return {
     phase: 'standing_questions', status, duration_ms: 0,
     summary: `${tally.refreshed} refreshed, ${tally.blocked} blocked, ${tally.failed} failed, ${tally.conflicts} conflicts of ${candidates.length} due; ` +
-      `$${meter.totalSpent.toFixed(4)} / $${budgetUsd.toFixed(2)}`,
+      `${spentLabel} / $${budgetUsd.toFixed(2)}`,
     details: { ...tally, spend_usd: meter.totalSpent, budget_usd: budgetUsd, max_per_cycle: maxPerCycle, outcomes },
   };
 }

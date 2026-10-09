@@ -21,7 +21,7 @@ import { adoptSpendAuthorization, legacyDefaultClaimSetSql, legacyDefaultClaimPa
 import { validateAttachment } from './attachments.ts';
 import { isProtectedJobName } from './protected-names.ts';
 import { assertEmbedBackfillQueueAdmission } from './embed-backfill-admission.ts';
-import { bindJobSubscription, preflightSubscriptionSubmit, CODEX_GENERATIVE_JOBS, type JobSubscriptionAuthorization } from './subscription-jobs.ts';
+import { bindJobSubscription, preflightSubscriptionSubmit, jobMayGenerate, type JobSubscriptionAuthorization } from './subscription-jobs.ts';
 import { lockDelegatedSubmission, checkDelegatedCapacity, prepareDelegatedReplay, admitDelegatedRetry } from './delegated-admission.ts';
 import {
   computeParamHash,
@@ -243,8 +243,8 @@ export class MinionQueue {
       throw new Error('Job name cannot be empty');
     }
     assertEmbedBackfillQueueAdmission(this.engine, jobName, data, trusted);
-    if (CODEX_GENERATIVE_JOBS.has(jobName)) await preflightSubscriptionSubmit(this.engine, jobName, data ?? {}, trusted?.codexSubscription);
-    if (trusted?.codexSubscription && !CODEX_GENERATIVE_JOBS.has(jobName)) throw new Error('subscription_unsupported_job');
+    if (jobMayGenerate(jobName, data ?? {})) await preflightSubscriptionSubmit(this.engine, jobName, data ?? {}, trusted?.codexSubscription);
+    if (trusted?.codexSubscription && !jobMayGenerate(jobName, data ?? {})) throw new Error('subscription_unsupported_job');
     if (isProtectedJobName(jobName) && !trusted?.allowProtectedSubmit) {
       throw new Error(
         `protected job name '${jobName}' requires CLI or operation-local submitter ` +

@@ -1,3 +1,4 @@
+import { formatCycleCost } from './budget-meter.ts';
 /**
  * v0.36.1.0 (T3) — propose_takes cycle phase.
  *
@@ -976,7 +977,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
       if (!budget.allowed) {
         result.budget_exhausted = true;
         result.warnings.push(
-          `budget exhausted at page ${result.pages_scanned}/${pages.length} (cumulative $${budget.cumulativeCostUsd.toFixed(4)} / cap $${budget.budgetUsd.toFixed(2)})`,
+          `budget exhausted at page ${result.pages_scanned}/${pages.length} (cumulative ${formatCycleCost(budget.cumulativeCostUsd)} / cap $${budget.budgetUsd.toFixed(2)})`,
         );
         break;
       }

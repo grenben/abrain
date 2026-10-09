@@ -1,3 +1,4 @@
+import { formatCycleCost } from './budget-meter.ts';
 /**
  * v0.28: auto-think dream phase.
  *
@@ -218,7 +219,7 @@ export async function runPhaseAutoThink(
   const detail = `${results.filter(r => r.status === 'complete').length} synthesized, ` +
     `${results.filter(r => r.status === 'budget_exhausted').length} skipped (budget), ` +
     `${results.filter(r => r.status === 'failed').length} failed. ` +
-    `Cumulative cost: $${meter.totalSpent.toFixed(4)} / $${config.budgetUsd.toFixed(2)}`;
+    `Cumulative cost: ${formatCycleCost(meter.totalSpent)} / $${config.budgetUsd.toFixed(2)}`;
 
   return {
     name: 'auto_think',

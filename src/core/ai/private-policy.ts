@@ -3,12 +3,14 @@ import { isAbsolute } from 'node:path';
 import { configPath } from '../config-path.ts';
 import type { ConfigReader } from '../config-snapshot.ts';
 import type { ResolveModelOpts, ResolvedModel } from '../model-config.ts';
+import { validatePrivateSchedules, type PrivateSchedules } from './private-schedules.ts';
 
 /** Local operator configuration only. A mounted brain/job cannot activate this. */
 export interface PrivateCodexConfig {
   mode: 'strict';
   model: string;
   bin: string;
+  scheduled_jobs?: PrivateSchedules;
 }
 export class PrivateRoutingError extends Error {
   constructor(public readonly source: string, public readonly code: 'private_config_invalid' | 'private_route_conflict' | 'private_native_loop_unsupported' = 'private_route_conflict') {
@@ -20,10 +22,13 @@ export function validatePrivateCodexConfig(value: unknown): PrivateCodexConfig |
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new PrivateRoutingError('file:private_codex', 'private_config_invalid');
   const v = value as Record<string, unknown>;
   if (v.mode !== 'strict' || typeof v.model !== 'string' || !/^codex-cli:[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$/.test(v.model) ||
-    typeof v.bin !== 'string' || !isAbsolute(v.bin) || Object.keys(v).some(k => !['mode','model','bin'].includes(k))) {
+    typeof v.bin !== 'string' || !isAbsolute(v.bin) || Object.keys(v).some(k => !['mode','model','bin','scheduled_jobs'].includes(k))) {
     throw new PrivateRoutingError('file:private_codex', 'private_config_invalid');
   }
-  return { mode: 'strict', model: v.model, bin: v.bin };
+  let scheduled_jobs: PrivateSchedules | undefined;
+  try { scheduled_jobs = validatePrivateSchedules(v.scheduled_jobs); }
+  catch { throw new PrivateRoutingError('file:private_codex.scheduled_jobs', 'private_config_invalid'); }
+  return { mode: 'strict', model: v.model, bin: v.bin, ...(scheduled_jobs === undefined ? {} : { scheduled_jobs }) };
 }
 
 /** Parse failure is not permission to resume paid inference. No env/token reads. */
