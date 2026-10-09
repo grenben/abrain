@@ -1,3 +1,5 @@
+import { stampSubagentResultMode } from './subagent-result-mode.ts';
+import { assertPrivateNativeLoopAllowed, readPrivateCodexConfig } from '../../ai/private-policy.ts';
 /**
  * Subagent LLM-loop handler (v0.15).
  *
@@ -249,6 +251,10 @@ async function runLoopConvertingLeaseLoss<T>(
 }
 
 export function makeSubagentHandler(deps: SubagentDeps) {
+  if (readPrivateCodexConfig()) return async (_ctx: MinionJobContext): Promise<SubagentResult> => {
+    assertPrivateNativeLoopAllowed('minions.legacy_subagent');
+    throw new Error('private_subagent_configuration_changed');
+  };
   const engine = deps.engine;
   // sdk.messages IS the MessagesClient-shaped object. The v0.16.0 bug was
   // casting new Anthropic() (top level) to MessagesClient, but .create()
@@ -266,6 +272,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
 
   return async function subagentHandler(ctx: MinionJobContext): Promise<SubagentResult> {
+    assertPrivateNativeLoopAllowed('minions.legacy_subagent');
     const dataForAccounting = (ctx.data ?? {}) as unknown as SubagentHandlerData;
     // #4217: every subagent job gets structural write accounting merged into
     // its result; jobs submitted with require_writes (dream synthesize /
@@ -277,37 +284,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     } = {};
     const submitted = snapshotFromJob(ctx.data);
     const inner = await withDelegatedSpend(engine, submitted, ctx.id, () => subagentHandlerInner(ctx, modeState));
-    // #4216: stamp which execution path produced the result. Jobs with no
-    // `mode` field keep the legacy result shape (REGRESSION pin).
-    // Honesty rule: 'agentic_fallback' is stamped ONLY when the oneshot
-    // attempt actually ran and returned a fallback reason this invocation. A
-    // replayed already-successful oneshot job (messages persisted, outcome
-    // write lost) re-enters via the loop replay path with no marker — leaving
-    // synth_mode_used unset there is honest 'unknown/replay', never a fake
-    // fallback in phase telemetry.
-    const stamped: SubagentResult = dataForAccounting.mode === 'oneshot' && inner.synth_mode_used !== 'oneshot' && modeState.fallbackReason
-      ? {
-          ...inner,
-          synth_mode_used: 'agentic_fallback',
-          fallback_reason: modeState.fallbackReason,
-          // The PAID oneshot attempt is part of this job's real cost/turn
-          // count — fold it into the rollup instead of silently dropping a
-          // full model call from details.synthesis math.
-          ...(modeState.oneshotTokens
-            ? {
-                turns_count: inner.turns_count + 1,
-                tokens: {
-                  in: inner.tokens.in + modeState.oneshotTokens.in,
-                  out: inner.tokens.out + modeState.oneshotTokens.out,
-                  cache_read: inner.tokens.cache_read + modeState.oneshotTokens.cache_read,
-                  cache_create: inner.tokens.cache_create + modeState.oneshotTokens.cache_create,
-                },
-              }
-            : {}),
-        }
-      : dataForAccounting.mode === 'agentic' && !inner.synth_mode_used
-        ? { ...inner, synth_mode_used: 'agentic' }
-        : inner;
+    const stamped = stampSubagentResultMode(dataForAccounting, inner, modeState);
     return finalizeWriteAccounting(engine, ctx.id, stamped, {
       requireWrites: dataForAccounting.require_writes === true, allowCleanZeroWrites: dataForAccounting.allow_clean_zero_writes === true,
       // OV-4: a successful oneshot job's verdict is scoped to its own

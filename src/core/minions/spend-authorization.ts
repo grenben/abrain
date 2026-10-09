@@ -1,3 +1,4 @@
+import { hasAdmittedCodexAttempt } from '../ai/subscription-context.ts';
 /**
  * Submit-time spend authorization on queued paid jobs.
  *
@@ -291,6 +292,7 @@ export async function runWithJobSpend<T>(
   const seen: { refusal: SpendGroupRefusedError | SpendGroupPressureError | null } = { refusal: null };
   let warned = false;
   const guard = async (call: Parameters<Parameters<typeof withAIInvocationGuard>[0]>[0]) => {
+    if (hasAdmittedCodexAttempt(call.model)) return { settle: async () => {} };
     const max = maximumInvocationCents(call);
     if (max === null) {
       if (record.cap_source === 'user') throw (seen.refusal = await spendRefusal(engine, job, record, { kind: 'no_pricing', model: call.model }));

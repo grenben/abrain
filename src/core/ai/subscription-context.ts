@@ -1,0 +1,14 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { BrainEngine } from '../engine.ts';
+import type { SubscriptionAttempt } from './subscription-admission.ts';
+
+export interface CodexSubscriptionContext { engine: BrainEngine; runId: string; repair?: boolean }
+const contexts = new AsyncLocalStorage<CodexSubscriptionContext>();
+const admitted = new AsyncLocalStorage<SubscriptionAttempt>();
+/** Host-owned scope, backed by an already-authorized durable envelope. No payload inference. */
+export function withCodexSubscription<T>(context: CodexSubscriptionContext, run: () => Promise<T>): Promise<T> {
+  return contexts.run(context, run);
+}
+export function codexSubscriptionContext(): CodexSubscriptionContext | undefined { return contexts.getStore(); }
+export function withAdmittedCodexAttempt<T>(attempt: SubscriptionAttempt, run: () => Promise<T>): Promise<T> { return admitted.run(attempt, run); }
+export function hasAdmittedCodexAttempt(model: string): boolean { return model.startsWith('codex-cli:') && admitted.getStore() !== undefined; }

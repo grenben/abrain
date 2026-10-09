@@ -76,6 +76,8 @@ export interface BudgetEstimate {
 export type BudgetReservation = string & { readonly __budgetReservation: unique symbol };
 
 export interface BudgetActualUsage {
+  /** Explicitly admitted subscription usage is unpriced, even if API-rate overrides exist. */
+  billing?: 'subscription';
   modelId: string;
   /** The reservation this usage settles, as returned by `reserve()`. */
   reservation?: BudgetReservation;
@@ -479,7 +481,7 @@ export class BudgetTracker {
   record(actual: BudgetActualUsage & { kind?: BudgetKind }): void {
     this.callsRecorded++;
     const kind: BudgetKind = actual.kind ?? 'chat';
-    const cost = usageCostUsd(
+    const cost = actual.billing === 'subscription' ? null : usageCostUsd(
       actual.modelId,
       actual.inputTokens,
       actual.outputTokens ?? 0,

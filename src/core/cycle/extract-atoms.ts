@@ -1,3 +1,5 @@
+import { resolveExtractAtomsModel } from './extract-atoms-model.ts';
+export { resolveExtractAtomsModel, resolveExtractAtomsModelWithSource } from './extract-atoms-model.ts';
 // v0.41.2.1 — extract_atoms cycle phase, post-fix-wave rebuild.
 //
 // Sequencing per cycle:
@@ -662,24 +664,7 @@ export async function tombstonedTranscriptsForHashes(
  * to the tier default (the same end state runPhaseExtractAtoms's config-read
  * try/catch has always produced).
  */
-export async function resolveExtractAtomsModelWithSource(
-  engine: BrainEngine,
-): Promise<{ model: string; source: 'config' | 'tier_default' }> {
-  let configuredModel: string | null = null;
-  try {
-    configuredModel = await engine.getConfig('models.dream.extract_atoms');
-  } catch {
-    // Fail-soft — fall through to the tier default.
-  }
-  return configuredModel
-    ? { model: configuredModel, source: 'config' }
-    : { model: resolveTierDefault('utility'), source: 'tier_default' };
-}
 
-/** String-returning wrapper for runtime callers (`runPhaseExtractAtoms`). */
-export async function resolveExtractAtomsModel(engine: BrainEngine): Promise<string> {
-  return (await resolveExtractAtomsModelWithSource(engine)).model;
-}
 
 /**
  * v0.41 minimal extract_atoms body, rebuilt for v0.41.2.1.

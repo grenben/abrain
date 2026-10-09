@@ -33,6 +33,8 @@ export function modelRouteHint(route: GatewayModelSource, touchpoint: Touchpoint
     case 'tier_default':
     case 'fallback':
       return `Selected via the built-in default. Fix: gbrain config set ${TIER_KEY[touchpoint]} <provider>:<model>`;
+    case 'private_default':
+      return 'Selected via file:private_codex.model. Fix: update the trusted private Codex model pin.';
   }
 }
 

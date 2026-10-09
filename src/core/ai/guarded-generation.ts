@@ -1,3 +1,4 @@
+import { assertPrivateRoute } from './private-policy.ts';
 import { invokeAI, sdkInvocationUsage, hasAIInvocationGuard, hasAIInvocationObservers, type AIInvocation } from './invocation-guard.ts';
 import { resolveChatContextTokens } from './model-resolver.ts';
 
@@ -10,6 +11,7 @@ export function chatInvocation(operation: string, model: string, maxOutputTokens
 /** Each SDK attempt has its own durable hold; local calls keep SDK retries. */
 export function createGuardedGeneration(defaultMaxOutputTokens: () => number) {
   return async function guardedGeneration<T>(model: string, transport: (opts: any) => Promise<T>, opts: any): Promise<T> {
+    assertPrivateRoute(model, 'gateway.generate');
     if (!hasAIInvocationGuard()) {
       if (!hasAIInvocationObservers()) return transport(opts);
       // Observed but unguarded: the transport sees the caller's options unchanged (SDK retries, token defaults).

@@ -9,7 +9,7 @@
  */
 
 import type { BrainEngine } from '../../engine.ts';
-import type { ContentBlock, SubagentResult } from '../types.ts';
+import type { ContentBlock, SubagentResult, SubagentStopReason } from '../types.ts';
 import { UnrecoverableError } from '../types.ts';
 import { putPageRejection } from '../tools/put-page-result.ts';
 
@@ -385,4 +385,11 @@ export async function persistToolExecFailed(
       [jobId, messageIdx, toolUseId, toolName, typeof input === 'string' ? input : JSON.stringify(input), error, ordinal],
     );
   }
+}
+
+export function replayTerminalStopReason(
+  tokensOut: number | null | undefined,
+  maxOutputTokens: number,
+): SubagentStopReason {
+  return tokensOut != null && tokensOut >= maxOutputTokens ? 'max_tokens' : 'end_turn';
 }

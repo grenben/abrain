@@ -38,6 +38,7 @@ link it here rather than raising the cap.
 | [Commands (6/6)](key-files/commands-6.md) | `src/commands/sync.ts` through `src/commands/whoknows.ts` |
 | [Core Ai](key-files/core-ai.md) | `src/core/ai/` gateway, embedding, dims, errors, fallbacks |
 | [Core Ai (continued)](key-files/core-ai-continued.md) | `src/core/ai/providers/*`, `recipes/*`, `voyage-gateway.ts` |
+| [Private Codex](key-files/private-codex.md) | Codex transport, admission and audit |
 | [Core Decide](key-files/core-decide.md) | `src/core/ai/decide/*`, `src/core/search/decide-stage.ts`, `gbrain decide`, `decide_health` (System One) |
 | [Core Questions](key-files/core-questions.md) | Pinned questions: `src/core/questions/*`, `gbrain questions`, `standing_questions` |
 | [Core Cycle](key-files/core-cycle.md) | `src/core/cycle/anomaly.ts` through `src/core/cycle/phase-table.ts`: atoms, facts, drains, probes, phase scope |

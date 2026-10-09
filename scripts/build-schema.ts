@@ -42,6 +42,7 @@ import { SHARED_SKILLS_SCHEMA_SQL } from '../src/core/shared-skills/schema-all.t
 import { DECIDE_SCHEMA_SQL } from '../src/core/ai/decide/schema.ts';
 import { FACT_RELINK_SCHEMA_SQL } from '../src/core/facts/relink-schema.ts';
 import { PINNED_QUESTIONS_SCHEMA_SQL } from '../src/core/questions/schema.ts';
+import { SUBSCRIPTION_SCHEMA_SQL } from '../src/core/ai/subscription-schema.ts';
 import { CORE_EDIT_NOTICES_SCHEMA_SQL } from '../src/core/core-memory-schema.ts';
 import { FACT_PURGE_LOOKUP_INDEX_SQL, MEMORY_PURGE_SCHEMA_SQL } from '../src/core/facts/purge-schema.ts';
 import { WRITE_GATE_SCHEMA_SQL } from '../src/core/write-gate-schema.ts';
@@ -108,6 +109,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/facts/purge-schema.ts', expr: 'FACT_PURGE_LOOKUP_INDEX_SQL', postgres: FACT_PURGE_LOOKUP_INDEX_SQL, pglite: FACT_PURGE_LOOKUP_INDEX_SQL },
   { source: 'src/core/write-gate-schema.ts', expr: 'WRITE_GATE_SCHEMA_SQL', postgres: WRITE_GATE_SCHEMA_SQL, pglite: WRITE_GATE_SCHEMA_SQL },
   { source: 'src/core/questions/schema.ts', expr: 'PINNED_QUESTIONS_SCHEMA_SQL', postgres: PINNED_QUESTIONS_SCHEMA_SQL, pglite: PINNED_QUESTIONS_SCHEMA_SQL },
+  { source: 'src/core/ai/subscription-schema.ts', expr: 'SUBSCRIPTION_SCHEMA_SQL', postgres: SUBSCRIPTION_SCHEMA_SQL, pglite: SUBSCRIPTION_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;

@@ -1,3 +1,7 @@
+import { openAIPromptCacheKey } from './chat-format.ts';
+export { openAIPromptCacheKey } from './chat-format.ts';
+import { codexChat, codexExpand, codexOcr } from './codex-chat.ts';
+import { assertPrivateRoute, readPrivateCodexConfig } from './private-policy.ts';
 /**
  * AI Gateway — unified seam for every AI call gbrain makes.
  *
@@ -455,6 +459,12 @@ export function recipeSupportsStructuredOutputs(recipe: Recipe): boolean {
 
 /** Configure the gateway. Called by cli.ts#connectEngine. Clears cached models. */
 export function configureGateway(config: AIGatewayConfig): void {
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) {
+    for (const key of ['chat_model', 'expansion_model', 'embedding_image_ocr_model'] as const)
+      if (config[key]) assertPrivateRoute(config[key]!, `config:${key}`, privatePolicy);
+    for (const pin of config.chat_fallback_chain ?? []) assertPrivateRoute(pin, 'config:chat_fallback_chain', privatePolicy);
+  }
   _config = {
     embedding_model: config.embedding_model,
     embedding_identity_unverified: config.embedding_identity_unverified,
@@ -466,8 +476,8 @@ export function configureGateway(config: AIGatewayConfig): void {
     embedding_dimensions: config.embedding_dimensions,
     embedding_multimodal_model: config.embedding_multimodal_model,
     embedding_image_ocr_model: config.embedding_image_ocr_model,
-    expansion_model: config.expansion_model ?? DEFAULT_EXPANSION_MODEL,
-    chat_model: config.chat_model ?? DEFAULT_CHAT_MODEL,
+    expansion_model: config.expansion_model ?? privatePolicy?.model ?? DEFAULT_EXPANSION_MODEL,
+    chat_model: config.chat_model ?? privatePolicy?.model ?? DEFAULT_CHAT_MODEL,
     chat_fallback_chain: normalizeChatFallbackChain(config.chat_fallback_chain),
     chat_fallback_on_refusal: config.chat_fallback_on_refusal,
     // v0.35.0.0+: reranker_model stays undefined when unset — reranker is
@@ -2378,6 +2388,7 @@ async function resolveExpansionProvider(modelStr: string): Promise<{ model: any;
 }
 
 function instantiateExpansion(recipe: Recipe, modelId: string, cfg: AIGatewayConfig): any {
+  assertPrivateRoute(`${recipe.id}:${modelId}`, 'gateway.instantiateExpansion');
   switch (recipe.implementation) {
     case 'native-openai': {
       const apiKey = cfg.env.OPENAI_API_KEY;
@@ -2485,6 +2496,8 @@ function normalizeSdkUsage(usage: unknown): { inputTokens: number; outputTokens:
  * Caller is responsible for sanitizing the query (prompt-injection boundary stays in expansion.ts).
  */
 export async function expand(query: string): Promise<string[]> {
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy && query.trim()) return codexExpand(query, privatePolicy);
   if (!query || !query.trim()) return [query];
   if (!isAvailable('expansion')) return [query];
 
@@ -2682,6 +2695,8 @@ export async function expand(query: string): Promise<string[]> {
  * keeping the gateway focused on the LLM call.
  */
 export async function generateOcrText(imageBytes: Buffer, mime: string): Promise<string> {
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) return codexOcr(imageBytes, mime, privatePolicy);
   // Unconfigured gateway stays a silent '' no-op (the pre-#4107 isAvailable
   // gate's behavior), never a requireConfig() throw.
   if (!_config) return '';
@@ -3296,6 +3311,7 @@ async function resolveChatProvider(modelStr: string): Promise<{ model: any; reci
 }
 
 function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig): any {
+  assertPrivateRoute(`${recipe.id}:${modelId}`, 'gateway.instantiateChat');
   switch (recipe.implementation) {
     case 'native-openai': {
       const apiKey = cfg.env.OPENAI_API_KEY;
@@ -3490,30 +3506,6 @@ async function classifyGatewayGuardrail(input: {
   }
 }
 
-/**
- * Derive OpenAI's `prompt_cache_key` (the AI SDK's `providerOptions.openai.
- * promptCacheKey`). It's a ROUTING hint, not a cache breakpoint: OpenAI caches
- * prefixes automatically, and a stable key makes requests sharing a prefix
- * land on the same engine, raising the hit rate (OpenAI cites 60%→87%).
- *
- * Hash the system prompt + sorted tool names — that's the stable prefix
- * gbrain's repeated loops (enrich, page-summary, skillopt, subagent) actually
- * share. Returns undefined when there's no system prompt (nothing stable to
- * key on), so one-off requests don't get pinned to a single engine. An
- * explicit key can still be set per provider/model via
- * `provider_chat_options` config, which overrides the derived key.
- *
- * @internal exported for tests; not part of the public gateway API.
- */
-export function openAIPromptCacheKey(args: {
-  system?: string;
-  toolNames?: string[];
-}): string | undefined {
-  if (!args.system) return undefined;
-  const basis = `${args.system} ${(args.toolNames ?? []).slice().sort().join(',')}`;
-  return `gbrain:${createHash('sha256').update(basis).digest('hex').slice(0, 32)}`;
-}
-
 export function toAISDKTools(tools: ChatToolDef[] | undefined): Record<string, any> | undefined {
   if (!tools || tools.length === 0) return undefined;
   return tools.reduce((acc, t) => {
@@ -3531,6 +3523,9 @@ export function toAISDKTools(tools: ChatToolDef[] | undefined): Record<string, a
 }
 
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
+  assertPrivateRoute(opts.model ?? getChatModel(), 'gateway.chat');
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) return codexChat(opts, privatePolicy);
   await discoverBeforeOpenAICall(opts.model ?? _config?.chat_model);
   const fallbackChain = opts.allowFallback === false ? undefined : _config?.chat_fallback_chain;
   if (fallbackChain?.length) return chatWithFallback(opts, opts.model ?? getChatModel(), fallbackChain, chat, { onRefusal: _config?.chat_fallback_on_refusal !== false });

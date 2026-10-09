@@ -1,3 +1,5 @@
+import { configDir, configPath, gbrainPath } from './config-path.ts';
+export { configDir, configPath, gbrainPath } from './config-path.ts';
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, renameSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
@@ -31,6 +33,8 @@ function getConfigDir() { return configDir(); }
 function getConfigPath() { return configPath(); }
 
 export interface GBrainConfig {
+  /** Trusted file-only opt-in; DB config and job payloads cannot activate it. */
+  private_codex?: import('./ai/private-policy.ts').PrivateCodexConfig;
   engine: 'postgres' | 'pglite';
   /** File-plane hook-lane keys (read by engine-free hook/push children).
    * `gbrain config set` routes these two dotted keys here, not to the DB. */
@@ -1907,39 +1911,6 @@ export function toEngineConfig(config: GBrainConfig): EngineConfig {
     database_path: config.database_path,
     keyword_statement_timeout_ms: config.search?.keyword_statement_timeout_ms,
   };
-}
-
-export function configDir(): string {
-  // Allow override for tests, Docker, and multi-tenant deployments.
-  // GBRAIN_HOME is a parent dir; we always append '.gbrain' ourselves so
-  // setting GBRAIN_HOME=/tmp/x yields configDir() === '/tmp/x/.gbrain'.
-  // Validates the override: must be absolute, no '..' segments.
-  const override = process.env.GBRAIN_HOME;
-  if (override && override.trim()) {
-    const trimmed = override.trim();
-    if (!isAbsolute(trimmed)) {
-      throw new Error(`GBRAIN_HOME must be an absolute path; got: ${trimmed}`);
-    }
-    if (trimmed.split(/[\\/]/).includes('..')) {
-      throw new Error(`GBRAIN_HOME must not contain '..' segments; got: ${trimmed}`);
-    }
-    return join(trimmed, '.gbrain');
-  }
-  return join(homedir(), '.gbrain');
-}
-
-export function configPath(): string {
-  return join(configDir(), 'config.json');
-}
-
-/**
- * Sugar for joining paths under the active gbrain home. Use this anywhere you
- * would otherwise write `join(homedir(), '.gbrain', ...rest)`. Honors
- * GBRAIN_HOME, validates input, and centralizes the convention so future
- * audits stay simple.
- */
-export function gbrainPath(...segments: string[]): string {
-  return join(configDir(), ...segments);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { codexCli } from './codex-cli.ts';
 /**
  * Static recipe registry. Bun-compile-safe: every provider is a static import.
  *
@@ -33,6 +34,7 @@ import { perplexity } from './perplexity.ts';
 import { typesafe } from './typesafe.ts';
 
 const ALL: Recipe[] = [
+  codexCli,
   openai,
   google,
   anthropic,

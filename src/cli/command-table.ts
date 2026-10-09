@@ -135,6 +135,7 @@ export type CliCommandRecord =
 export const CLI_COMMANDS: readonly CliCommandRecord[] = [  // Pre-connect: dispatched by dispatchPreConnectCommand before the connectEngine() terminator.
   // selfHelp: v0.40.6.0 Schema Cathedral v3 — `gbrain schema --help` should hit schema.ts
   // printHelp() with the full 22+ verb taxonomy, not the generic short-circuit's one-line stub.
+  { name: 'private-codex', phase: 'pre-connect', thinClient: 'none', selfHelp: true, skipStartupHooks: true, json: 'document', read_only: true, load: () => import('./commands/private-codex.ts') },
   { name: 'schema', phase: 'pre-connect', thinClient: 'none', selfHelp: true, load: () => import('./commands/schema.ts') },
   // selfHelp: MEMORY_VERBS v1 (Cathedral 1): protocol ships its own detailed HELP (subcommands,
   // conformance targets, the cost-gated --synthesize flag).

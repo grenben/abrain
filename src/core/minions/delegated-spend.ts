@@ -1,3 +1,4 @@
+import { hasAdmittedCodexAttempt } from '../ai/subscription-context.ts';
 import type { BrainEngine } from '../engine.ts';
 import { canonicalLookup } from '../model-pricing.ts';
 import { lookupEmbeddingPrice } from '../embedding-pricing.ts';
@@ -43,6 +44,7 @@ export function withDelegatedSpend<T>(engine: BrainEngine, snapshot: DelegationS
   if (!snapshot) return run();
   return withAIInvocationGuard(async call => {
     const effective = await effectiveDelegation(engine, snapshot, jobId);
+    if (hasAdmittedCodexAttempt(call.model)) return { settle: async () => {} };
     const cap = effective.budgetUsdPerDay === null ? null : Math.round(Number(effective.budgetUsdPerDay) * 100);
     const max = maximumInvocationCents(call);
     if (cap !== null && max === null) throw new DelegationPricingError(`${call.operation} has no known price and enforced maximum for ${call.model}; no provider call was made`);

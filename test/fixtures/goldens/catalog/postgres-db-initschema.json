@@ -23,6 +23,18 @@
       "code_edges_symbol.code_edges_symbol_pkey": "p PRIMARY KEY (id)",
       "code_edges_symbol.code_edges_symbol_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "code_edges_symbol.code_edges_symbol_unique": "u UNIQUE (from_chunk_id, to_symbol_qualified, edge_type)",
+      "codex_subscription_attempts.codex_subscription_attempts_cached_input_tokens_check": "c CHECK ((cached_input_tokens >= 0))",
+      "codex_subscription_attempts.codex_subscription_attempts_input_tokens_check": "c CHECK ((input_tokens >= 0))",
+      "codex_subscription_attempts.codex_subscription_attempts_output_tokens_check": "c CHECK ((output_tokens >= 0))",
+      "codex_subscription_attempts.codex_subscription_attempts_pkey": "p PRIMARY KEY (attempt_id)",
+      "codex_subscription_attempts.codex_subscription_attempts_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_subscription_attempts.codex_subscription_attempts_state_check": "c CHECK ((state = ANY (ARRAY['active'::text, 'unresolved'::text, 'succeeded'::text, 'failed'::text])))",
+      "codex_subscription_runs.codex_subscription_runs_accepted_turns_check": "c CHECK ((accepted_turns >= 0))",
+      "codex_subscription_runs.codex_subscription_runs_attempts_check": "c CHECK ((attempts >= 0))",
+      "codex_subscription_runs.codex_subscription_runs_max_attempts_check": "c CHECK (((max_attempts >= 1) AND (max_attempts <= 1000)))",
+      "codex_subscription_runs.codex_subscription_runs_max_turns_check": "c CHECK (((max_turns >= 1) AND (max_turns <= 1000)))",
+      "codex_subscription_runs.codex_subscription_runs_pkey": "p PRIMARY KEY (run_id)",
+      "codex_subscription_runs.codex_subscription_runs_repairs_check": "c CHECK (((repairs >= 0) AND (repairs <= 1)))",
       "config.config_pkey": "p PRIMARY KEY (key)",
       "content_chunks.content_chunks_page_id_fkey": "f FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE",
       "content_chunks.content_chunks_pkey": "p PRIMARY KEY (id)",
@@ -360,6 +372,12 @@
       "code_edges_symbol": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_subscription_attempts": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_subscription_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "config": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -675,6 +693,9 @@
       "code_edges_chunk_unique": "CREATE UNIQUE INDEX code_edges_chunk_unique ON public.code_edges_chunk USING btree (from_chunk_id, to_chunk_id, edge_type)",
       "code_edges_symbol_pkey": "CREATE UNIQUE INDEX code_edges_symbol_pkey ON public.code_edges_symbol USING btree (id)",
       "code_edges_symbol_unique": "CREATE UNIQUE INDEX code_edges_symbol_unique ON public.code_edges_symbol USING btree (from_chunk_id, to_symbol_qualified, edge_type)",
+      "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
+      "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
+      "codex_subscription_runs_pkey": "CREATE UNIQUE INDEX codex_subscription_runs_pkey ON public.codex_subscription_runs USING btree (run_id)",
       "config_pkey": "CREATE UNIQUE INDEX config_pkey ON public.config USING btree (key)",
       "content_chunks_pkey": "CREATE UNIQUE INDEX content_chunks_pkey ON public.content_chunks USING btree (id)",
       "content_chunks_stale_idx": "CREATE INDEX content_chunks_stale_idx ON public.content_chunks USING btree (page_id, chunk_index) WHERE (embedding IS NULL)",
@@ -1119,6 +1140,38 @@
           "6 edge_metadata jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb",
           "7 source_id text/text NULL",
           "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_subscription_attempts": {
+        "columns": [
+          "1 attempt_id text/text NOT NULL",
+          "2 run_id text/text NOT NULL",
+          "3 account_lane text/text NOT NULL",
+          "4 request_hash text/text NOT NULL",
+          "5 owner_id text/text NOT NULL",
+          "6 state text/text NOT NULL",
+          "7 input_tokens bigint/int8 NULL",
+          "8 cached_input_tokens bigint/int8 NULL",
+          "9 output_tokens bigint/int8 NULL",
+          "10 accepted boolean/bool NOT NULL DEFAULT false",
+          "11 failure_code text/text NULL",
+          "12 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "13 settled_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_subscription_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 account_lane text/text NOT NULL",
+          "3 max_attempts integer/int4 NOT NULL",
+          "4 max_turns integer/int4 NOT NULL",
+          "5 attempts integer/int4 NOT NULL DEFAULT 0",
+          "6 accepted_turns integer/int4 NOT NULL DEFAULT 0",
+          "7 repairs integer/int4 NOT NULL DEFAULT 0",
+          "8 deadline timestamp with time zone/timestamptz NOT NULL",
+          "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=false force_rls=false"
       },
