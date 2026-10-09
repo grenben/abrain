@@ -10,4 +10,6 @@
 - `src/core/cycle/extract-atoms-model.ts` — atom extraction's special model resolver, with strict private routing and the legacy fail-soft behavior outside private mode; re-exported from `extract-atoms.ts`.
 - `src/core/minions/handlers/subagent-result-mode.ts` — result mode/fallback token stamping extracted from the legacy handler. Private mode refuses its native loop before client construction; the host action loop is not implemented yet.
 
+- `src/core/minions/subscription-jobs.ts` — trusted queue subscription grants, immutable versioned job/authority/model/source-incarnation binding, per-call worker fencing and cancellation. `subscription-job-schema.ts` supplies migration v224 and the bootstrap claim fence; older workers cannot claim subscription jobs. `subscription-child.ts` tracks child readiness and blocks older child binaries. `queue-model-admission.ts` preserves the legacy native-tool capability check extracted from the queue.
+
 See [private Codex status and acceptance gaps](../../development/private-codex-status.md).

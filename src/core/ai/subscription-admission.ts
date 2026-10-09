@@ -3,7 +3,7 @@ import type { BrainEngine } from '../engine.ts';
 import type { CodexUsage } from './providers/codex-contract.ts';
 
 export class SubscriptionAdmissionError extends Error {
-  constructor(public readonly code: 'subscription_required' | 'subscription_exhausted' | 'subscription_lane_busy' | 'subscription_identity_conflict' | 'subscription_owner_lost' | 'subscription_invalid') {
+  constructor(public readonly code: 'subscription_required' | 'subscription_exhausted' | 'subscription_lane_busy' | 'subscription_identity_conflict' | 'subscription_owner_lost' | 'subscription_invalid' | 'subscription_auxiliary_budget_required') {
     super(code); this.name = 'SubscriptionAdmissionError';
   }
 }

@@ -8,6 +8,7 @@ import { assertNoUnreviewedJobs } from '../../src/core/minions/submission-author
 
 export async function rehearseMinionAuthorityUpgrade(engine: BrainEngine): Promise<void> {
   const migration = MIGRATIONS.find(m => m.name === 'minion_submission_authority')!;
+  const subscriptionMigration = MIGRATIONS.find(m => m.name === 'codex_subscription_jobs')!;
   // Releases through v0.49 already own these versions. The authority cutover
   // must still execute when upgrading that deployed ledger, not overwrite it.
   expect(MIGRATIONS.find(m => m.version === 147)?.name).toBe('oauth_client_capability_grants');
@@ -16,6 +17,8 @@ export async function rehearseMinionAuthorityUpgrade(engine: BrainEngine): Promi
   const originalVersion = await engine.getConfig('version');
   await engine.executeRaw('DELETE FROM minion_jobs');
   await engine.executeRaw('DROP TRIGGER minion_queue_protocol ON minion_jobs');
+  // This later fence references claim_generation too; it did not exist at v148.
+  await engine.executeRaw('DROP TRIGGER codex_job_protocol ON minion_jobs');
   await engine.executeRaw('ALTER TABLE minion_jobs DROP COLUMN submission_authority, DROP COLUMN claim_generation');
   await engine.setConfig('version', '148');
   const upgrade = () => runMigrations(engine);
@@ -43,6 +46,7 @@ export async function rehearseMinionAuthorityUpgrade(engine: BrainEngine): Promi
     await engine.executeRaw('DELETE FROM minion_jobs');
     // Restore even after a failed assertion; sibling tests keep the current schema.
     await engine.transaction(async tx => { await tx.runMigration(migration.version, migration.sql); });
+    await engine.transaction(async tx => { await tx.runMigration(subscriptionMigration.version, subscriptionMigration.sql); });
     await engine.setConfig('version', originalVersion ?? String(LATEST_VERSION));
   }
 }

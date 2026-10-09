@@ -38,7 +38,7 @@ The installed artifact has not changed. Private activation and live verification
 |---|---|---|---|---|
 | A. Schema/image transport and lifecycle | absent | partial prototype | partial | `codex-proposal`, `codex-input`, `codex-schema`, `codex-lifecycle`, `codex-process` and fake executable tests. Real schema file/argv, JSONL completion, local validation, private scratch, filtered env, process-group settlement. Runtime native-action/instruction isolation remains unqualified; image validation currently checks bounded container headers/dimensions, not a full codec decode. Windows process trees unsupported. |
 | B. Strict routing | absent | absent | partial | `private-policy`, gateway/provider construction guards, `model-config`, special atom resolver, and legacy subagent entry gate. Explicit conflicting pins fail; default roles choose the configured Codex model. Complete queue/eval/pin-plane coverage remains open. |
-| C. Subscription accounting | absent | absent | partial | `subscription-admission`, migration v223, `codex-dispatch`, async host scopes, honest null costs, independent auxiliary USD guards. PGLite and native PostgreSQL tests cover account concurrency, immutable envelopes, bounds, stale ownership and unresolved retention. Durable operator reconciliation and producer/queue/cycle envelope integration remain open. The lane is shared within one brain DB, not across unrelated DBs. |
+| C. Subscription accounting | absent | absent | partial | `subscription-admission`, migration v223, `codex-dispatch`, async host scopes, honest null costs, independent auxiliary USD guards. PGLite and native PostgreSQL tests cover account concurrency, immutable envelopes, bounds, stale ownership and unresolved retention. Queue/worker binding is implemented below; durable operator reconciliation and producer/cycle envelope creation remain open. The lane is shared within one brain DB, not across unrelated DBs. |
 | D. Bounded feature coverage | absent | absent | partial | Actual gateway chat/expansion/OCR use the proposal path; schema/image transport and valid empty outcomes tested. `private-roles` inventories roles without claiming feature acceptance. Semantic validation, citations, cache identity and failure/watermark behavior require role-by-role fixtures and fixes. |
 | E. Synthesis/pattern publication | absent | unverified | unverified | Existing prepared-write/oneshot machinery is available. No Codex-specific accepted-plan retention, partial-commit flow or transcript-to-pattern acceptance fixture is claimed here. |
 | F. Host-owned action loop | absent | absent | absent | Existing ledger/canonical IDs, delegated tools, receipts and worker leases were located. Codex native tools remain false; the unfinished private minion path refuses execution before Anthropic construction. Sequential host action schema/loop, fencing, recovery and proven writes still need implementation. Deterministic worker registration remains possible. |
@@ -72,6 +72,61 @@ The old two-file prototype was not a gateway implementation. This branch adds:
 - An engine-free route audit plus a deliberately incomplete feature inventory.
 - Small extractions from config, gateway, atoms and subagent code to remain within
   the existing module/function ceilings. No ceiling was increased.
+
+## Queue integration follow-up
+
+`MinionQueue.add` now accepts explicit bounded subscription consent in its trusted
+fourth argument (`codexSubscription: {maxAttempts, maxTurns, deadline}`). It is
+never read from job data and is currently restricted to application authority.
+The run and job commit in the same transaction. A versioned run identity binds
+the stored payload, submission authority, configured model/binary and explicit
+source incarnation. Reusing a job with changed inputs or larger limits refuses;
+coalesced legacy jobs cannot silently adopt the protocol. Retries reuse the
+original allowance. Queue preflight reports conflicting job/global pins.
+
+`runWithJobSpend` carries this grant in both inline and isolated worker handlers.
+It rechecks the live job lease, durable payload, authority, source incarnation and
+private route before dispatch and acceptance, and carries the worker's cancellation
+signal into the adapter. Migration **v224** fences each subscription job claim;
+old workers cannot claim those rows. Child readiness independently requires
+`codex-subscription-v1`, preventing a newer parent from invoking an older child.
+
+Auxiliary API usage requires separate spending authorization. Capped mixed jobs
+must reserve the complete known API ceiling; they cannot clip a reservation to the
+remaining balance and then dispatch an oversized call. Subscription calls still
+report unknown monetary cost, and the account lane stays occupied after ambiguity.
+
+This is infrastructure for bounded jobs, not completed feature/producer coverage.
+Existing schedulers and command producers do not yet issue these explicit grants.
+The private minion action loop remains unsupported and is refused at submission.
+A new shared contract exercises real queue/worker/gateway paths with fake Codex
+executables on both PGLite and native PostgreSQL. Production migration/activation
+has not occurred.
+
+Queue verification used scrubbed environments, isolated databases, fake executables
+and a network tripwire. The final focused command passed **45 tests**:
+
+```sh
+bun test --timeout=60000 test/ai/codex-jobs.serial.test.ts test/minions-spend-authorization.test.ts test/ai/codex-gateway.serial.test.ts test/child-readiness.test.ts
+```
+
+Native PostgreSQL passed **27 tests**, with only the optional PgBouncer arm skipped,
+and catalog regeneration disabled:
+
+```sh
+bun test --timeout=240000 test/e2e/codex-subscription-jobs.test.ts test/e2e/codex-subscription-admission.test.ts test/e2e/schema-catalog-golden.test.ts
+```
+
+PGLite migration/catalog checks passed 13 tests. Additional queue regressions passed
+122 tests initially; one old-schema rehearsal failed because it retained the new
+trigger after removing its referenced column. The fixture now removes/restores that
+trigger, and its entire file (`test/minions-submission-authority.test.ts`) passes
+24 tests. The other six files were `minions-admission`,
+`minions-spend-enforcement-child`, `minions-legacy-coalesce`, `queue-child-done`,
+`queue-started-at-retry`, and `worker-job-isolation` under `test/`.
+`bun run verify` passed 75 checks (including typecheck), with the admin build still
+explicitly skipped for its additional unlocked install. `bun run build` passed.
+These counts overlap. The isolated PostgreSQL cluster was stopped afterward.
 
 ## Runtime qualification blocker
 

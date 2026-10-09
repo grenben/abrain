@@ -324,6 +324,7 @@
     "functions": {
       "bump_page_generation_clock_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=c40a0a3b86e640b6c8979976173dd93ae92c8c1b9a9e3595cae2af1e265328fe",
       "bump_page_generation_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=c4135ae3f74177aa71313a6c73f22bda7a298bbf12435a8def390212ae11466a",
+      "enforce_codex_job_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=8abd250e40832cc7171832994d1c2e567efa13ee9a7c533c7c99f5fb73901d7d",
       "enforce_minion_queue_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=be82640d1979fc81dc812efb78bb3596ef536f656d20750e5e4aa19016bf4784",
       "gbrain_advance_page_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=ae793ff5263f7b76311e0c22593fb658db9f82e7b3781914421d9508b6da0e88",
       "gbrain_advance_tag_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=7807b26b4933148aa63c67fca824a60d3492396728205d04e16c48c81174cbd5",
@@ -1747,7 +1748,8 @@
           "40 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
           "41 started_at timestamp with time zone/timestamptz NULL",
           "42 finished_at timestamp with time zone/timestamptz NULL",
-          "43 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+          "43 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "44 codex_claim_token bigint/int8 NULL"
         ],
         "flags": "relkind=r rls=false force_rls=false"
       },
@@ -2694,6 +2696,7 @@
       }
     },
     "triggers": {
+      "minion_jobs.codex_job_protocol": "CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol()",
       "minion_jobs.minion_queue_protocol": "CREATE TRIGGER minion_queue_protocol BEFORE INSERT OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_minion_queue_protocol()",
       "page_aliases.managed_writer_guard": "CREATE TRIGGER managed_writer_guard BEFORE INSERT OR DELETE OR UPDATE ON public.page_aliases FOR EACH ROW EXECUTE FUNCTION gbrain_require_managed_writer()",
       "pages.bump_page_generation_clock_trg": "CREATE TRIGGER bump_page_generation_clock_trg AFTER INSERT OR DELETE OR UPDATE ON public.pages FOR EACH STATEMENT EXECUTE FUNCTION bump_page_generation_clock_fn()",

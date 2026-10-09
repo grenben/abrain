@@ -448,6 +448,7 @@
     "functions": {
       "bump_page_generation_clock_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=d3359bcd09cccd881585abd9eee81c3dcf4161d935164f7953f2e9fdef73ed3e",
       "bump_page_generation_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=78059745996cfbb72586a2e0e161635b96a62a5db9d0be5c710f4d437d994431",
+      "enforce_codex_job_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=8abd250e40832cc7171832994d1c2e567efa13ee9a7c533c7c99f5fb73901d7d",
       "enforce_minion_queue_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=be82640d1979fc81dc812efb78bb3596ef536f656d20750e5e4aa19016bf4784",
       "gbrain_advance_page_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=ae793ff5263f7b76311e0c22593fb658db9f82e7b3781914421d9508b6da0e88",
       "gbrain_advance_tag_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=7807b26b4933148aa63c67fca824a60d3492396728205d04e16c48c81174cbd5",
@@ -2386,13 +2387,14 @@
           "41 started_at timestamp with time zone/timestamptz NULL",
           "42 finished_at timestamp with time zone/timestamptz NULL",
           "43 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
-          "44 quiet_hours jsonb/jsonb NULL",
-          "45 stagger_key text/text NULL",
-          "46 budget_remaining_cents integer/int4 NULL",
-          "47 budget_owner_job_id bigint/int8 NULL",
-          "48 budget_root_owner_id bigint/int8 NULL",
-          "49 spend_authorization jsonb/jsonb NULL",
-          "50 spend_claim_token bigint/int8 NULL"
+          "44 codex_claim_token bigint/int8 NULL",
+          "45 quiet_hours jsonb/jsonb NULL",
+          "46 stagger_key text/text NULL",
+          "47 budget_remaining_cents integer/int4 NULL",
+          "48 budget_owner_job_id bigint/int8 NULL",
+          "49 budget_root_owner_id bigint/int8 NULL",
+          "50 spend_authorization jsonb/jsonb NULL",
+          "51 spend_claim_token bigint/int8 NULL"
         ],
         "flags": "relkind=r rls=false force_rls=false"
       },
@@ -3660,6 +3662,7 @@
       "links.planner_stats_del": "CREATE TRIGGER planner_stats_del AFTER DELETE ON public.links REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION gbrain_count_modifications()",
       "links.planner_stats_ins": "CREATE TRIGGER planner_stats_ins AFTER INSERT ON public.links REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION gbrain_count_modifications()",
       "links.planner_stats_upd": "CREATE TRIGGER planner_stats_upd AFTER UPDATE ON public.links REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION gbrain_count_modifications()",
+      "minion_jobs.codex_job_protocol": "CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol()",
       "minion_jobs.minion_queue_protocol": "CREATE TRIGGER minion_queue_protocol BEFORE INSERT OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_minion_queue_protocol()",
       "needs_rederive.trust_generation_insert": "CREATE CONSTRAINT TRIGGER trust_generation_insert AFTER INSERT ON public.needs_rederive DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (true) EXECUTE FUNCTION gbrain_bump_trust_generation()",
       "oauth_clients.trust_generation_update": "CREATE CONSTRAINT TRIGGER trust_generation_update AFTER UPDATE ON public.oauth_clients DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((old.min_trust IS DISTINCT FROM new.min_trust)) EXECUTE FUNCTION gbrain_bump_trust_generation()",

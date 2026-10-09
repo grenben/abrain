@@ -2,7 +2,12 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { BrainEngine } from '../engine.ts';
 import type { SubscriptionAttempt } from './subscription-admission.ts';
 
-export interface CodexSubscriptionContext { engine: BrainEngine; runId: string; repair?: boolean }
+export interface CodexSubscriptionContext {
+  engine: BrainEngine; runId: string; repair?: boolean;
+  /** Host worker fencing, refreshed before dispatch and acceptance. Never supplied by the model. */
+  checkAuthority?: () => Promise<void>;
+  signal?: AbortSignal;
+}
 const contexts = new AsyncLocalStorage<CodexSubscriptionContext>();
 const admitted = new AsyncLocalStorage<SubscriptionAttempt>();
 /** Host-owned scope, backed by an already-authorized durable envelope. No payload inference. */

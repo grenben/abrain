@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSpawnInvocation } from './spawn-helpers.ts';
 import { SpendEnforcementUnavailableError, childSpendEnforcementReady } from './spend-authorization.ts';
+import { childSubscriptionEnforcementReady } from './subscription-child.ts';
 import { LocalConfigurationError, isLocalConfigurationError } from './configuration-error.ts';
 import {
   UnrecoverableError,
@@ -112,6 +113,7 @@ export interface RunJobInChildOpts {
   jobId: number;
   /** The row carries a spend authorization: only a child with `spend-enforcement-v1` may run it. */
   spendAuthorized?: boolean;
+  codexAuthorized?: boolean;
   jobName: string;
   lockToken: string;
   /** Per-job abort (timeout / cancel / lock-lost / lock-renewal-failed). */
@@ -144,6 +146,7 @@ interface ChildExit {
  * them verbatim).
  */
 export async function runJobInChild(opts: RunJobInChildOpts): Promise<unknown> {
+  if (opts.codexAuthorized && !childSubscriptionEnforcementReady()) throw childConfigurationError('child_protocol_incompatible');
   if (opts.spendAuthorized && !childSpendEnforcementReady()) throw new SpendEnforcementUnavailableError();
   let executionStopped = false;
   let configurationError: LocalConfigurationError | undefined;

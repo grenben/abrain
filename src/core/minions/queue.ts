@@ -1,3 +1,4 @@
+import { assertQueueModelCapability } from './queue-model-admission.ts';
 /**
  * MinionQueue — Postgres-native job queue inspired by BullMQ.
  *
@@ -8,7 +9,7 @@
  *   await queue.prune({ olderThan: new Date(Date.now() - 30 * 86400000) });
  */
 
-import { APPLICATION_AUTHORITY, LEGACY_AUTHORITY_COLUMN, assertNoUnreviewedJobs, authorizeJobExecution, currentSubmissionAuthority, parseSubmissionAuthority, type SubmissionAuthority } from './submission-authority.ts';
+import { APPLICATION_AUTHORITY, LEGACY_AUTHORITY_COLUMN, assertNoUnreviewedJobs, authorityDigest, authorizeJobExecution, currentSubmissionAuthority, parseSubmissionAuthority, type SubmissionAuthority } from './submission-authority.ts';
 import type { BrainEngine } from '../engine.ts';
 import type {
   MinionJob, MinionJobInput, MinionJobStatus, InboxMessage, TokenUpdate,
@@ -20,6 +21,7 @@ import { adoptSpendAuthorization, legacyDefaultClaimSetSql, legacyDefaultClaimPa
 import { validateAttachment } from './attachments.ts';
 import { isProtectedJobName } from './protected-names.ts';
 import { assertEmbedBackfillQueueAdmission } from './embed-backfill-admission.ts';
+import { bindJobSubscription, preflightSubscriptionJob, CODEX_GENERATIVE_JOBS, type JobSubscriptionAuthorization } from './subscription-jobs.ts';
 import { lockDelegatedSubmission, checkDelegatedCapacity, prepareDelegatedReplay, admitDelegatedRetry } from './delegated-admission.ts';
 import {
   computeParamHash,
@@ -52,6 +54,8 @@ export interface TrustedSubmitOpts {
   delegatedClientId?: string;
   /** Consent-gated CLI producers only: the user's spend authorization (spend-authorization.ts). */
   spendAuthorization?: SpendAuthorization;
+  /** Explicit bounded Codex subscription consent, never read from job data. */
+  codexSubscription?: JobSubscriptionAuthorization;
 }
 
 const MIGRATION_VERSION = 7;
@@ -219,6 +223,10 @@ export class MinionQueue {
     opts?: Partial<MinionJobInput>,
     trusted?: TrustedSubmitOpts,
   ): Promise<MinionJob> {
+    if (trusted?.codexSubscription) {
+      trusted = { ...trusted, codexSubscription: structuredClone(trusted.codexSubscription) };
+      data = structuredClone(data); opts = structuredClone(opts);
+    }
     // Normalize first so the protected-name check and the insert use the same
     // canonical form. Without the trim-before-check, `queue.add(' shell ', ...)`
     // would evade the guard and insert a job literally named 'shell'.
@@ -235,52 +243,15 @@ export class MinionQueue {
       throw new Error('Job name cannot be empty');
     }
     assertEmbedBackfillQueueAdmission(this.engine, jobName, data, trusted);
+    if (CODEX_GENERATIVE_JOBS.has(jobName)) await preflightSubscriptionJob(this.engine, jobName, data ?? {});
+    if (trusted?.codexSubscription && !CODEX_GENERATIVE_JOBS.has(jobName)) throw new Error('subscription_unsupported_job');
     if (isProtectedJobName(jobName) && !trusted?.allowProtectedSubmit) {
       throw new Error(
         `protected job name '${jobName}' requires CLI or operation-local submitter ` +
         `(pass {allowProtectedSubmit: true} as the 4th arg to MinionQueue.add)`,
       );
     }
-    // v0.38 (S1.7 + D6) — capability-based gate replaces the v0.31.12 Anthropic
-    // pin. The subagent loop now routes through `gateway.toolLoop()` so any
-    // provider whose recipe declares tool calling AND supports_subagent_loop
-    // works. Refuse-at-submit when the requested model cannot run a tool loop
-    // (no tools, loop declared unsupported, or unknown provider). The handler
-    // (`subagent.ts`) does a defense-in-depth check at dispatch time too.
-    if (jobName === 'subagent' && data && typeof data === 'object') {
-      const submittedModel = (data as { model?: unknown }).model;
-      if (typeof submittedModel === 'string' && submittedModel.length > 0) {
-        const { classifyCapabilities } = await import('../ai/capabilities.ts');
-        const verdict = classifyCapabilities(submittedModel);
-        if (verdict === 'unusable:no_tools') {
-          throw new Error(
-            `subagent job rejected: data.model "${submittedModel}" lacks native tool calling. ` +
-            `The subagent loop dispatches brain ops via tool calls — without tool support the loop has no way to run. ` +
-            `Pick a provider that supports tools (anthropic, openai, google, litellm, deepseek, groq, together, azure-openai).`,
-          );
-        }
-        if (verdict === 'unusable:no_subagent_loop') {
-          throw new Error(
-            `subagent job rejected: data.model "${submittedModel}" comes from a provider whose recipe declares ` +
-            `supports_subagent_loop: false — its tool_call_ids are not stable enough across crashes/replays ` +
-            `to drive the subagent loop. ` +
-            `Pick a provider whose recipe declares supports_subagent_loop: true (e.g. anthropic, openai, google, deepseek, groq).`,
-          );
-        }
-        if (verdict === 'unknown') {
-          const { listRecipes } = await import('../ai/recipes/index.ts');
-          const known = listRecipes().map((r) => r.id).join(', ');
-          throw new Error(
-            `subagent job rejected: data.model "${submittedModel}" references an unknown provider. ` +
-            `Use format provider:model where provider matches a recipe in src/core/ai/recipes/. ` +
-            `Known providers: ${known}.`,
-          );
-        }
-        // 'degraded:no_caching' and 'degraded:no_parallel' pass through — the
-        // gateway prints a once-per-(source, model) cost warning at first
-        // dispatch. 'ok' passes through silently.
-      }
-    }
+    await assertQueueModelCapability(jobName, data);
     await this.ensureSchema();
 
     const childStatus: MinionJobStatus = opts?.delay ? 'delayed' : 'waiting';
@@ -340,6 +311,13 @@ export class MinionQueue {
     let coalesceAudit: CoalesceAuditEvent | null = null;
 
     const result = await this.engine.transaction(async (tx) => {
+      const finish = async (submitted: MinionJob): Promise<MinionJob> => {
+        if (trusted?.codexSubscription && (submitted.name !== jobName || authorityDigest(submitted.data) !== authorityDigest(data ?? {}))) {
+          throw new Error('subscription_identity_conflict');
+        }
+        await bindJobSubscription(tx, submitted, trusted?.codexSubscription);
+        return submitted;
+      };
       // Client lock spans grant validation, capacity check and insertion.
       const delegatedLimit = await lockDelegatedSubmission(tx, delegatedClientId, jobName, data);
       // 1. Idempotency fast path — if a row already exists for this key, return it
@@ -352,7 +330,7 @@ export class MinionQueue {
       //    data for the dream breaker) and fall through to the INSERT below.
       if (opts?.idempotency_key) {
         const existing = await coalesceOnIdempotencyKey(tx, opts.idempotency_key, authority);
-        if (existing) return existing;
+        if (existing) return finish(existing);
       }
 
       // 1a. Param-coalescing (admission): an identical parentless submit —
@@ -391,11 +369,11 @@ export class MinionQueue {
           matchParams
         );
         if (match.length > 0) {
-          return coalesceReturn(tx, match[0], {
+          return finish(await coalesceReturn(tx, match[0], {
             queue: admissionQueue,
             name: jobName,
             param_hash: paramHash,
-          }, ev => { coalesceAudit = ev; }, authority);
+          }, ev => { coalesceAudit = ev; }, authority));
         }
       }
 
@@ -500,12 +478,12 @@ export class MinionQueue {
               [jobName, backpressureQueue, bpSourceId]
             );
             if (existingPending.length > 0) {
-              return coalesceReturn(tx, existingPending[0], {
+              return finish(await coalesceReturn(tx, existingPending[0], {
                 queue: backpressureQueue,
                 name: jobName,
                 pending_count: pendingCount,
                 max_pending: maxPending,
-              }, ev => { coalesceAudit = ev; }, authority);
+              }, ev => { coalesceAudit = ev; }, authority));
             }
           }
         }
@@ -530,12 +508,12 @@ export class MinionQueue {
               [jobName, backpressureQueue, bpSourceId]
             );
             if (existingWaiting.length > 0) {
-              return coalesceReturn(tx, existingWaiting[0], {
+              return finish(await coalesceReturn(tx, existingWaiting[0], {
                 queue: backpressureQueue,
                 name: jobName,
                 waiting_count: waitingCount,
                 max_waiting: maxWaiting,
-              }, ev => { coalesceAudit = ev; }, authority);
+              }, ev => { coalesceAudit = ev; }, authority));
             }
           }
         }
@@ -655,7 +633,7 @@ export class MinionQueue {
       // ON CONFLICT DO NOTHING returns 0 rows: a concurrent submit won the
       // race, and its row goes through the same coalesce rule (third path).
       const outcome = await insertOrCoalesce(tx, insertSql, params, opts?.idempotency_key, authority);
-      if ('coalesced' in outcome) return outcome.coalesced;
+      if ('coalesced' in outcome) return finish(outcome.coalesced);
 
       const child = rowToMinionJob(outcome.inserted);
 
@@ -669,7 +647,7 @@ export class MinionQueue {
         );
       }
 
-      return child;
+      return finish(child);
     });
 
     // Deferred audit flush — after commit, advisory lock released, connection
@@ -1463,6 +1441,7 @@ export class MinionQueue {
       `UPDATE minion_jobs SET
         status = 'active',
         claim_generation = claim_generation + 1,
+        codex_claim_token = claim_generation + 1,
         ${legacyDefaultClaimSetSql('$7', '$8')},
         lock_token = $1,
         lock_until = now() + ((CASE WHEN COALESCE(lock_duration_ms, ($6::jsonb ->> name)::int) IS NULL THEN $2

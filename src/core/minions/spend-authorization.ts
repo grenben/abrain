@@ -1,4 +1,7 @@
-import { hasAdmittedCodexAttempt } from '../ai/subscription-context.ts';
+import { codexSubscriptionContext, hasAdmittedCodexAttempt } from '../ai/subscription-context.ts';
+import { runWithJobSubscription } from './subscription-jobs.ts';
+import { noteChildSubscriptionEnforcement } from './subscription-child.ts';
+export { jobSubscriptionBound } from './subscription-child.ts';
 /**
  * Submit-time spend authorization on queued paid jobs.
  *
@@ -173,6 +176,7 @@ export class SpendEnforcementUnavailableError extends RateLeaseUnavailableError 
 let childSpendEnforcement = false;
 /** Records whether the selected job child advertised `spend-enforcement-v1` at readiness. */
 export function noteChildSpendEnforcement(features: readonly string[]): void {
+  noteChildSubscriptionEnforcement(features);
   childSpendEnforcement = features.includes('spend-enforcement-v1');
 }
 export function childSpendEnforcementReady(): boolean { return childSpendEnforcement; }
@@ -279,6 +283,11 @@ export async function runWithJobSpend<T>(
   ctx: MinionJobContext,
   handler: (ctx: MinionJobContext) => Promise<T>,
 ): Promise<T> {
+  return runWithJobSubscription(engine, job, ctx, () => runWithApiJobSpend(engine, job, ctx, handler));
+}
+
+async function runWithApiJobSpend<T>(engine: BrainEngine, job: MinionJob, ctx: MinionJobContext,
+  handler: (ctx: MinionJobContext) => Promise<T>): Promise<T> {
   if (job.spend_authorization_invalid) {
     throw new UnrecoverableError(`spend_authorization_invalid: job ${job.id} carries a malformed spend authorization, so it will not run. Cancel it (gbrain jobs cancel ${job.id}) and run the producing command again.`);
   }
@@ -295,7 +304,7 @@ export async function runWithJobSpend<T>(
     if (hasAdmittedCodexAttempt(call.model)) return { settle: async () => {} };
     const max = maximumInvocationCents(call);
     if (max === null) {
-      if (record.cap_source === 'user') throw (seen.refusal = await spendRefusal(engine, job, record, { kind: 'no_pricing', model: call.model }));
+      if (record.cap_source === 'user' || codexSubscriptionContext()) throw (seen.refusal = await spendRefusal(engine, job, record, { kind: 'no_pricing', model: call.model }));
       if (!warned) {
         warned = true;
         process.stderr.write(`[budget] BUDGET_TRACKER_NO_PRICING: model "${call.model}" has no known price; job ${job.id} runs it unmetered under its ${record.cap_source} $${record.cap_usd!.toFixed(2)} cap. Register its rate with \`gbrain pricing set\` to meter it.\n`);
@@ -304,7 +313,7 @@ export async function runWithJobSpend<T>(
     let hold;
     try {
       hold = await reserveGroup(engine, { budgetKey, capCents, estimatedCents: max ?? 0, estimateKnown: max !== null,
-        model: call.model, provider: call.model.split(':')[0] || 'unknown', jobId: job.id });
+        model: call.model, provider: call.model.split(':')[0] || 'unknown', jobId: job.id, requireFullReservation: !!codexSubscriptionContext() });
     } catch (error) {
       if (!(error instanceof GroupBudgetRefusal)) throw error;
       if (error.kind === 'pressure' && await pressureRenewals(engine, job.id, budgetKey) < MAX_PRESSURE_RENEWALS) {
