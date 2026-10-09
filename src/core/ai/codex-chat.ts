@@ -25,6 +25,7 @@ export async function codexChat(opts: ChatOpts, policy: PrivateCodexConfig): Pro
   if (!result.usage) throw new CodexProposalError('invalid_output');
   const text = opts.responseSchema ? result.text : (result.value as {text:string}).text;
   recordUsage(result,policy.model);
+  opts.responseSchema?.validateCodexProposal?.(text);
   await acceptCodexProposal(result);
   return {text,blocks:[{type:'text',text}],stopReason:'end',model:policy.model,providerId:'codex-cli',
     usage:{input_tokens:result.usage.inputTokens-result.usage.cachedInputTokens,output_tokens:result.usage.outputTokens,

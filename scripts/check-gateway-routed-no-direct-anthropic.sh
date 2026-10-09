@@ -31,6 +31,7 @@ cd "$ROOT"
 # Extend this list when migrating another file off direct SDK construction.
 GUARDED_FILES=(
   "src/core/cycle/synthesize.ts"
+  "src/core/cycle/triage-client.ts"
   "src/core/think/index.ts"
 )
 

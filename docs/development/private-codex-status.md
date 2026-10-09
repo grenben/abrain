@@ -128,6 +128,33 @@ trigger, and its entire file (`test/minions-submission-authority.test.ts`) passe
 explicitly skipped for its additional unlocked install. `bun run build` passed.
 These counts overlap. The isolated PostgreSQL cluster was stopped afterward.
 
+## Dream triage follow-up
+
+The production `runTriagePass` / `makeJudgeClient` path now carries a bounded
+native schema for Codex. Host semantic validation checks complete quotes against
+both the supplied sample and original transcript, named entities against the
+sample, and segment/note bounds. It runs before subscription-turn acceptance and
+again at the feature boundary. Invalid output throws without storing a judgment;
+there is no hidden repair or fallback. Valid zero-score/empty-segment output stays
+a real verdict. A separate Codex cache version invalidates earlier prompt-only
+verdicts and their backoff markers. Private triage is sequential and rejects
+conflicting routes or an additional decision provider before cache/inference.
+
+`triage-client.ts` preserves the existing gateway judge API; `triage-codex.ts`
+owns these new rules. Legacy providers retain their previous parsing behavior.
+The fake-executable fixture exercises the actual triage/gateway/cache path,
+including schema capture, grounding, valid empty output, cache reuse/invalidation,
+refusal and incomplete lifecycle. This does not qualify synthesis publication,
+source authority across the full cycle, or automatic subscription grant creation.
+
+Triage verification passed 63 tests across the new fixture, triage/cache/backoff
+regressions and Codex gateway suite; two opt-in live calibration tests were skipped.
+After adding refusal coverage, the final fixture and legacy gateway-adapter/fallback
+run passed 61 tests (`bun test --timeout=60000 test/ai/codex-triage.serial.test.ts
+test/cycle/synthesize-gateway-adapter.test.ts test/ai/gateway-chat-fallback.test.ts`).
+`bun run verify` again passed 75 checks with the same admin-build skip; typecheck
+and `bun run build` passed. No live provider, installed configuration or DB changed.
+
 ## Runtime qualification blocker
 
 The local CLI advertises native schema/image files, JSONL, ephemeral calls,

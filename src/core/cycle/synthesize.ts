@@ -1,3 +1,6 @@
+import { makeJudgeClient, type JudgeClient } from './triage-client.ts';
+export { makeJudgeClient, type JudgeClient } from './triage-client.ts';
+import { assertTriageRoute, isCodexTriageModel, validateCodexTriage, triageVersionForModel } from './triage-codex.ts';
 import { observationDateLine, observationDateRule } from '../ai/date-grounding.ts';
 import { isConsumerDateGroundingOn } from '../facts/extract.ts';
 import { maintenancePreflight, publishMaintenancePage, type MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
@@ -51,14 +54,11 @@ import { deferPublishOrThrow, postprocessManagedSynthesis, withPostprocessConfli
  *     (manual `gbrain dream retriage --audit-rejects` is the v1 control).
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { chat as gatewayChat, validateModelId, type ChatResult } from '../ai/gateway.ts';
 import { AIConfigError } from '../ai/errors.ts';
 import { resolveChatContextTokens } from '../ai/model-resolver.ts';
 import { normalizeModelId, splitProviderModelId } from '../model-id.ts';
-import { hasAnthropicKey } from '../ai/anthropic-key.ts';
 import { basename, join, dirname, isAbsolute, resolve } from 'node:path';
 import { parseLlmJson } from '../llm-json.ts';
 import type { BrainEngine, DreamVerdict, TriageSegment } from '../engine.ts';
@@ -1840,127 +1840,6 @@ async function checkCooldown(
 // pre-flight), and the verdict loop wraps the actual chat call in try/catch
 // for AIConfigError surfacing mid-run.
 
-export interface JudgeClient {
-  create: (
-    params: Anthropic.MessageCreateParamsNonStreaming,
-    options?: { signal?: AbortSignal },
-  ) => Promise<Anthropic.Message>;
-}
-
-/**
- * Build a gateway-routed JudgeClient for the resolved verdict model.
- * Returns null when no chat provider is reachable for `verdictModel`:
- *   - Unknown provider id (resolveRecipe throws AIConfigError).
- *   - Anthropic provider with no key (env or config) — preserves the legacy
- *     "no ANTHROPIC_API_KEY" cheap-skip semantics.
- * On null, the verdict loop short-circuits each transcript with an explicit
- * "no configured provider" reason and continues the phase.
- *
- * For non-Anthropic providers (deepseek, openrouter, voyage, ollama,
- * llama-server, ...), we delegate auth probing to the gateway's own
- * recipe `auth_env.required` machinery — AIConfigError at gateway.chat()
- * time is caught by the verdict loop and surfaced per-transcript.
- */
-export function makeJudgeClient(verdictModel: string): JudgeClient | null {
-  // Normalize: ensure provider:model shape (and slash→colon — #1698). resolveModel
-  // returns bare anthropic ids (e.g. `claude-haiku-4-5`); gateway.chat needs `anthropic:...`.
-  const modelStr = normalizeModelId(verdictModel);
-
-  // #1698 (C1): id-validity via the shared `validateModelId` core (resolveRecipe +
-  // assertTouchpoint) — catches unknown provider AND chat-less provider (model-id
-  // typos pass locally and fail at the provider; no runtime allowlist). We do NOT
-  // use the full `probeChatModel` here: its `isAvailable` layer would reject
-  // non-Anthropic-no-key providers and an unconfigured gateway, breaking the
-  // deliberate per-transcript-degrade contract (and test A9). validateModelId reads
-  // the recipe registry, not gateway _config, so it works pre-configureGateway().
-  const v = validateModelId(modelStr);
-  if (!v.ok) return null;
-
-  // Anthropic key probe (legacy behavior preserved verbatim). Other providers' key
-  // checks happen lazily at chat call time and surface as AIConfigError, which the
-  // verdict loop catches per-transcript.
-  if (v.parsed.providerId === 'anthropic' && !hasAnthropicKey()) return null;
-
-  return {
-    create: async (params, options): Promise<Anthropic.Message> => {
-      // Map Anthropic.MessageCreateParamsNonStreaming → gateway.ChatOpts.
-      // `judgeSignificance` always sends string content + string system,
-      // and the adapter only TEXT-flattens the array-of-blocks shape —
-      // `tool_use`, `tool_result`, image, and other non-text blocks become
-      // empty strings. If a future caller wires tool-use or image content
-      // through this client, extend the mapping instead of relying on the
-      // current silent drop. Same pattern as think/index.ts:607-615.
-      const messages = params.messages.map(m => ({
-        role: m.role,
-        content: typeof m.content === 'string'
-          ? m.content
-          : (Array.isArray(m.content)
-              ? m.content.map(b => ('text' in b ? b.text : '')).join('')
-              : ''),
-      }));
-      const system = typeof params.system === 'string'
-        ? params.system
-        : (Array.isArray(params.system)
-            ? params.system.map(b => ('text' in b ? b.text : '')).join('')
-            : undefined);
-
-      const result: ChatResult = await gatewayChat({
-        model: modelStr,
-        system,
-        messages,
-        maxTokens: params.max_tokens,
-        // DeepSeek v4 thinks by default and bills reasoning as OUTPUT tokens
-        // against max_tokens (recipe thinking_by_default, #4172) — same for
-        // OpenRouter's DeepSeek hosts (#4758) and a configured Anthropic
-        // thinking mode. The judge wants only the small JSON verdict, so it
-        // turns thinking off per call (#5331; per-route mapping in thinking-off.ts).
-        thinking: 'off',
-        // #4077: a cancelled cycle tears down the in-flight judge call too.
-        abortSignal: options?.signal,
-      });
-
-      // Map gateway.ChatResult → Anthropic.Message shape. judgeSignificance
-      // reads `.content[0].type === 'text'`, `.content[0].text`, and
-      // `.stop_reason`; other fields are best-effort for downstream
-      // telemetry parity. The stopReason mapping is load-bearing:
-      // 'length' → 'max_tokens' lets judgeSignificance detect a truncated
-      // verdict (reasoning models can burn the whole max_tokens budget on
-      // reasoning tokens, leaving empty/partial text) and
-      // 'refusal'/'content_filter' → 'refusal' surfaces a blocked response,
-      // instead of silently treating either as a clean end-of-turn.
-      // 'other' (gateway's mapStopReason catch-all — unknown provider
-      // finish reasons, which includes both non-standard SUCCESSFUL stops
-      // and the AI SDK's 'error'/'unknown' labels) maps to 'end_turn'
-      // deliberately. Rationale: (a) treating 'other' as abnormal would
-      // permanently disable verdict caching on providers whose successful
-      // stops the gateway doesn't recognize; (b) the residual risk is
-      // narrow — an errored response only gets cached if it still contains
-      // a complete, parseable JSON object with a finite numeric score in
-      // [0,1] (unparseable output is never cached), and such a complete
-      // verdict is trustworthy regardless of the finish label. Distinguishing
-      // error/unknown from benign-unknown belongs in gateway.ts's
-      // mapStopReason (out of scope here — see PR notes).
-      return {
-        id: '',
-        type: 'message',
-        role: 'assistant',
-        model: modelStr,
-        // A chat_fallback_chain entry answered: judgeSignificance marks the verdict uncacheable.
-        ...(result.fallbackFrom ? { answered_by: result.model } : {}),
-        content: [{ type: 'text', text: result.text }],
-        stop_reason: result.stopReason === 'length' ? 'max_tokens'
-          : result.stopReason === 'tool_calls' ? 'tool_use'
-          : (result.stopReason === 'refusal' || result.stopReason === 'content_filter') ? 'refusal'
-          : 'end_turn',
-        stop_sequence: null,
-        usage: {
-          input_tokens: result.usage.input_tokens,
-          output_tokens: result.usage.output_tokens,
-        },
-      } as unknown as Anthropic.Message;
-    },
-  };
-}
 
 export interface TriageResult {
   /**
@@ -2110,7 +1989,7 @@ Quote verbatim; never paraphrase inside "quote".`;
     max_tokens: opts.maxTokens ?? DEFAULT_TRIAGE_MAX_TOKENS,
     system: sys,
     messages: [{ role: 'user', content: `Transcript ${t.basename}:\n\n${trimmed}` }],
-  }, { signal: opts.signal });
+  }, { signal: opts.signal, validateCodexProposal: text => validateCodexTriage(verdictModel, text, trimmed, t.content) });
 
   // stop_reason === 'max_tokens' means the response was cut off; 'refusal'
   // means the model refused or a content filter blocked it. Even if a
@@ -2144,6 +2023,7 @@ Quote verbatim; never paraphrase inside "quote".`;
     .map(b => (b.type === 'text' ? b.text : ''))
     .join('')
     .trim();
+  validateCodexTriage(verdictModel, text, trimmed, t.content);
   const parsed = parseLlmJson<{
     score?: unknown;
     content_type?: unknown;
@@ -2262,7 +2142,7 @@ export function isTriageCacheValid(
   staleBefore?: Date,
 ): boolean {
   return cached.score !== null
-    && cached.triage_version === TRIAGE_VERSION
+    && cached.triage_version === triageVersionForModel(model, TRIAGE_VERSION)
     && cached.model === model
     && (!staleBefore || Date.parse(cached.judged_at) >= staleBefore.getTime());
 }
@@ -2412,9 +2292,11 @@ export async function runTriagePass(
   cfg: TriagePassCfg,
   yieldDuringPhase?: () => Promise<void>,
 ): Promise<TriagePassResult> {
+  assertTriageRoute(cfg.model, !!cfg.decide);
+  const triageVersion = triageVersionForModel(cfg.model, TRIAGE_VERSION);
   const now = cfg.now ?? Date.now;
   const start = now();
-  const concurrency = Math.max(1, Math.min(16, Math.floor(cfg.concurrency) || 1));
+  const concurrency = isCodexTriageModel(cfg.model) ? 1 : Math.max(1, Math.min(16, Math.floor(cfg.concurrency) || 1));
   const judge = cfg.judge !== undefined ? cfg.judge : makeJudgeClient(cfg.model);
 
   const reports: TriageFileReport[] = new Array(transcripts.length);
@@ -2458,7 +2340,7 @@ export async function runTriagePass(
     const d = cfg.decide;
     if (!d?.acting) { await processLlm(idx); if (d) await d.observe(transcripts[idx]); return; }
     const t = transcripts[idx];
-    const r = await d.triage(t, { triageVersion: TRIAGE_VERSION, force: cfg.force, staleBefore: cfg.staleBefore, signal: cfg.signal, budgetExhausted });
+    const r = await d.triage(t, { triageVersion, force: cfg.force, staleBefore: cfg.staleBefore, signal: cfg.signal, budgetExhausted });
     if (!r.verdict) {
       if (r.deferred || judge) return processLlm(idx);
       reports[idx] = { filePath: t.filePath, worth: true, score: null, content_type: null, reasons: [r.reason ?? 'decide triage no-change'], cached: false };
@@ -2491,7 +2373,7 @@ export async function runTriagePass(
       };
       return;
     }
-    const backedOffUntil = cfg.force ? null : backoffUntil(existing, cfg.model, TRIAGE_VERSION);
+    const backedOffUntil = cfg.force ? null : backoffUntil(existing, cfg.model, triageVersion);
     if (backedOffUntil) {
       backoffCount++;
       reports[idx] = {
@@ -2556,7 +2438,7 @@ export async function runTriagePass(
         unreliableCount++;
         await recordUnreliableTriage(engine, t, triage.unreliable, triage.diagnostic, {
           existing, keepExisting: existing !== null && isTriageCacheValid(existing, cfg.model),
-          model: cfg.model, triageVersion: TRIAGE_VERSION, aborted: cfg.signal?.aborted === true,
+          model: cfg.model, triageVersion, aborted: cfg.signal?.aborted === true,
         });
         reports[idx] = {
           filePath: t.filePath,
@@ -2583,7 +2465,7 @@ export async function runTriagePass(
           segments: triage.segments,
           entities: triage.entities,
           model: cfg.model,
-          triage_version: TRIAGE_VERSION,
+          triage_version: triageVersion,
         });
       }
       byPath.set(t.filePath, {
@@ -2595,7 +2477,7 @@ export async function runTriagePass(
         segments: triage.segments,
         entities: triage.entities,
         model: cfg.model,
-        triage_version: TRIAGE_VERSION,
+        triage_version: triageVersion,
       });
       const g = gate(triage, t.content);
       reports[idx] = {

@@ -3156,15 +3156,15 @@ export interface ChatOpts {
    */
   cacheSystem?: boolean;
   /**
-   * JSON Schema the reply must conform to (#4863). Honored ONLY on
-   * openai-compatible recipes that declare `supports_structured_outputs` —
-   * backends that enforce `response_format: json_schema` server-side
-   * (Ollama's grammar-constrained decoding). Every other lane ignores the
-   * field, so native / claude-cli calls are byte-identical with or without
-   * it, and the reply still arrives as `text`: callers keep parsing and
-   * validating it themselves (see `jsonSchemaOutput`).
+   * JSON Schema the reply must conform to (#4863). Codex sends the native
+   * schema and validates locally, then calls validateCodexProposal before
+   * accepting the subscription turn. OpenAI-compatible recipes declaring
+   * supports_structured_outputs use response_format: json_schema server-side.
+   * Other lanes ignore this field; native / claude-cli calls stay identical.
+   * The reply still arrives as text: callers keep their semantic validation
+   * (see jsonSchemaOutput). The callback is a trusted host function only.
    */
-  responseSchema?: { name: string; description?: string; schema: Record<string, unknown> };
+  responseSchema?: { name: string; description?: string; schema: Record<string, unknown>; /** Codex host validation before accepting a subscription turn. */ validateCodexProposal?: (text: string) => void };
   /** Caller purpose (`skillopt.judge`, …) stamped on the BudgetTracker ledger row. */
   purpose?: string;
   /**
