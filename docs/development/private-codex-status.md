@@ -356,3 +356,12 @@ PGLite and PostgreSQL. This is a synthesis checkpoint: direct CLI subscription
 grants, auto-think persistence/cooldowns, private A/B trial receipts, optional
 System One decisions and live runtime qualification remain incomplete. Installed
 GBrain and activation are unchanged.
+
+## Think publication follow-up
+
+The [publication checkpoint](private-codex-think-publication.md) adds v252 retained
+think plans, protocol-4 canonical page/take requests, citation transactionality,
+stable replay and durable worker fences. Managed-file partial completion is
+exercised on both engines. CLI subscription grants, auto-think completion,
+operator recovery and process-kill acceptance remain open. Installed status and
+activation are unchanged.

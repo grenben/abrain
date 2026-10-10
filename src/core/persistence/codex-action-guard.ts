@@ -13,6 +13,8 @@ const refuse = (): never => { throw new OperationError('permission_denied', 'The
 /** Protocol 3 is exclusively a retained host action. Older consumers refuse it before effects.
  * Lock order: brain/worktree, job, source, writer, request, page. */
 export async function authorizeCodexWrite(engine: SqlEngine, input: WriteAdmission, lock: boolean): Promise<void> {
+  if (input.protocolVersion === 4) return (await import('../think/publication-guard.ts')).authorizeThinkWrite(engine, input, lock);
+  if (input.intent.codex_think_plan !== undefined) refuse();
   if (input.protocolVersion !== 3) {
     if (input.intent.codex_action !== undefined) refuse();
     return;
@@ -35,6 +37,8 @@ export async function authorizeCodexWrite(engine: SqlEngine, input: WriteAdmissi
 
 /** Use the identical admission retained before effects; never reconstruct authority from model text. */
 export async function authorizeCodexRequest(engine: SqlEngine, row: WriteRequest, lock: boolean): Promise<void> {
+  if (row.protocol_version === 4) return (await import('../think/publication-guard.ts')).authorizeThinkRequest(engine, row, lock);
+  if (row.intent?.codex_think_plan !== undefined) refuse();
   if (row.protocol_version !== 3) { if (row.intent?.codex_action !== undefined) refuse(); return; }
   const b = row.intent?.codex_action as CodexWriteBinding | undefined;
   if (!b) refuse();

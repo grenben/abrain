@@ -9,6 +9,8 @@ export interface CodexSubscriptionContext {
   /** Lock the current job claim while accepting a durable publication. */
   checkAuthorityInTransaction?: (tx: BrainEngine) => Promise<void>;
   signal?: AbortSignal;
+  /** Durable worker fence for deferred prepared writes; supplied only by the host. */
+  publicationFence?: { jobId: number; lockToken: string; jobDigest: string };
 }
 const contexts = new AsyncLocalStorage<CodexSubscriptionContext>();
 const admitted = new AsyncLocalStorage<SubscriptionAttempt>();

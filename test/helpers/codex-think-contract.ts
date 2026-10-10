@@ -1,10 +1,16 @@
 import { beforeAll, beforeEach, afterAll, test, expect } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { BrainEngine } from '../../src/core/engine.ts';
-import { runThink, type RunThinkOpts } from '../../src/core/think/index.ts';
+import { runThink, persistSynthesis, type RunThinkOpts } from '../../src/core/think/index.ts';
+import { persistTakeFromSynthesis } from '../../src/core/think/persist-take.ts';
+import { digest } from '../../src/core/persistence/digest.ts';
+import { installFaultHook } from '../../src/core/persistence/fault-points.ts';
+import { submitPageMutation } from '../../src/core/persistence/page-mutations.ts';
+import { claimWorktree } from '../../src/core/persistence/ownership.ts';
+import { disposePersistenceConsumer } from '../../src/core/persistence/service.ts';
 import { configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
 import { invokeAI, withAIInvocationGuard } from '../../src/core/ai/invocation-guard.ts';
 import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
@@ -48,7 +54,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     await engine.putPage('notes/foreign',{type:'note',title:'Foreign',compiled_truth:'Foreign private reference.'});
   });
   beforeEach(async()=>{reply(valid);await engine.executeRaw('DELETE FROM calibration_profiles');for(const key of ['models.think','models.tier.deep','decide.slots.intent.mode'])await engine.setConfig(key,'');});
-  afterAll(async()=>{await engine?.disconnect();await cleanup?.();unregister?.();resetGateway();globalThis.fetch=fetch;for(const [key,value]of saved)if(value===undefined)delete process.env[key];else process.env[key]=value;rmSync(root,{recursive:true,force:true});});
+  afterAll(async()=>{await disposePersistenceConsumer(engine);await engine?.disconnect();await cleanup?.();unregister?.();resetGateway();globalThis.fetch=fetch;for(const [key,value]of saved)if(value===undefined)delete process.env[key];else process.env[key]=value;rmSync(root,{recursive:true,force:true});});
   test('real think transports the native schema and preserves grounded citations and measured tokens',async()=>{
     await run(async id=>{
       expect(await think()).toMatchObject({synthesisOk:true,synthesis_status:'ok',answer:valid.answer,citations:valid.citations,modelUsed:'codex-cli:gpt-test',usage:{input_tokens:21,output_tokens:9}});
@@ -149,6 +155,131 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     reply({answer:`Orbit launched in March. [${unicodeSlug}]`,citations:[{page_slug:unicodeSlug,row_num:null,citation_index:1}],gaps:[]});
     try{await run(async()=>{expect(await think({anchor:unicodeSlug})).toMatchObject({synthesisOk:true,citations:[{page_slug:unicodeSlug,row_num:null,citation_index:1}]});});}
     finally{await engine.executeRaw('DELETE FROM pages WHERE id=$1',[page.id]);}
+  });
+  test('save retains the validated plan before effects and replays committed receipts without inference',async()=>{
+    await run(async id=>{
+      const result=await think({save:true});expect(result.codex_publication).toBeDefined();
+      const [plan]=await engine.executeRaw<{state:string;admitted:number[]}>('SELECT state,admitted FROM codex_think_publications WHERE run_id=$1',[id]);
+      expect(plan).toMatchObject({state:'accepted',admitted:[]});
+      const count=calls().length;
+      const [saved,concurrent]=await Promise.all([persistSynthesis(engine,result,{sourceId}),persistSynthesis(engine,result,{sourceId})]);expect(concurrent).toEqual(saved);expect(saved!.evidenceInserted).toBe(1);
+      const page=await engine.getPage(saved.slug,{sourceId});expect(page?.compiled_truth).toContain('Orbit launched in March');
+      expect(await engine.executeRaw('SELECT * FROM synthesis_evidence WHERE synthesis_page_id=$1',[page!.id])).toHaveLength(1);
+      const retry=await think({save:true});expect(retry.codex_publication).toEqual(result.codex_publication);
+      expect(await persistSynthesis(engine,retry,{sourceId})).toEqual(saved);expect(calls().length).toBe(count);
+      expect((await engine.executeRaw<{state:string}>('SELECT state FROM codex_think_publications WHERE run_id=$1',[id]))[0]!.state).toBe('complete');
+      await expect(think({save:true,excludePrivate:true})).rejects.toMatchObject({code:'idempotency_conflict'});
+    });
+  });
+  test('publication rejects changed content and cross-source replay before effects',async()=>{
+    await run(async()=>{
+      const result=await think({save:true});
+      await expect(persistSynthesis(engine,{...result,answer:'Changed'}, {sourceId})).rejects.toMatchObject({code:'idempotency_conflict'});
+      await expect(persistSynthesis(engine,result,{sourceId:'default'})).rejects.toMatchObject({code:'idempotency_conflict'});
+    });
+  });
+  test('a missing receipt for an admitted plan blocks replay instead of minting a new request',async()=>{
+    await run(async()=>{
+      const result=await think({save:true});
+      await engine.executeRaw("UPDATE codex_think_publications SET admitted=ARRAY[0] WHERE plan_id=$1::uuid",[result.codex_publication!.plan_id]);
+      await expect(persistSynthesis(engine,result,{sourceId})).rejects.toMatchObject({code:'write_pending'});
+      expect(await engine.executeRaw("SELECT id FROM persistence_requests WHERE intent->>'codex_think_plan'=$1",[result.codex_publication!.plan_id])).toHaveLength(0);
+    });
+  });
+  test('changed evidence refuses publication and leaves its retained answer available',async()=>{
+    await run(async()=>{
+      const result=await think({save:true});
+      const [take]=await engine.executeRaw<{id:number}>('SELECT t.id FROM takes t JOIN pages p ON p.id=t.page_id WHERE p.source_id=$1 AND p.slug=$2 AND t.row_num=1',[sourceId,slug]);
+      await engine.executeRaw('UPDATE takes SET weight=0.25 WHERE id=$1',[take!.id]);
+      try{await expect(persistSynthesis(engine,result,{sourceId})).rejects.toMatchObject({code:'revision_conflict'});
+        expect((await think({save:true})).answer).toBe(result.answer);
+      }finally{await engine.executeRaw('UPDATE takes SET weight=1 WHERE id=$1',[take!.id]);}
+    });
+  });
+  test('cancellation before admission writes nothing and does not hide a previously committed receipt',async()=>{
+    const abort=new AbortController();
+    await run(async()=>{
+      const result=await think({save:true});abort.abort();
+      await expect(persistSynthesis(engine,result,{sourceId})).rejects.toThrow();
+      expect(await engine.executeRaw("SELECT id FROM persistence_requests WHERE intent->>'codex_think_plan'=$1",[result.codex_publication!.plan_id])).toHaveLength(0);
+    },{signal:abort.signal});
+    const after=new AbortController();
+    await run(async()=>{const result=await think({save:true});const saved=await persistSynthesis(engine,result,{sourceId});after.abort();
+      expect(await persistSynthesis(engine,result,{sourceId})).toEqual(saved);
+    },{signal:after.signal});
+  });
+  test('expired allowance refuses new effects but a committed receipt remains replayable',async()=>{
+    await run(async id=>{const result=await think({save:true});
+      await engine.executeRaw("UPDATE codex_subscription_runs SET deadline=now()-interval '1 second' WHERE run_id=$1",[id]);
+      await expect(persistSynthesis(engine,result,{sourceId})).rejects.toMatchObject({code:'write_pending'});
+    });
+    await run(async id=>{const result=await think({save:true});const saved=await persistSynthesis(engine,result,{sourceId});
+      await engine.executeRaw("UPDATE codex_subscription_runs SET deadline=now()-interval '1 second' WHERE run_id=$1",[id]);
+      expect(await persistSynthesis(engine,result,{sourceId})).toEqual(saved);
+    });
+  });
+  test('citation failure rolls back the page and refuses a successful publication',async()=>{
+    await run(async()=>{const result=await think({save:true});
+      await engine.executeRaw("CREATE FUNCTION fail_think_citations() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic citation failure'; END $$");
+      await engine.executeRaw('CREATE TRIGGER fail_think_citations BEFORE INSERT ON synthesis_evidence FOR EACH ROW EXECUTE FUNCTION fail_think_citations()');
+      try{await expect(persistSynthesis(engine,result,{sourceId})).rejects.toThrow();
+        const [plan]=await engine.executeRaw<{payload:{actions:Array<{admission:{slug:string}}>};state:string}>('SELECT payload,state FROM codex_think_publications WHERE plan_id=$1::uuid',[result.codex_publication!.plan_id]);
+        expect(plan!.state).toBe('accepted');expect(await engine.getPage(plan!.payload.actions[0]!.admission.slug,{sourceId})).toBeNull();
+      }finally{await engine.executeRaw('DROP TRIGGER fail_think_citations ON synthesis_evidence');await engine.executeRaw('DROP FUNCTION fail_think_citations()');}
+    });
+  });
+  test.each(['before admission','after preparation'])('a superseded worker cannot publish (%s)',async phase=>{
+    const data={source_id:sourceId},authority={kind:'application',version:1};
+    const [job]=await engine.executeRaw<{id:number}>("INSERT INTO minion_jobs(name,status,lock_token,lock_until,data,submission_authority) VALUES('fixture','active','worker-a',now()+interval '10 minutes',$1::text::jsonb,$2::text::jsonb) RETURNING id",[JSON.stringify(data),JSON.stringify(authority)]);
+    const steal=()=>engine.executeRaw("UPDATE minion_jobs SET lock_token='worker-b',claim_generation=claim_generation+1 WHERE id=$1",[job!.id]);
+    await run(async()=>{
+      const result=await think({save:true});
+      if(phase==='before admission')await steal();
+      else installFaultHook(async point=>{if(point==='consumer:prepared')await steal();});
+      try{await expect(persistSynthesis(engine,result,{sourceId})).rejects.toMatchObject({code:'write_claim_lost'});}
+      finally{installFaultHook(undefined);}
+      const [plan]=await engine.executeRaw<{payload:{actions:Array<{admission:{slug:string}}>};state:string}>('SELECT payload,state FROM codex_think_publications WHERE plan_id=$1::uuid',[result.codex_publication!.plan_id]);
+      expect(plan!.state).toBe('accepted');expect(await engine.getPage(plan!.payload.actions[0]!.admission.slug,{sourceId})).toBeNull();
+      if(phase==='before admission')expect(await engine.executeRaw("SELECT id FROM persistence_requests WHERE intent->>'codex_think_plan'=$1",[result.codex_publication!.plan_id])).toHaveLength(0);
+    },{publicationFence:{jobId:job!.id,lockToken:'worker-a',jobDigest:digest({data,authority})}});
+  });
+  test('disabling private mode cannot turn a Codex result into an unjournaled write',async()=>{
+    await run(async()=>{
+      const result=await think({save:true}),path=join(root,'.gbrain','config.json'),original=readFileSync(path,'utf8');
+      const config=JSON.parse(original);delete config.private_codex;writeFileSync(path,JSON.stringify(config));
+      try{const {codex_publication:_plan,...unbound}=result;
+        await expect(persistSynthesis(engine,unbound,{sourceId})).rejects.toMatchObject({code:'invalid_params'});
+        await expect(persistTakeFromSynthesis(engine,unbound,{anchor:slug,sourceId})).rejects.toMatchObject({code:'invalid_params'});
+      }finally{writeFileSync(path,original);}
+    });
+  });
+  test('managed save plus take recovers after the page commit without regenerating or duplicating effects',async()=>{
+    await disposePersistenceConsumer(engine);
+    const destination='think-managed',dir=join(root,'managed');mkdirSync(dir);
+    await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)',[destination,dir]);
+    await claimWorktree(engine,destination,dir);
+    await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
+    await submitPageMutation({engine,sourceId:destination,remote:false,dryRun:false,config:{engine:engine.kind,embedding_disabled:true},logger:{info(){},warn(){},error(){}}},
+      {operation:'put_page',params:{source_id:destination,slug:'notes/anchor',content:'---\ntype: note\ntitle: Anchor\n---\nOrbit is under review.'}});
+    try{await run(async()=>{
+      const opts={save:true,take:true,anchor:'notes/anchor',sourceId:destination,allowedSources:[sourceId,destination]};
+      const anchorPath=join(dir,'notes/anchor.md');renameSync(anchorPath,anchorPath+'.held');
+      try{await expect(think(opts)).rejects.toMatchObject({code:'source_changed'});
+        expect(await engine.executeRaw('SELECT plan_id FROM codex_think_publications WHERE source_id=$1',[destination])).toHaveLength(0);
+        expect(await engine.executeRaw('SELECT id FROM persistence_requests WHERE source_id=$1 AND protocol_version=4',[destination])).toHaveLength(0);
+      }finally{renameSync(anchorPath+'.held',anchorPath);}
+      const result=await think(opts),count=calls().length;
+      const saved=await persistSynthesis(engine,result,{sourceId:destination});
+      expect(readFileSync(join(dir,saved.slug+'.md'),'utf8')).toContain('Orbit launched in March');
+      expect((await engine.executeRaw<{state:string}>('SELECT state FROM codex_think_publications WHERE plan_id=$1::uuid',[result.codex_publication!.plan_id]))[0]!.state).toBe('accepted');
+      reply({raw:'invalid after retained plan'});
+      const recovered=await think(opts);expect(calls().length).toBe(count);
+      const taken=await persistTakeFromSynthesis(engine,recovered,{anchor:'notes/anchor',sourceId:destination});expect(taken.take_row).toBe(1);
+      expect(readFileSync(join(dir,'notes/anchor.md'),'utf8')).toContain('Orbit launched in March');
+      expect(await persistTakeFromSynthesis(engine,recovered,{anchor:'notes/anchor',sourceId:destination})).toEqual(taken);
+      expect(await engine.executeRaw('SELECT id FROM persistence_requests WHERE source_id=$1 AND protocol_version=4',[destination])).toHaveLength(2);
+      expect((await engine.executeRaw<{state:string}>('SELECT state FROM codex_think_publications WHERE plan_id=$1::uuid',[result.codex_publication!.plan_id]))[0]!.state).toBe('complete');
+    });}finally{await disposePersistenceConsumer(engine);await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');}
   });
   test('quoted text in the question alone cannot ground a generated quote',async()=>{
     reply({...valid,answer:'"Fictional orbital certainty" [notes/orbit]',citations:[{page_slug:slug,row_num:null,citation_index:1}]});

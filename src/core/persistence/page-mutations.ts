@@ -244,6 +244,7 @@ export async function preparePageAdmission(ctx: OperationContext,
     throw new OperationError('invalid_params', 'fence_repair is reserved for the trusted fence repair.',
       'Drop fence_repair and submit the page without it; gbrain repair fences records its own receipt on the brain host. To fix a malformed facts or takes fence, correct it in content (or write facts with remember and takes with takes_add); a held file is repaired by the brain host operator with gbrain repair fences, so ask the user to run it.');
   }
+  if (Object.hasOwn(input.params, 'codex_think_plan')) throw new OperationError('invalid_params', 'Think publication identity is reserved for the host.', 'Submit ordinary page parameters without a publication identity.');
   const { page_batch: _forged, timeline_section: _section, ...params } = input.params;
   const p: Record<string, unknown> = { ...params, ...parseMutationPrecondition(params) };
   if (p.content_origin !== undefined) contentOriginTier(p.content_origin);

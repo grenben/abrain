@@ -8,7 +8,9 @@ qualification registry. Tests register only synthetic executable hashes.
 
 - **Think synthesis:** native evidence-bound schemas, citation closure, explicit
   failures, independent auxiliary admission and scoped calibration context.
-  Auto-think publication, direct CLI grants and A/B trials remain partial; see
+  Save/take now use retained plans and canonical receipts; see the
+  [publication checkpoint](private-codex-think-publication.md). Auto-think
+  completion, direct CLI grants and A/B trials remain partial; see
   the [think checkpoint](private-codex-think.md).
 
 - **Calibration voice review:** native candidate-bound style judgments with

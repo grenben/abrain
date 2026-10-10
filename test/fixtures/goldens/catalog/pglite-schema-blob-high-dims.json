@@ -30,6 +30,12 @@
       "codex_subscription_runs.codex_subscription_runs_max_turns_check": "c CHECK (((max_turns >= 1) AND (max_turns <= 1000)))",
       "codex_subscription_runs.codex_subscription_runs_pkey": "p PRIMARY KEY (run_id)",
       "codex_subscription_runs.codex_subscription_runs_repairs_check": "c CHECK (((repairs >= 0) AND (repairs <= 1)))",
+      "codex_think_publications.codex_think_publications_pkey": "p PRIMARY KEY (plan_id)",
+      "codex_think_publications.codex_think_publications_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_think_publications.codex_think_publications_run_id_request_key_key": "u UNIQUE (run_id, request_key)",
+      "codex_think_publications.codex_think_publications_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_think_publications.codex_think_publications_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_think_publications.codex_think_publications_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
       "codex_upgrade_receipts.codex_upgrade_receipts_kind_check": "c CHECK ((kind = ANY (ARRAY['pins'::text, 'jobs'::text])))",
       "codex_upgrade_receipts.codex_upgrade_receipts_pkey": "p PRIMARY KEY (id)",
       "codex_upgrade_receipts.codex_upgrade_receipts_sequence_key": "u UNIQUE (sequence)",
@@ -199,7 +205,7 @@
       "persistence_requests.persistence_requests_pkey": "p PRIMARY KEY (id)",
       "persistence_requests.persistence_requests_principal_kind_check": "c CHECK ((principal_kind = ANY (ARRAY['oauth_client'::text, 'legacy_token'::text, 'local_cli'::text, 'local_stdio'::text, 'application'::text])))",
       "persistence_requests.persistence_requests_principal_kind_principal_id_request_id_key": "u UNIQUE (principal_kind, principal_id, request_id)",
-      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2, 3])))",
+      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2, 3, 4])))",
       "persistence_requests.persistence_requests_sequence_key": "u UNIQUE (sequence)",
       "persistence_requests.persistence_requests_state_check": "c CHECK ((state = ANY (ARRAY['queued'::text, 'running'::text, 'recovering'::text, 'committed'::text, 'conflict'::text, 'failed'::text, 'cancelled'::text])))",
       "persistence_requests.persistence_requests_target_kind_check": "c CHECK ((target_kind = ANY (ARRAY['page'::text, 'skill_bundle'::text])))",
@@ -341,7 +347,7 @@
       "gbrain_fts_input(t text)": "RETURNS text kind=f lang=sql volatility=i secdef=false config=[search_path=pg_catalog] body_sha256=c73d0dbc333c6dccc9714a6b8d1b7785f48170556b9024002ddca1c80b25d87d",
       "gbrain_guard_effect_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e8b5589dafd4a355106104daffdf57c7776d34fe18c5b5f5336a27de188688a1",
       "gbrain_guard_protocol_activation()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=f27354966c25d961fcecbffebba0e45747ad3de23575351319f6aee4f9aefd47",
-      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=16b856859f0bee5d1b65e0475e3b083fdf2a53f661445412eb84596e9feb3d3a",
+      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=aa90ca040ba910da9088a5fe0511dc1eb52c6c9f11ca611d30d0278525be05f7",
       "gbrain_guard_skill_publication()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e854c0d058e75a65c3a90127c5c417380975100e83fc34288f6085e786df10a9",
       "gbrain_lease_shared_skill_delivery()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=5e493c1ac8dce8cb025a736629e563437c4b214744137c302c532c20bf7e7acf",
       "gbrain_queue_page_projection()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=6c544b9c129b6a17dcabeb5ee8d44a2b0e0af9d02ca3fe47c7d7f22ec313042c",
@@ -372,6 +378,9 @@
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "codex_subscription_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_think_publications": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "codex_upgrade_receipts": [
@@ -696,6 +705,8 @@
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
       "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
       "codex_subscription_runs_pkey": "CREATE UNIQUE INDEX codex_subscription_runs_pkey ON public.codex_subscription_runs USING btree (run_id)",
+      "codex_think_publications_pkey": "CREATE UNIQUE INDEX codex_think_publications_pkey ON public.codex_think_publications USING btree (plan_id)",
+      "codex_think_publications_run_id_request_key_key": "CREATE UNIQUE INDEX codex_think_publications_run_id_request_key_key ON public.codex_think_publications USING btree (run_id, request_key)",
       "codex_upgrade_plan_hash": "CREATE INDEX codex_upgrade_plan_hash ON public.codex_upgrade_receipts USING btree (kind, plan_hash)",
       "codex_upgrade_receipts_pkey": "CREATE UNIQUE INDEX codex_upgrade_receipts_pkey ON public.codex_upgrade_receipts USING btree (id)",
       "codex_upgrade_receipts_sequence_key": "CREATE UNIQUE INDEX codex_upgrade_receipts_sequence_key ON public.codex_upgrade_receipts USING btree (sequence)",
@@ -1159,6 +1170,22 @@
           "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_think_publications": {
+        "columns": [
+          "1 plan_id uuid/uuid NOT NULL",
+          "2 run_id text/text NOT NULL",
+          "3 request_key text/text NOT NULL",
+          "4 source_id text/text NOT NULL",
+          "5 source_incarnation uuid/uuid NOT NULL",
+          "6 payload jsonb/jsonb NOT NULL",
+          "7 payload_hash text/text NOT NULL",
+          "8 admitted ARRAY/_int4 NOT NULL DEFAULT '{}'::integer[]",
+          "9 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "11 completed_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
       },
       "codex_upgrade_receipts": {
         "columns": [

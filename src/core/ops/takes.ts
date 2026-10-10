@@ -286,6 +286,7 @@ const think: Operation = {
       anchor: p.anchor ? String(p.anchor) : undefined,
       rounds: typeof p.rounds === 'number' ? (p.rounds as number) : undefined,
       save: safeSave,
+      publicationContext: ctx,
       take: safeTake,
       model: p.model ? String(p.model) : undefined,
       // #1698 (C3): a remote caller that explicitly supplies a model gets the same
@@ -353,7 +354,7 @@ const think: Operation = {
     const { recordThinkAnswer, feedbackMetaFields } = await import('../feedback/record.ts');
     const feedbackMeta = feedbackMetaFields(await recordThinkAnswer(ctx, 'think', result));
     delete result.feedback_evidence; delete result.taint_refs;
-    const { persist: _persist, ...visible } = result;
+    const { persist: _persist, codex_publication: _publication, ...visible } = result;
     return {
       ...visible,
       ...feedbackMeta,

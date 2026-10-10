@@ -99,7 +99,7 @@ export async function runWithJobSubscription<T>(engine: BrainEngine, job: Minion
   };
   await checkAuthority();
   const signals = [ctx.signal, ctx.shutdownSignal].filter((s): s is AbortSignal => s !== undefined);
-  return withCodexSubscription({ engine, runId, checkAuthority, checkAuthorityInTransaction: tx => checkAuthority(tx, true), signal: signals.length ? AbortSignal.any(signals) : undefined }, async () => {
+  return withCodexSubscription({ engine, runId, publicationFence: { jobId: job.id, lockToken: job.lock_token!, jobDigest: authorityDigest({ data: job.data, authority: job.submission_authority }) }, checkAuthority, checkAuthorityInTransaction: tx => checkAuthority(tx, true), signal: signals.length ? AbortSignal.any(signals) : undefined }, async () => {
     const result = await withAIInvocationGuard(async call => {
       if (!hasAdmittedCodexAttempt(call.model) && !job.spend_authorization) {
         throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');

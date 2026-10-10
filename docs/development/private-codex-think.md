@@ -52,7 +52,7 @@ retained; this change does not assign a USD price to subscription inference.
 | Think synthesis | Gateway, prompt-only JSON and permissive parsing | Native schema, bounded proposal, citation closure, explicit failures | Runtime qualification and live behavior |
 | Calibration context | Latest profile without source scope in think | Scoped lookup; remote published-only filter | Broader permission/federation review |
 | Retrieval identity | Take fusion keyed by slug/row | Private fusion keyed by page ID/row | Entire hybrid cache/inner error census |
-| Direct CLI | No private subscription allowance surface | Host-context calls supported; missing allowance fails before retrieval | Explicit CLI grant wiring and recoverable save/take publication |
+| Direct CLI | No private subscription allowance surface | Host-context calls supported; missing allowance fails before retrieval | Explicit CLI grant wiring; save/take publication now covered by the follow-up checkpoint |
 | Auto-think | Uses runThink with legacy admission/publication | Inherits validated private synthesis when host-admitted | Cycle budgets, canonical receipts, crash recovery and cooldown gates |
 | Calibration A/B | Injected runner and direct result insert | Existing harness remains unchanged | Actual private runner, failed-trial handling, scoped durable receipts |
 | System One decisions | Optional Typesafe/LLM proxy slots | Enabled slots conflict explicitly with this private path before dispatch | Native Codex decision implementation |
@@ -102,3 +102,7 @@ fixtures pass. Final verification:
 The admin build would require an external dependency fetch and remains skipped.
 Full CI, PgBouncer, real runtime isolation and live subscription checks remain
 unverified. Installed and activated status are unchanged.
+
+Recoverable saves and take writes are developed in the
+[think publication follow-up](private-codex-think-publication.md). The earlier
+verification counts above describe the synthesis checkpoint.

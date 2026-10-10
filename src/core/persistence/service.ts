@@ -74,6 +74,7 @@ export function registerMutationPreparer(operation: string, prepare: PrepareMuta
  */
 export async function preparePersistedMutation(e: BrainEngine, row: WriteRequest, cfg: GBrainConfig, signal?: AbortSignal, clock?: ClaimPhaseClock) {
   assertMutationProtocol(row);
+  if (row.protocol_version === 4) return (await import('../think/publication-prepare.ts')).prepareThinkPublication(e, row, cfg, signal, clock);
   if (row.protocol_version === 3) return (await import('./codex-action-prepare.ts')).prepareCodexActionPage(e, row, cfg, signal, clock);
   enterClaimStep(clock, 'dispatch');
   const registered = preparers.get(row.operation);

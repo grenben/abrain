@@ -66,6 +66,8 @@ export function classifyLlmCallFailure(e: unknown): LlmCallFailureClass {
 }
 
 export interface RunThinkOpts {
+  /** Trusted operation context for prepared publication; never a model-authored field. */
+  publicationContext?: import('../ops/contract.ts').OperationContext;
   question: string;
   /** Anchor entity slug. Activates the graph stream + entity-focused prompt. */
   anchor?: string;
@@ -180,6 +182,8 @@ export type ThinkSynthesisStatus =
   | 'llm_error';        // client.create() threw (429 / timeout / 5xx / network)
 
 export interface ThinkResult {
+  /** Host-retained publication reference, stripped from agent-facing output. */
+  codex_publication?: { plan_id: string; payload_hash: string };
   question: string;
   answer: string;
   citations: ParsedCitation[];
@@ -927,6 +931,7 @@ async function synthesizeThink(input: { opts: RunThinkOpts; modelUsed: string; s
   // Initialized to the llm_error shape; every non-throwing branch overwrites it.
   let response: ThinkResponse = { answer: '', citations: [], gaps: [] };
   if (privateMode) {
+    await (await import('./publication.ts')).captureThinkPublicationEvidence(gather);
     const proposed = await proposeCodexThink({ model: modelUsed, system: systemPrompt, prompt: userMessage, gather });
     response = proposed.response; usage = proposed.usage;
   } else if (opts.stubResponse) {
@@ -1129,6 +1134,9 @@ export async function persistSynthesis(
   result: ThinkResult,
   scope: { sourceId?: string; allowedSources?: string[] } = {},
 ): Promise<{ slug: string; evidenceInserted: number; warnings: string[] }> {
+  if (result.codex_publication || result.modelUsed?.startsWith('codex-cli:') || readPrivateCodexConfig()) {
+    return (await import('./publication-execute.ts')).publishThinkPage(engine, result, scope);
+  }
   // #1698: never persist an empty synthesis. Returned signal (NOT a throw, F3) so
   // the MCP `think` op can return the gather result + warning instead of a bare error
   // envelope; the CLI keys off this warning to exit non-zero. Guard on `=== false` so

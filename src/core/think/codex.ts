@@ -1,5 +1,5 @@
 import type { BrainEngine } from '../engine.ts';
-import type { RunThinkOpts, ThinkResponse } from './index.ts';
+import type { RunThinkOpts, ThinkResponse, ThinkResult } from './index.ts';
 import type { ThinkGatherResult } from './gather.ts';
 import { chat } from '../ai/gateway.ts';
 import { readPrivateCodexConfig, PrivateRoutingError } from '../ai/private-policy.ts';
@@ -14,7 +14,7 @@ import { loadConfigSnapshot } from '../config-snapshot.ts';
 import { pickDecideConfig, readDecideConfig } from '../ai/decide/config.ts';
 
 /** Preserve the host's auxiliary USD guard; subscription consent alone cannot pay for retrieval. */
-export async function withPrivateThink<T>(engine: BrainEngine, opts: RunThinkOpts, run: () => Promise<T>): Promise<T> {
+export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, run: () => Promise<ThinkResult>): Promise<ThinkResult> {
   if (!readPrivateCodexConfig()) return run();
   const context = codexSubscriptionContext();
   if (!context) throw new SubscriptionAdmissionError('subscription_required');
@@ -35,7 +35,7 @@ export async function withPrivateThink<T>(engine: BrainEngine, opts: RunThinkOpt
     if ((call.kind === 'embedding' || call.kind === 'rerank') && !auxiliaryAuthorized) {
       denied = new SubscriptionAdmissionError('subscription_auxiliary_budget_required'); throw denied;
     }
-  }, run);
+  }, () => import('./publication.ts').then(module => module.retainPrivateThink(engine, opts, run)));
   if (denied) throw denied;
   return result;
 }

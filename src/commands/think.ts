@@ -237,7 +237,7 @@ prints what would have been the input (exit 0).
       // posture as --save: the user explicitly asked for a persist).
       if (take && anchor) {
         const { persistTakeFromSynthesis } = await import('../core/think/persist-take.ts');
-        const persisted = await persistTakeFromSynthesis(engine, result, { anchor });
+        const persisted = await persistTakeFromSynthesis(engine, result, { anchor, sourceId });
         takeRow = persisted.take_row;
         takePath = persisted.path;
         for (const w of persisted.warnings) result.warnings.push(w);
@@ -263,8 +263,9 @@ prints what would have been the input (exit 0).
 
   // F8: keyless-by-design output carries its explanation as an info notice.
   if (result.synthesis_status === 'no_llm') captureOpNotice(keylessThinkNotice());
+  const { codex_publication: _publication, ...visibleResult } = result;
   const { result: jsonDoc, stderr: noticeText } = applyCliOpNotices({
-    ...result,
+    ...visibleResult,
     cost_usd: costUsd ?? null,
     saved_slug: savedSlug ?? null,
     evidence_inserted: evidenceInserted,
