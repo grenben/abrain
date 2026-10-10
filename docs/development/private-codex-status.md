@@ -3,12 +3,11 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [native shared optimizer publication](private-codex-shared-optimizer.md)
-retains approved staging, accepted results and fenced canonical bundle receipts.
-Migration 264 adds recovery storage and publication protocol 6. The earlier
-[background optimizer](private-codex-skillopt-jobs.md) connects unmanaged CLI
-submission to durable jobs. Shared CLI/worker producers, cycle/batch/remote/bootstrap
-admission and broader read tools remain incomplete.
+Latest source checkpoint: [shared optimizer CLI and workers](private-codex-shared-producers.md)
+connects the exact approved target, common semantic preflight and durable request
+identity to canonical worker publication. The existing migrations 263–264 retain
+jobs and shared plans. Cycle/batch/remote/bootstrap admission, broader read tools
+and production runtime qualification remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 

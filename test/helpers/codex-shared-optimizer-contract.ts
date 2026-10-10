@@ -19,6 +19,7 @@ import { runSkillOpt } from '../../src/core/skillopt/orchestrator.ts';
 import * as store from '../../src/core/shared-skills/codex-optimizer-store.ts';
 import * as stages from '../../src/core/shared-skills/codex-optimizer-files.ts';
 import * as publication from '../../src/core/shared-skills/codex-optimizer-publication.ts';
+import { codexSharedOptimizerProducers } from './codex-shared-optimizer-producers.ts';
 interface Fixture { engine(): BrainEngine; root: string; replies(...values: unknown[]): void; calls(): any[] }
 export function codexSharedOptimizerContract(f: Fixture) {
   describe('native shared optimizer publication', () => {
@@ -49,6 +50,7 @@ export function codexSharedOptimizerContract(f: Fixture) {
     });
     const run = (value = opts, signal?: AbortSignal) => withCodexSubscription({ engine: f.engine(), runId, signal }, () => runSkillOpt(value));
     const skill = () => readFileSync(join(root, 'skills/synthetic-skill/SKILL.md'), 'utf8');
+    codexSharedOptimizerProducers({ engine: f.engine, opts: () => opts, skill, text, calls: f.calls });
     test('actual native optimizer publishes one protocol-6 bundle and replays the same receipt', async () => {
       const result = await run();
       expect(result).toMatchObject({ outcome: 'accepted', mutatedSkillFile: true, sharedOptimization: { publication: { state: 'committed' } }, receipt: { final_cost_usd: null } });

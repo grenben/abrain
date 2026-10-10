@@ -119,7 +119,8 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
 
   // Resolve skills dir.
   const detected = autoDetectSkillsDirReadOnly(process.cwd());
-  const skillsDir = parsed.skillsDir ?? detected.dir;
+  const skillsDir = parsed.skillsDir ?? (scope.sharedSkill
+    ? await (await import('../core/shared-skills/optimizer.ts')).sharedOptimizerSkillsDir(scope.operationContext!, scope.sharedSkill.source_id, scope.sharedSkill.source_incarnation) : detected.dir);
   if (!skillsDir) {
     process.stderr.write(`gbrain skillopt: cannot find skills directory. Pass --skills-dir <path> or run from a workspace with a skills/ directory.\n`);
     process.exit(2);
@@ -273,6 +274,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
         const { MinionQueue } = await import('../core/minions/queue.ts');
         const queue = new MinionQueue(engine);
         const jobInput: SkillOptJobInput = {
+          ...(scope.sharedSkill ? { sharedSkill: scope.sharedSkill } : {}),
           skillsDir,
           skillName: parsed.skillName,
           benchmarkPath,
@@ -359,6 +361,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
         outcome: result.outcome,
         receipt: result.receipt,
         mutated_skill_file: result.mutatedSkillFile,
+        ...(result.sharedOptimization ? { shared_optimization: result.sharedOptimization } : {}),
         ...(result.proposedPath ? { proposed_path: result.proposedPath } : {}),
       }) + '\n');
     } else {

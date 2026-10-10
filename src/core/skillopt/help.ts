@@ -22,6 +22,15 @@ Required (one of):
                                 after human review)
   --bootstrap-reviewed          Confirm bootstrap benchmark was hand-reviewed
 
+Shared canonical skills (private Codex mode):
+  --shared-skill                Optimize and publish an exact approved catalog revision.
+  --pack-id ID                  Catalog pack containing the skill.
+  --source-incarnation UUID     Exact catalog source incarnation.
+  --expected-revision UUID      Original revision; concurrent changes refuse publication.
+                                Requires --source and Codex allowance flags below.
+                                The Codex request UUID also identifies publication.
+                                Supports --background; PGLite runs inline.
+
 Training knobs:
   --epochs N                    Default 4
   --batch-size N                Default 8

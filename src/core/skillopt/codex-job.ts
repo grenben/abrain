@@ -12,9 +12,10 @@ import { declareDurablePersistence } from '../persistence/protocol.ts';
 import { isWriteRequestId } from '../persistence/types.ts';
 import { digest } from '../persistence/digest.ts';
 import { buildSkillOptJobData, skillOptJobOptions, type SkillOptJobInput } from './job.ts';
+import { prepareCodexSharedSkill } from '../shared-skills/codex-optimizer-prepare.ts';
 import { prepareCodexSkillOpt } from './codex-run.ts';
 import type { LocalOptimizerScope } from './codex-local-grant.ts';
-import { CODEX_OPTIMIZER_JOB_PROTOCOL, validateCodexOptimizerJob } from './codex-job-contract.ts';
+import { CODEX_OPTIMIZER_JOB_PROTOCOL, CODEX_SHARED_OPTIMIZER_JOB_PROTOCOL, sharedOptimizerTarget, validateCodexOptimizerJob } from './codex-job-contract.ts';
 const conflict = (): never => { throw new SubscriptionAdmissionError('subscription_identity_conflict'); };
 interface Binding { request_id: string; protocol: number; input_hash: string; data_hash: string; job_id: number }
 const payloadHash = (data: Record<string, unknown>) => { const { __param_hash, ...value } = data; return digest(value); };
@@ -28,14 +29,22 @@ export async function submitCodexSkillOpt(engine: BrainEngine, input: SkillOptJo
   const data = buildSkillOptJobData({ ...structuredClone(input), skillsDir: resolve(input.skillsDir), benchmarkPath: resolve(input.benchmarkPath),
     ...(input.heldOutPath ? { heldOutPath: resolve(input.heldOutPath) } : {}) });
   const original = { ...scope.operationContext }, codex = structuredClone(scope.codex);
+  const sharedSkill = data.shared_skill === undefined ? undefined : sharedOptimizerTarget(data.shared_skill);
+  if (sharedSkill && (sharedSkill.source_id !== original.sourceId || sharedSkill.request_id !== requestId)) conflict();
+  if (sharedSkill) data.shared_skill = sharedSkill;
   const [prior] = await engine.executeRaw<Binding>('SELECT * FROM codex_skillopt_submissions WHERE request_id=$1::uuid', [requestId]);
   const roots = prior ? await engine.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-job:${prior.job_id}:%`]) : [];
   if (prior && roots.length !== 1) conflict();
   const runId = roots[0]?.run_id ?? `codex-skillopt-submit:${requestId}`;
   const opts = await skillOptJobOptions(engine, data);
-  const prepared = await withCodexSubscription({ engine, runId }, () => prepareCodexSkillOpt({ ...opts, operationContext: original, codex }));
-  Object.assign(data, { optimizer_protocol: CODEX_OPTIMIZER_JOB_PROTOCOL, optimizer_request_id: requestId,
-    optimizer_input_hash: digest(prepared.input), source_id: original.sourceId, allowed_tools: codex.allowedTools, allowed_slug_prefixes: codex.allowedSlugPrefixes });
+  const prepared = await withCodexSubscription({ engine, runId }, async () => {
+    const options = { ...opts, operationContext: original, codex };
+    if (!sharedSkill) return prepareCodexSkillOpt(options);
+    const shared = await prepareCodexSharedSkill({ ...options, sharedSkill });
+    return { ...shared, input: shared.inputHash };
+  });
+  Object.assign(data, { optimizer_protocol: sharedSkill ? CODEX_SHARED_OPTIMIZER_JOB_PROTOCOL : CODEX_OPTIMIZER_JOB_PROTOCOL, optimizer_request_id: requestId,
+    optimizer_input_hash: typeof prepared.input === 'string' ? prepared.input : digest(prepared.input), source_id: original.sourceId, allowed_tools: codex.allowedTools, allowed_slug_prefixes: codex.allowedSlugPrefixes });
   validateCodexOptimizerJob(data);
   const dataHash = payloadHash(data), inputHash = digest({ dataHash, grant: { ...grant, requestId } });
   return engine.transaction(async tx => {
@@ -75,7 +84,7 @@ export async function codexOptimizerJobScope(engine: BrainEngine, data: Record<s
   if (!binding || binding.protocol !== 1 || Number(binding.job_id) !== Number(context.id) || binding.data_hash !== payloadHash(data)) conflict();
   const config = await loadConfigWithEngine(engine, loadConfig() ?? { engine: engine.kind });
   if (!config) throw new SubscriptionAdmissionError('subscription_required');
-  return { operationContext: { engine, config, remote: false, sourceId: data.source_id as string, dryRun: false,
+  return { ...(data.optimizer_protocol === CODEX_SHARED_OPTIMIZER_JOB_PROTOCOL ? { sharedSkill: sharedOptimizerTarget(data.shared_skill) } : {}), operationContext: { engine, config, remote: false, sourceId: data.source_id as string, dryRun: false,
     logger: { info: console.log, warn: console.warn, error: console.error } },
     codex: { allowedTools: structuredClone(data.allowed_tools as string[]), allowedSlugPrefixes: structuredClone(data.allowed_slug_prefixes as string[]) },
     codexExpectedInputHash: data.optimizer_input_hash as string };

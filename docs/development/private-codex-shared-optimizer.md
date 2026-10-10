@@ -86,9 +86,9 @@ for PostgreSQL, create and stop a disposable cluster):
 
 ## Limits and upgrade handoff
 
-This is a trusted local SDK/host-scope path. Shared CLI/background/remote producers
-still need explicit admission and payload binding; they are not enabled by this
-checkpoint. Production runtime qualification remains empty. Full container CI,
+The trusted local SDK/host-scope path now also has explicit
+[CLI and background producers](private-codex-shared-producers.md). Remote producers
+still need separate admission and authority binding. Production runtime qualification remains empty. Full container CI,
 admin UI build, PgBouncer and live inference acceptance remain separate checks.
 
 The installed GBrain executable, database, services and configuration are unchanged.

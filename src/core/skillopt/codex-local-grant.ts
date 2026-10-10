@@ -11,27 +11,28 @@ import { CODEX_JOB_ACCOUNT_LANE } from '../minions/subscription-jobs.ts';
 import { CODEX_READ_PROTOCOL, validateCodexReadJob } from '../minions/codex-action-contract.ts';
 import { declareDurablePersistence } from '../persistence/protocol.ts';
 import { splitEvalAllowance, type EvalAllowance } from '../../eval/longmemeval/codex-allowance-flags.ts';
+import { splitSharedOptimizerFlags } from './codex-shared-cli.ts';
 import { usageError } from '../../cli/cli-error.ts';
 
 const pending = new AsyncLocalStorage<Readonly<EvalAllowance>>();
-export type LocalOptimizerScope = Pick<SkillOptOpts, 'operationContext' | 'codex'> & { backgroundAllowance?: Readonly<EvalAllowance> };
+export type LocalOptimizerScope = Pick<SkillOptOpts, 'operationContext' | 'codex' | 'sharedSkill'> & { backgroundAllowance?: Readonly<EvalAllowance> };
 const bad = (message: string): never => { throw usageError(message, 'Use explicit Codex limits, --source ID and one or more --read-prefix slug-or-prefix/* flags for a single optimizer run.'); };
 
 /** Local CLI authority only. No grant is persisted until all workflow inputs pass validation. */
 export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string[], run: (args: string[], scope: LocalOptimizerScope) => Promise<T>): Promise<T> {
-  const split = splitEvalAllowance(args), rest: string[] = [], prefixes: string[] = [];
+  const split = splitEvalAllowance(args), shared = splitSharedOptimizerFlags(split.args), rest: string[] = [], prefixes: string[] = [];
   let source: string | undefined;
-  for (let i = 0; i < split.args.length; i++) {
-    const flag = split.args[i]!;
+  for (let i = 0; i < shared.args.length; i++) {
+    const flag = shared.args[i]!;
     if (flag !== '--source' && flag !== '--read-prefix') { rest.push(flag); continue; }
-    const value = split.args[++i];
+    const value = shared.args[++i];
     if (!value || value.startsWith('--')) bad(`${flag} requires a value.`);
     if (flag === '--source') { if (source !== undefined) bad('Duplicate --source.'); source = value; }
     else prefixes.push(value!);
   }
   const policy = readPrivateCodexConfig();
   if (!policy) {
-    if (split.allowance || source !== undefined || prefixes.length) bad('Codex optimizer flags require explicit private mode.');
+    if (shared.target || split.allowance || source !== undefined || prefixes.length) bad('Codex optimizer flags require explicit private mode.');
     return run(rest, {});
   }
   // These producers have separate material-input/recovery requirements; never reinterpret a grant.
@@ -46,7 +47,7 @@ export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string
   const sourceId = (await resolveSourceWithTier(engine, source)).source_id;
   const config = await loadConfigWithEngine(engine, loadConfig() ?? { engine: engine.kind });
   if (!config) bad('A readable local configuration is required.');
-  const scope: LocalOptimizerScope = { operationContext: { engine, sourceId, remote: false, config: config!,
+  const scope: LocalOptimizerScope = { ...(shared.target ? { sharedSkill: { ...shared.target, source_id: sourceId, request_id: grant!.requestId } } : {}), operationContext: { engine, sourceId, remote: false, config: config!,
     logger: { info: console.log, warn: console.warn, error: console.error }, dryRun: rest.includes('--dry-run') },
     codex: { allowedTools: ['get_page'], allowedSlugPrefixes: prefixes } };
   const runId = `codex-skillopt:${grant!.requestId}`, saved = Object.freeze({ ...grant!, deadline: new Date(grant!.deadline) });

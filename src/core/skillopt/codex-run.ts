@@ -1,12 +1,9 @@
+import { assertNativeOptimizerControls, preflightNativeOptimizer } from './codex-preflight.ts';
 import type { SkillOptOpts, RunReceipt } from './types.ts';
 import type { RunSkillOptResult } from './orchestrator.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
-import { CodexProposalError } from '../ai/providers/codex-contract.ts';
-import { readPrivateCodexConfig, resolvePrivateModel } from '../ai/private-policy.ts';
-import { parseBenchmark, splitBench } from './benchmark.ts';
-import { assertBundledMutationHeldOut } from './bundled-skill-gate.ts';
-import { resolveReflectMaxTokens } from './output-cap.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { assertLegacySkillWriter } from '../skillpack/writer-guard.ts';
 import { digest } from '../persistence/digest.ts';
 import { CODEX_READ_PROTOCOL, validateCodexReadJob } from '../minions/codex-action-contract.ts';
@@ -14,20 +11,12 @@ import { readOptimizerRun, claimOptimizerRun, fenceOptimizerRun, saveOptimizerRe
 import { snapshotOptimizerFiles, publishOptimizerFile, type OptimizerFiles } from './codex-run-files.ts';
 import { runOptimizerLoop } from './codex-run-loop.ts';
 import { localOptimizerAllowance, reportOptimizerAllowance } from './codex-local-grant.ts';
-import { buildModelsPlan, unknownProvenanceModels, strictVerdict, resolveModelsStrict, modelsStrictError } from './models-plan.ts';
-const invalid = (): never => { throw new CodexProposalError('invalid_input'); };
 
 /** Private optimizer: one durable root, native child evaluations, validated proposals and retained effects. */
 export async function prepareCodexSkillOpt(original: SkillOptOpts) {
   const host = codexSubscriptionContext(), policy = readPrivateCodexConfig();
   if (!host || host.engine !== original.engine || !policy) throw new SubscriptionAdmissionError('subscription_required');
-  if (!original.operationContext || original.operationContext.engine !== original.engine || original.operationContext.remote !== false || !original.operationContext.sourceId ||
-      !original.codex || original.sharedSkill || original.resumeRunId || original.writeCapture || original.disableValidationGate ||
-      original.optimizerMode && original.optimizerMode !== 'reflect' || original.reflectMode && original.reflectMode !== 'both' ||
-      ![original.epochs, original.batchSize, original.lr].every(n => Number.isSafeInteger(n) && n > 0) ||
-      original.epochs > 20 || original.batchSize > 20 || original.lr > 20 ||
-      !['constant', 'linear', 'cosine'].includes(original.lrSchedule) || !['patch', 'rewrite'].includes(original.mode) ||
-      !Number.isFinite(original.maxRuntimeMin) || original.maxRuntimeMin <= 0 || original.maxRuntimeMin > 1440) invalid();
+  assertNativeOptimizerControls(original);
   // Trusted objects stay host-owned; all caller-controlled material is snapshotted before awaits.
   const { engine, operationContext, ...values } = original;
   const opts: SkillOptOpts = { ...structuredClone(values), engine, operationContext: { ...operationContext! } };
@@ -37,25 +26,8 @@ export async function prepareCodexSkillOpt(original: SkillOptOpts) {
   const prior = await readOptimizerRun(engine, host.runId);
   const files = snapshotOptimizerFiles(opts, prior ? { files: prior.input.files as unknown as OptimizerFiles,
     finalText: prior.result?.outcome === 'accepted' ? prior.result.finalText : undefined, complete: prior.state === 'complete' } : undefined);
-  if (Buffer.byteLength(files.skillText) > 12000) invalid();
   await assertLegacySkillWriter(engine, files.outputPath);
-  const benchmark = parseBenchmark(files.benchmarkText, files.benchmarkPath, { bootstrapReviewed: opts.bootstrapReviewed });
-  const heldOut = files.heldOutText === null ? [] : parseBenchmark(files.heldOutText, files.heldOutPath!, { bootstrapReviewed: true }).tasks;
-  if (benchmark.tasks.length > 100 || heldOut.length > 100 || heldOut.some(t => benchmark.tasks.some(b => b.task_id === t.task_id))) invalid();
-  const split = splitBench(benchmark, opts.split);
-  if (Math.ceil(split.train.length / opts.batchSize) * opts.epochs > 100) invalid();
-  assertBundledMutationHeldOut({ isBundled: files.bundled, willMutate: files.mutate, heldOutCount: heldOut.length, skillName: opts.skillName });
-  await resolvePrivateModel(engine, { cliFlag: opts.optimizerModel, tier: 'deep', fallback: 'unused' }, policy!);
-  await resolvePrivateModel(engine, { cliFlag: opts.targetModel, tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy!);
-  await resolvePrivateModel(engine, { cliFlag: opts.judgeModel, tier: 'reasoning', fallback: 'unused' }, policy!);
-  for (const task of [...benchmark.tasks, ...heldOut]) if (task.judge.kind === 'llm' && task.judge.model)
-    await resolvePrivateModel(engine, { cliFlag: task.judge.model, tier: 'reasoning', fallback: 'unused' }, policy!);
-  const cap = await resolveReflectMaxTokens(engine, opts.optimizerModel, opts.reflectMaxTokens);
-  if (cap.maxTokens < 16 || cap.maxTokens > 8192) invalid();
-  const modelsPlan = (await buildModelsPlan(engine, opts.models ?? unknownProvenanceModels(opts, 'caller-supplied'), [...benchmark.tasks, ...heldOut]))
-    .filter(p => ['optimizer', 'target', 'judge'].includes(p.touchpoint));
-  const strict = strictVerdict(modelsPlan, await resolveModelsStrict(engine, opts.modelsStrict));
-  if (strict.enabled && !strict.ok && !opts.dryRun) throw modelsStrictError(strict);
+  const { benchmark, heldOut, split, cap, modelsPlan, strict } = await preflightNativeOptimizer(opts, files, policy);
   const [source] = await engine.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1', [sourceId]);
   if (!source || source.archived) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const input = { protocol: 'codex-skillopt-run-v1', files, sourceId, sourceIncarnation: source.incarnation,

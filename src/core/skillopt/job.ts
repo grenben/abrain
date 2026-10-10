@@ -28,13 +28,14 @@ import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 
 export type SkillOptJobInput = Pick<SkillOptOpts,
   | 'skillsDir' | 'skillName' | 'benchmarkPath' | 'epochs' | 'batchSize' | 'lr' | 'lrSchedule' | 'split'
-  | 'reflectMaxTokens' | 'mode' | 'dryRun' | 'noMutate' | 'allowMutateBundled' | 'heldOutPath'
+  | 'sharedSkill' | 'reflectMaxTokens' | 'mode' | 'dryRun' | 'noMutate' | 'allowMutateBundled' | 'heldOutPath'
   | 'bootstrapReviewed' | 'maxCostUsd' | 'maxCostSource' | 'maxRuntimeMin' | 'force'
 > & { models: SkillOptModels; modelFlags: SkillOptModelFlags; modelsStrict: boolean };
 
 export function buildSkillOptJobData(input: SkillOptJobInput): Record<string, unknown> {
   const flags = input.modelFlags;
   return {
+    ...(input.sharedSkill ? { shared_skill: structuredClone(input.sharedSkill) } : {}),
     skills_dir: input.skillsDir,
     skill_name: input.skillName,
     benchmark_path: input.benchmarkPath,
@@ -129,7 +130,7 @@ export async function skillOptJobOptions(engine: BrainEngine, rawData: unknown):
 
 export async function runSkillOptJob(engine: BrainEngine, rawData: unknown, context?: MinionJobContext): Promise<Record<string, unknown>> {
   const data = structuredClone((rawData ?? {}) as Record<string, unknown>);
-  const native = !!readPrivateCodexConfig() || data.optimizer_protocol !== undefined;
+  const native = !!readPrivateCodexConfig() || data.optimizer_protocol !== undefined || data.shared_skill !== undefined;
   const scope = native ? await (await import('./codex-job.ts')).codexOptimizerJobScope(engine, data, context) : {};
   const result = await runSkillOpt({ ...await skillOptJobOptions(engine, data), ...scope });
   return {
@@ -138,5 +139,6 @@ export async function runSkillOptJob(engine: BrainEngine, rawData: unknown, cont
     receipt: result.receipt,
     mutated_skill_file: result.mutatedSkillFile,
     proposed_path: result.proposedPath,
+    ...(result.sharedOptimization ? { shared_optimization: result.sharedOptimization } : {}),
   };
 }
