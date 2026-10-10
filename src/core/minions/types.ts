@@ -507,6 +507,8 @@ export function rowToMinionJob(row: Record<string, unknown>): MinionJob {
  * not per-job data, so restart/replay uses the same behavior.
  */
 export interface SubagentHandlerData {
+  /** Explicit host-owned read protocol; legacy jobs are never automatically reinterpreted. */
+  action_protocol?: 'codex-host-read-v1';
   /** Top-level user turn kicking off the loop. */
   prompt: string;
   /** Optional subagent definition path (skills/subagents/*.md or plugin). */
@@ -743,6 +745,12 @@ export type OneshotFallbackReason =
 
 /** Terminal result payload emitted by the subagent handler. */
 export interface SubagentResult {
+  /** Present only for the explicitly versioned host-owned read loop. */
+  action_protocol?: 'codex-host-read-v1';
+  /** Subscription totals are unknown, never nominal zero. */
+  cost_usd?: number | null;
+  /** Failed reads remain visible even when the model returns an explanatory final answer. */
+  tool_actions_failed?: number;
   /** Concatenated text from the final assistant message. */
   result: string;
   /** Number of assistant turns consumed. */

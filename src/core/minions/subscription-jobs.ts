@@ -6,6 +6,7 @@ import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, Privat
 import { authorityDigest, authorizeJobExecution } from './submission-authority.ts';
 import { rowToMinionJob, type MinionJob, type MinionJobContext } from './types.ts';
 import { jobMayGenerate } from './subscription-job-kinds.ts';
+import { validateCodexReadJob } from './codex-action-contract.ts';
 export { CODEX_GENERATIVE_JOBS, jobMayGenerate } from './subscription-job-kinds.ts';
 
 /** Only a trusted host argument can grant this allowance. No USD conversion or quota estimate. */
@@ -23,7 +24,10 @@ export async function preflightSubscriptionJob(engine: BrainEngine, name: string
     }
   }
   await resolvePrivateModel(engine, { fallback: 'unused' }, policy);
-  if (name === 'subagent') throw new PrivateRoutingError('job:subagent', 'private_native_loop_unsupported');
+  if (name === 'subagent') {
+    validateCodexReadJob(data);
+    await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
+  }
 }
 
 /** Do not enqueue unfenced private work that an older worker could claim. */

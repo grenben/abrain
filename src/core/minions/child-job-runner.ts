@@ -38,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSpawnInvocation } from './spawn-helpers.ts';
 import { SpendEnforcementUnavailableError, childSpendEnforcementReady } from './spend-authorization.ts';
-import { childSubscriptionEnforcementReady } from './subscription-child.ts';
+import { childSubscriptionEnforcementReady, childCodexActionsReady } from './subscription-child.ts';
 import { LocalConfigurationError, isLocalConfigurationError } from './configuration-error.ts';
 import {
   UnrecoverableError,
@@ -147,6 +147,7 @@ interface ChildExit {
  */
 export async function runJobInChild(opts: RunJobInChildOpts): Promise<unknown> {
   if (opts.codexAuthorized && !childSubscriptionEnforcementReady()) throw childConfigurationError('child_protocol_incompatible');
+  if (opts.codexAuthorized && opts.jobName === 'subagent' && !childCodexActionsReady()) throw childConfigurationError('child_protocol_incompatible');
   if (opts.spendAuthorized && !childSpendEnforcementReady()) throw new SpendEnforcementUnavailableError();
   let executionStopped = false;
   let configurationError: LocalConfigurationError | undefined;

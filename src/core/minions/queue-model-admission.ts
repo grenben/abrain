@@ -1,5 +1,9 @@
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { validateCodexReadJob } from './codex-action-contract.ts';
 /** Legacy native-loop capability check, preserved outside private mode. */
 export async function assertQueueModelCapability(jobName: string, data?: Record<string, unknown>): Promise<void> {
+  if (jobName === 'subagent' && readPrivateCodexConfig()) { validateCodexReadJob(data ?? {}); return; }
+  if (jobName === 'subagent' && data?.action_protocol !== undefined) throw new Error('codex_action_private_mode_required');
   // v0.38 (S1.7 + D6) — capability-based gate replaces the v0.31.12 Anthropic
   // pin. The subagent loop now routes through `gateway.toolLoop()` so any
   // provider whose recipe declares tool calling AND supports_subagent_loop

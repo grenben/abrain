@@ -1,4 +1,5 @@
 import { stampSubagentResultMode } from './subagent-result-mode.ts';
+import { makeCodexSubagentHandler } from './subagent-codex.ts';
 import { assertPrivateNativeLoopAllowed, readPrivateCodexConfig } from '../../ai/private-policy.ts';
 /**
  * Subagent LLM-loop handler (v0.15).
@@ -250,13 +251,8 @@ async function runLoopConvertingLeaseLoss<T>(
   }
 }
 
-async function refusePrivateSubagent(_ctx: MinionJobContext): Promise<SubagentResult> {
-  assertPrivateNativeLoopAllowed('minions.legacy_subagent');
-  throw new Error('private_subagent_configuration_changed');
-}
-
 export function makeSubagentHandler(deps: SubagentDeps) {
-  if (readPrivateCodexConfig()) return refusePrivateSubagent;
+  if (readPrivateCodexConfig()) return makeCodexSubagentHandler(deps.engine);
   const engine = deps.engine;
   // sdk.messages IS the MessagesClient-shaped object. The v0.16.0 bug was
   // casting new Anthropic() (top level) to MessagesClient, but .create()
