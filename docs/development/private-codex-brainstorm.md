@@ -102,9 +102,8 @@ still lists legacy checkpoints; it is not a private receipt browser.
 This source checkpoint does not activate the installed services. The production
 runtime qualification registry remains empty. Live schema/image transport,
 native-action isolation, subscription auth and cancellation still need bounded,
-separately authorized acceptance. The multi-fixture `eval brainstorm` producer
-still needs per-fixture host allowances and an aggregate durable run; its cost
-report now retains unknown costs and failures. Scheduling and worker-specific
+separately authorized acceptance. The multi-fixture `eval brainstorm` producer now uses one shared grant and
+durable fixture identities; see [evaluation behavior and acceptance](private-codex-brainstorm-eval.md). Scheduling and worker-specific
 brainstorm producers are not claimed complete by the local CLI checks. Scratch
 brains and remote callers cannot manufacture local grants.
 

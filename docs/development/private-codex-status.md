@@ -481,6 +481,15 @@ durable source/evidence selection, owner leases, accepted-result recovery and
 protocol-5 prepared publication in strict private mode. Local CLI allowances
 bind explicit attempts, turns and deadlines; auxiliary USD budgets are separate.
 Judgments retain complete ID coverage, host scoring and accepted-chunk reuse.
-Migration v238 is registered for both engines. Multi-fixture evaluation admission,
-producer coverage and live runtime qualification remain incomplete. Installed
+Migration v238 is registered for both engines. Multi-fixture evaluation admission now shares one allowance across durable
+fixture results, with migration v239 and the existing evaluation lease store.
+Remaining producer coverage and live runtime qualification are incomplete. Installed
 GBrain is unchanged. See [scope and evidence](private-codex-brainstorm.md).
+
+## Brainstorm evaluation checkpoint
+
+Private multi-fixture evaluation now uses strict bounded input parsing, one
+aggregate subscription allowance, retained fixture identities and fenced batch
+receipts. Failed fixtures cannot become grades or passing partial reports.
+Details and verification: [brainstorm evaluations](private-codex-brainstorm-eval.md).
+Installed services and production database remain unchanged.

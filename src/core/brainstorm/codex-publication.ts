@@ -1,3 +1,4 @@
+import { brainstormRunIdentity } from './codex-fixture.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { OperationError } from '../ops/contract.ts';
@@ -20,6 +21,7 @@ export async function prepareBrainstormPublication(ctx: OperationContext, result
     if (!result.idea_slug || !result.ideas.length)
         return null;
     const host = codexSubscriptionContext()!;
+    if(brainstormRunIdentity(host.runId)!==host.runId)publicationConflict();
     const hex = digest(['codex-brainstorm-write-v1', host.runId]), requestId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
     const content = serializeMarkdown({ ...buildBrainstormFrontmatterObject(result), visibility: [...selection.close, ...selection.far].some(p => p.private) ? 'private' : 'world',
         provenance: 'codex-brainstorm', subscription_run: host.runId }, formatBrainstormMarkdown(result, { onlyPassed: false, includeMeta: true }), '', { type: 'note', title: `${result.profile_label}: ${result.question.slice(0, 100)}`, tags: [] });

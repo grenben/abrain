@@ -45,10 +45,10 @@
       "codex_brainstorm_runs.codex_brainstorm_runs_check8": "c CHECK (((NOT publication_complete) OR publication_admitted))",
       "codex_brainstorm_runs.codex_brainstorm_runs_check9": "c CHECK (((state <> 'complete'::text) OR (result IS NOT NULL)))",
       "codex_brainstorm_runs.codex_brainstorm_runs_pkey": "p PRIMARY KEY (run_id)",
-      "codex_brainstorm_runs.codex_brainstorm_runs_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_protocol_check": "c CHECK ((((protocol = 1) AND (run_id = subscription_run_id)) OR (protocol = 2)))",
       "codex_brainstorm_runs.codex_brainstorm_runs_request_hash_check": "c CHECK ((request_hash ~ '^[a-f0-9]{64}$'::text))",
-      "codex_brainstorm_runs.codex_brainstorm_runs_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
       "codex_brainstorm_runs.codex_brainstorm_runs_state_check": "c CHECK ((state = ANY (ARRAY['idle'::text, 'running'::text, 'complete'::text, 'needs_reconciliation'::text])))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_subscription_run_id_fkey": "f FOREIGN KEY (subscription_run_id) REFERENCES codex_subscription_runs(run_id)",
       "codex_eval_results.codex_eval_results_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
       "codex_eval_results.codex_eval_results_payload_check": "c CHECK (((jsonb_typeof(payload) = 'object'::text) AND (octet_length((payload)::text) <= 524288)))",
       "codex_eval_results.codex_eval_results_payload_hash_check": "c CHECK ((payload_hash ~ '^[a-f0-9]{64}$'::text))",
@@ -1027,6 +1027,7 @@
       "codex_auto_think_pending": "CREATE UNIQUE INDEX codex_auto_think_pending ON public.codex_auto_think_runs USING btree (source_id) WHERE (state = 'accepted'::text)",
       "codex_auto_think_runs_pkey": "CREATE UNIQUE INDEX codex_auto_think_runs_pkey ON public.codex_auto_think_runs USING btree (run_id, source_id)",
       "codex_brainstorm_runs_pkey": "CREATE UNIQUE INDEX codex_brainstorm_runs_pkey ON public.codex_brainstorm_runs USING btree (run_id)",
+      "codex_brainstorm_runs_subscription_run": "CREATE INDEX codex_brainstorm_runs_subscription_run ON public.codex_brainstorm_runs USING btree (subscription_run_id)",
       "codex_eval_results_pkey": "CREATE UNIQUE INDEX codex_eval_results_pkey ON public.codex_eval_results USING btree (run_id, question_key, stage)",
       "codex_eval_runs_pkey": "CREATE UNIQUE INDEX codex_eval_runs_pkey ON public.codex_eval_runs USING btree (run_id)",
       "codex_parked_jobs_pkey": "CREATE UNIQUE INDEX codex_parked_jobs_pkey ON public.codex_parked_jobs USING btree (job_id)",
@@ -1698,7 +1699,8 @@
           "12 publication_hash text/text NULL",
           "13 publication_admitted boolean/bool NOT NULL DEFAULT false",
           "14 publication_complete boolean/bool NOT NULL DEFAULT false",
-          "15 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+          "15 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "16 subscription_run_id text/text NOT NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },

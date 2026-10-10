@@ -1,3 +1,4 @@
+import { brainstormRunIdentity } from './codex-fixture.ts';
 import type { JudgeConfig, JudgeIdea, JudgeIdeaResult, JudgeResult, RunJudgeOptions } from './judges.ts';
 import { buildJudgePrompt, ideaPasses, weightedScore } from './judges.ts';
 import { cachedCodexProposal, withCodexProposalCache } from '../ai/codex-proposal-cache.ts';
@@ -35,7 +36,7 @@ export async function runCodexBrainstormJudge(config: JudgeConfig, ideas: JudgeI
   const snapshot = JSON.parse(JSON.stringify({config,ideas,biases:options.activeBiasTags??[]})) as {config:JudgeConfig;ideas:JudgeIdea[];biases:string[]};
   if (Buffer.byteLength(JSON.stringify(snapshot))>1048576) invalid();
   const model = await resolveModel(host.engine,{cliFlag:options.modelOverride,configKey:'models.brainstorm.judge',tier:'utility',fallback:'haiku'});
-  const bindingHash = digest({protocol:CODEX_BRAINSTORM_JUDGE_VERSION,runId:host.runId,model,...snapshot});
+  const bindingHash = digest({protocol:CODEX_BRAINSTORM_JUDGE_VERSION,runId:brainstormRunIdentity(host.runId),model,...snapshot});
   const output: JudgeIdeaResult[] = [], usage = {input_tokens:0,output_tokens:0,cache_read_tokens:0,cache_creation_tokens:0};
   let hits=0;
   await withCodexProposalCache({namespace:CODEX_BRAINSTORM_JUDGE_VERSION,bindingHash},async()=>{

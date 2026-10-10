@@ -103,7 +103,7 @@ export async function runCodexBrainstorm(engine: BrainEngine, config: Brainstorm
                 if (!grant?.current)
                     throw new SubscriptionAdmissionError('subscription_exhausted');
             }, async () => {
-                const stored = await readBrainstormRun(engine, host.runId);
+                const stored = await readBrainstormRun(engine, claim.runId);
                 selection = stored.selection ?? undefined;
                 await check();
                 if (stored.result)
@@ -114,7 +114,7 @@ export async function runCodexBrainstorm(engine: BrainEngine, config: Brainstorm
                 }
                 const selected = selection!;
                 const ideas: BrainstormResult['ideas'] = [];
-                await withCodexProposalCache({ namespace: CODEX_BRAINSTORM_RUN_VERSION, bindingHash: digest([host.runId, requestHash, digest(selected)]) }, async () => {
+                await withCodexProposalCache({ namespace: CODEX_BRAINSTORM_RUN_VERSION, bindingHash: digest([claim.runId, requestHash, digest(selected)]) }, async () => {
                     for (const close of selected.close.length ? selected.close : [null])
                         for (const far of selected.far) {
                             const proposed = await proposeBrainstormCross({ question: opts.question, profile: opts.profile, close, far, model, signal: abortSignal });
@@ -139,7 +139,7 @@ export async function runCodexBrainstorm(engine: BrainEngine, config: Brainstorm
                     close_set: selected.close.map(p => ({ slug: p.slug, title: p.title, source_id: p.sourceId })),
                     far_set: selected.far.map(p => ({ slug: p.slug, title: p.title, source_id: p.sourceId, distance_score: p.distance, source: p.sampling })),
                     active_bias_tags: selected.biases, short_of_target: selected.short, judge_failed: false, idea_slug: opts.ideaSlug,
-                    generation_status: ideas.length ? 'complete' : 'empty', codex_run: { run_id: host.runId, request_hash: requestHash },
+                    generation_status: ideas.length ? 'complete' : 'empty', codex_run: { run_id: claim.runId, request_hash: requestHash },
                     cost: { estimated_usd: null, actual_usd: null, input_tokens: usage!.input_tokens, output_tokens: usage!.output_tokens, cap_usd: opts.maxCostUsd ?? null, cap_source: 'subscription' },
                 };
                 const publication = await prepareBrainstormPublication(ctx, result, selected);
@@ -147,7 +147,7 @@ export async function runCodexBrainstorm(engine: BrainEngine, config: Brainstorm
                     await fence(tx);
                     await retainBrainstormStage(tx, host, claim, 'result', result);
                     if (publication)
-                        await tx.executeRaw('UPDATE codex_brainstorm_runs SET publication=$2::text::jsonb,publication_hash=$3 WHERE run_id=$1', [host.runId, JSON.stringify(publication), digest(publication)]);
+                        await tx.executeRaw('UPDATE codex_brainstorm_runs SET publication=$2::text::jsonb,publication_hash=$3 WHERE run_id=$1', [claim.runId, JSON.stringify(publication), digest(publication)]);
                 });
                 return result;
             }));
