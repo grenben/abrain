@@ -24,6 +24,7 @@ export const PRIVATE_GENERATION_ROLES = [
   ['brainstorm-judge','models.brainstorm.judge','utility','brainstorm/judges.ts'],
   ['skillopt-judge',undefined,'reasoning','skillopt/score.ts'],
   ['skillopt-optimizer',undefined,'deep','skillopt/reflect.ts'],
+  ['skillopt-bootstrap',undefined,'deep','skillopt/bootstrap-benchmark.ts'],
   ['generated-reports',undefined,'reasoning',undefined],
   ['parser-fallback',undefined,'utility','conversation-parser/llm-codex-fallback.ts'],
   ['parser-polish',undefined,'utility','conversation-parser/llm-base.ts'],

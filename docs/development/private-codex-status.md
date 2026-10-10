@@ -512,3 +512,14 @@ empty successful proposals, and cancellation prevents a second reflection call.
 This does not publish a skill or replace the legacy rollout loop. Benchmark
 bootstrap, whole-run admission and durable optimizer publication remain work;
 [scope and checks](private-codex-skillopt.md). Installed GBrain is unchanged.
+
+## Skill benchmark generation checkpoint
+
+Both private benchmark generators now use complete native proposals with typed
+rules, host-assigned IDs, exact routing coverage, strict failures and retained
+proposal reuse. Unmanaged drafts preserve review and ownership guards; inputs
+and output are checked for drift before writing. The guarded entry requires a
+host subscription allowance and reports unknown monetary cost. Standalone CLI
+admission and whole-optimizer publication remain work;
+[scope and verification](private-codex-skillopt-bootstrap.md). No deployment or
+activation was performed.

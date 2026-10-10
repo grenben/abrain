@@ -1,5 +1,6 @@
 import { codexSkilloptScoreContract } from './codex-skillopt-score-contract.ts';
 import { codexSkilloptReflectContract } from './codex-skillopt-reflect-contract.ts';
+import { codexSkilloptBootstrapContract } from './codex-skillopt-bootstrap-contract.ts';
 import { codexBrainstormEvalContract } from './codex-brainstorm-eval-contract.ts';
 import { codexBrainstormRunContract } from './codex-brainstorm-run-contract.ts';
 import { codexBrainstormJudgeContract } from './codex-brainstorm-judge-contract.ts';
@@ -59,6 +60,7 @@ appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt,mod
 const configured=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
 let value=configured.byRole?configured.byRole[schema.properties.claims?'extractor':schema.properties.citations?'reader':'judge']:configured;
 if(value.autoReflect)value=value[JSON.parse(JSON.parse(prompt).messages[0].content).mode];
+if(value.autoBootstrap){const data=JSON.parse(JSON.parse(prompt).messages[0].content);value={tasks:Array.from({length:data.taskCount},(_,i)=>({task:data.intents?.[i]??('Synthetic grounded task '+(i+1)),checks:[{op:'contains',arg:'Grounded'},{op:'max_chars',arg:4096}]}))};}
 if(value.autoBrainstorm){if(schema.properties.ideas.items.properties.far_quote){const data=JSON.parse(JSON.parse(prompt).messages[0].content);value=value.badCross||(value.failCrossQuestion&&data.question.includes(value.failCrossQuestion))?{raw:'{}'}:value.emptyCross?{ideas:[]}:{ideas:[{text:'Connect the two domains through a testable constraint.',close_quote:data.close?.content??null,far_quote:data.far.content}]};}else value=value.badJudge?{raw:'{}'}:{autoJudge:true};}
 if(value.autoJudge){const ids=schema.properties.ideas.items.properties.id.enum;value=ids.includes(value.failId)?{raw:'{}'}:{ideas:ids.map(id=>({id,scores:{originality:4,resistance:4,thesis_density:4,concrete_grounding:4,cognitive_load:4},note:'Synthetic grounded idea.'}))};}
 if(value?.citations?.[0]?.session_id==='__first_session__')value.citations[0].session_id=JSON.parse(prompt).messages[0].content.match(/<chat_session id="([^"]+)"/)[1];
@@ -312,6 +314,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   codexBrainstormEvalContract({root,engine:()=>engine,run,reply,calls});
   codexSkilloptScoreContract({engine:()=>engine,run,reply,calls});
   codexSkilloptReflectContract({engine:()=>engine,run,reply,calls});
+  codexSkilloptBootstrapContract({engine:()=>engine,run,reply,calls});
   codexBrainstormJudgeContract({engine:()=>engine,run,reply,calls});
   codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
   codexProposalCacheContract({engine:()=>engine,run,reply,calls});

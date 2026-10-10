@@ -33,6 +33,9 @@ import { atomicWrite } from './apply-edits.ts';
 import { isSkilloptMustAbort } from './must-abort.ts';
 import { skilloptOutputCap } from './output-cap.ts';
 import { BOOTSTRAP_PENDING_REVIEW, SKILLOPT_PURPOSE, type RuleCheck } from './types.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexBootstrap } from './codex-bootstrap.ts';
+import type { CachedCodexProposal } from '../ai/codex-proposal-cache.ts';
 
 const BOOTSTRAP_SYSTEM = `You are SkillOpt's bootstrap-benchmark generator. Given a user intent that triggers a SKILL, generate 2-4 deterministic rule checks that would verify a successful execution.
 
@@ -71,6 +74,7 @@ Rules:
 - Prefer 3-4 checks per task when the skill's quality bar supports them.`;
 
 export interface BootstrapOpts {
+  abortSignal?: AbortSignal;
   skillsDir: string;
   skillName: string;
   optimizerModel: string;
@@ -80,12 +84,16 @@ export interface BootstrapOpts {
 }
 
 export interface BootstrapResult {
+  cacheHit?: boolean;
+  usage?: CachedCodexProposal['usage'];
+  billing?: CachedCodexProposal['billing'];
   outputPath: string;
   rowsGenerated: number;
   rowsSkipped: number;
 }
 
 export async function runBootstrap(opts: BootstrapOpts): Promise<BootstrapResult> {
+  if (readPrivateCodexConfig()) return runCodexBootstrap(opts, 'routing');
   const { skillsDir, skillName, optimizerModel, force } = opts;
   const chat = opts.chatFn ?? gatewayChat;
 
@@ -213,6 +221,7 @@ function validateChecks(raw: unknown[]): RuleCheck[] {
 // ─── from-skill generator (--bootstrap-from-skill) ──────────────────────────
 
 export interface BootstrapFromSkillOpts {
+  abortSignal?: AbortSignal;
   skillsDir: string;
   skillName: string;
   optimizerModel: string;
@@ -232,6 +241,7 @@ export interface BootstrapFromSkillOpts {
  * CLI surfaces the real failure instead of a misleading "0 tasks" message.
  */
 export async function runBootstrapFromSkill(opts: BootstrapFromSkillOpts): Promise<BootstrapResult> {
+  if (readPrivateCodexConfig()) return runCodexBootstrap(opts, 'skill');
   const { skillsDir, skillName, optimizerModel } = opts;
   const taskCount = opts.taskCount ?? 15;
   const chat = opts.chatFn ?? gatewayChat;

@@ -83,7 +83,8 @@ separate requirements.
 
 The legacy rollout uses `gateway.toolLoop` without durable action history and
 therefore is not the selected private host action loop. Native structured
-benchmark-bootstrap proposals, whole-run subscription
+[benchmark-bootstrap proposals](private-codex-skillopt-bootstrap.md) now validate
+complete review drafts under an existing host allowance. Whole-run subscription
 admission, durable candidate recovery and prepared skill publication remain
 separate work. The current tests of the real validation gate supply synthetic
 completed trajectories; they do not prove native rollout execution. File-based
