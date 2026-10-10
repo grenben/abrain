@@ -500,5 +500,15 @@ Private LLM scoring now uses native bounded schemas and validated output quotes.
 The actual candidate-validation gate is sequential, preflights all explicit
 pins and model tiers, propagates cancellation, and cannot score failures as zero
 or accept a partial task set. Deterministic rule/qrels scorers remain model-free.
-Native rollout/action history, optimizer proposals, aggregate admission and
+Native rollout/action history, benchmark proposals, aggregate admission and
 prepared skill publication remain incomplete; [details and evidence](private-codex-skillopt.md).
+
+## Skill-optimization proposal checkpoint
+
+The actual private reflection and one-shot rewrite entries now use native
+schemas, full input snapshots, all-or-nothing semantic validation, sequential
+edit composition and durable accepted-proposal reuse. Failures cannot become
+empty successful proposals, and cancellation prevents a second reflection call.
+This does not publish a skill or replace the legacy rollout loop. Benchmark
+bootstrap, whole-run admission and durable optimizer publication remain work;
+[scope and checks](private-codex-skillopt.md). Installed GBrain is unchanged.

@@ -48,11 +48,42 @@ existing host median and epsilon rules. Abort reaches an active native judge.
 Typed Codex admission, routing and proposal failures are must-abort errors at
 optimizer, bootstrap and held-out catch boundaries too.
 
+## Native optimizer proposals
+
+The real `runReflect` and `runOneShotRewrite` entries select native schemas in
+strict private mode. They require a host subscription allowance, preflight the
+explicit optimizer pin and deep tier, refuse injected chat transports and
+snapshot the entire input before asynchronous work. Bounds are 64,000 body
+characters, 100 scored trajectories, 100 rejected entries and a 128 KiB snapshot.
+Incomplete trajectories and failed judgments cannot supply optimization evidence.
+Calls request at most 8,192 output tokens with a 120-second timeout; an explicit
+unsupported cap or oversized input fails instead of being silently truncated.
+
+Reflection uses tool-specific add/replace/delete schemas with bounded arguments
+and reasons, at most 20 edits across the two sequential calls. The host runs
+every proposed edit through the existing pure body patcher. Missing or ambiguous
+targets, edits inside code fences, no-op edits, invalid text, generated frontmatter
+and conflicting batches fail the entire proposal. Success reflection sees the
+original body and prior failure edits and must produce a valid subsequent batch.
+No partial candidate is returned if either call fails. A deliberate empty edits
+array is a usable result. A body rewrite requires a complete nonempty body and
+sufficient requested output headroom; transport truncation is still an error.
+
+`codex-skillopt-reflect-v1` binds retained proposals to the host run, model, mode,
+full captured inputs and prior edits. Accepted failure reflection survives a
+later success-reflection failure, so retry reuses it without a second charge.
+Every retained proposal passes schema and semantic validation again. Reports
+separate cache hits, new measured tokens and null subscription price/quota.
+There is no content repair, provider fallback or candidate publication here.
+Validation demonstrates a safe patch candidate, not its quality or authorization
+to publish. The existing validation gate and future durable publication remain
+separate requirements.
+
 ## Remaining optimizer work
 
 The legacy rollout uses `gateway.toolLoop` without durable action history and
 therefore is not the selected private host action loop. Native structured
-optimizer/reflection and benchmark-bootstrap proposals, whole-run subscription
+benchmark-bootstrap proposals, whole-run subscription
 admission, durable candidate recovery and prepared skill publication remain
 separate work. The current tests of the real validation gate supply synthetic
 completed trajectories; they do not prove native rollout execution. File-based
@@ -71,15 +102,14 @@ PostgreSQL runs use an authorized disposable cluster that is stopped afterward.
 
 | Command | Result |
 | --- | --- |
-| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=30000 test/ai/codex-think.serial.test.ts` | 336 passed; 1,217 assertions |
-| `python3 /tmp/maxbrain-test-postgres-think.py` | Same 336 passed and 1,217 assertions; cluster stopped |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=30000 test/ai/codex-think.serial.test.ts` | 365 passed; 1,301 assertions |
+| `python3 /tmp/maxbrain-test-postgres-think.py` | Same 365 passed and 1,301 assertions; cluster stopped |
 | `python3 /tmp/maxbrain-skillopt-judge-regressions.py` | Eleven separate legacy/diagnostic suites: 161 passed; 412 assertions |
-| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 74 passed, including typecheck; admin build skipped; duplicate documentation entry found |
-| `python3 /tmp/maxbrain-stream-check.py bun run check:doc-history` | Passed after consolidating the duplicate entry |
-| `python3 /tmp/maxbrain-stream-check.py bun run build` | Compiled 3,694 modules |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 75 passed, including typecheck; 0 failed; admin build explicitly skipped |
+| `python3 /tmp/maxbrain-stream-check.py bun run build` | Compiled 3,695 modules |
 | `git diff --check` | Passed |
 
-The new native judging contract contributes 25 cases and 78 assertions per
+The native judging contract contributes 25 cases and 78 assertions per
 engine. It covers actual schema transport, strict numeric scores, exact quotes,
 malformed/refused/incomplete output, changed input/cache identities, conflicting
 pins, explicit admission, exhaustion, live judge cancellation, deterministic
@@ -88,7 +118,12 @@ The gate receives synthetic completed trajectories in these tests; native
 rollout execution is explicitly outside this checkpoint. Full container CI,
 admin UI and live subscription/runtime qualification were not run.
 
-Logs use `/tmp/maxbrain-skillopt-judge-`: `contract.log`, `postgres.log`,
-`regressions.log`, `regression-0.log` through `regression-10.log`, `verify.log`,
-`doc-history.log` and `build.log`. The build is a development artifact; it has
+The new reflection/rewrite contract contributes 29 cases and 84 assertions per
+engine: actual native schema transport, sequential conflicting edits, whole-batch
+rejection, accepted-proposal recovery, deliberate empty results, explicit pin and
+input bounds, snapshot identity, allowance exhaustion and active cancellation.
+
+Logs use `/tmp/maxbrain-skillopt-proposals-`: `contract.log`, `postgres.log`,
+`regressions.log`, `verify.log` and `build.log`. Separate legacy-suite logs use
+`/tmp/maxbrain-skillopt-judge-regression-0.log` through `regression-10.log`. The build is a development artifact; it has
 not replaced installed GBrain.
