@@ -37,7 +37,7 @@ import type { OperationContext } from '../ops/contract.ts';
 
 export interface ValidateGateOpts extends Omit<GateInput, 'selSet'> {
   /** Host-owned phase/candidate evaluation identity; repetitions derive distinct durable jobs. */
-  codex?: { evaluationId: string; allowedTools: string[]; allowedSlugPrefixes: string[] };
+  codex?: { evaluationId: string; allowedTools: string[]; allowedSlugPrefixes: string[]; readRegistry?: 'codex-discovery-v1' };
   operationContext?: OperationContext;
   selSet: BenchmarkTask[];
   engine: BrainEngine;
@@ -129,7 +129,7 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
             throw new Error(SKILLOPT_RUNTIME_EXCEEDED);
           }
           const rolloutOpts: RolloutOpts = {
-            ...(opts.codex ? { codex: { allowedTools: opts.codex.allowedTools, allowedSlugPrefixes: opts.codex.allowedSlugPrefixes, invocationId: digest({ evaluation: opts.codex.evaluationId, taskId: task.task_id, repetition: i }) } } : {}),
+            ...(opts.codex ? { codex: { ...(opts.codex.readRegistry !== undefined ? { readRegistry: opts.codex.readRegistry } : {}), allowedTools: opts.codex.allowedTools, allowedSlugPrefixes: opts.codex.allowedSlugPrefixes, invocationId: digest({ evaluation: opts.codex.evaluationId, taskId: task.task_id, repetition: i }) } } : {}),
             operationContext: opts.operationContext,
             engine: opts.engine,
             skillText: opts.candidateSkillText,

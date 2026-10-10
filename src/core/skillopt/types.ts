@@ -136,7 +136,7 @@ export interface SkillOptOpts {
   /** Trusted queued workflow snapshot; checked before grant claim or inference. */
   codexExpectedInputHash?: string;
   /** Explicit host scope for native evaluations; never inferred from candidate skill content. */
-  codex?: { allowedTools: string[]; allowedSlugPrefixes: string[] };
+  codex?: { allowedTools: string[]; allowedSlugPrefixes: string[]; readRegistry?: 'codex-discovery-v1' };
   operationContext?: OperationContext;
   sharedSkill?: {
     source_id: string;

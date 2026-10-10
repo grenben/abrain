@@ -77,11 +77,12 @@ Safety:
   --codex-request-id UUID       Reuse unchanged inputs/limits to recover a run
   --source ID                  Explicit source for private benchmark reads
   --read-prefix PATH           Allowed slug or prefix/*; repeat for more prefixes
+  --read-tool NAME             Repeat: get_page, list_pages or search (keyword only)
   --aux-max-usd N              Separate paid embedding/reranking allowance
-                                Current native registry only permits get_page.
+                                Default read tool: get_page. Discovery requires explicit tools.
                                 Cost and remaining subscription quota are unknown.
                                 --max-usd never authorizes subscription calls.
-                                Batch/fleet/bootstrap grants are pending.
+                                Batch/fleet grants are pending; bootstrap creates review drafts.
 
   --max-usd N|off               Hard cap. Default 5.00. Preflight refuses
                                 if estimate exceeds. A model with no price

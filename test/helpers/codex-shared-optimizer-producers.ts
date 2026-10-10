@@ -42,6 +42,17 @@ export function codexSharedOptimizerProducers(f: Fixture) {
         expect(f.skill()).toContain('Always cite evidence.'); expect((await submit(g)).id).toBe(submitted.id); expect(f.calls()).toHaveLength(66);
       } finally { await worker.stop(); await running; }
     });
+    test('discovery-enabled shared optimizer retains child scope through canonical publication', async () => {
+      const g = grant(), base = f.opts(), scope = { operationContext: base.operationContext,
+        codex: { ...base.codex!, allowedTools: ['get_page', 'list_pages'], readRegistry: 'codex-discovery-v1' as const } };
+      const options = await input(), submitted = await submitCodexSkillOpt(f.engine(), options, scope, g);
+      expect(submitted.data.read_registry).toBe('codex-discovery-v1');
+      expect(await execute(await claim())).toMatchObject({ outcome: 'accepted', shared_optimization: { publication: { state: 'committed' } } });
+      const children = await f.engine().executeRaw<{ registry: string }>("SELECT data->>'read_registry' AS registry FROM minion_jobs WHERE name='subagent'");
+      expect(children.length).toBeGreaterThan(0); expect(children.every(r => r.registry === 'codex-discovery-v1')).toBe(true);
+      expect(f.skill()).toContain('Always cite evidence.');
+      expect((await submitCodexSkillOpt(f.engine(), options, scope, g)).id).toBe(submitted.id); expect(f.calls()).toHaveLength(66);
+    });
     test('queued target, input and allowance changes cannot become new work', async () => {
       const g = grant(); await submit(g);
       await expect(submit({ ...g, maxAttempts: 151 })).rejects.toThrow();

@@ -26,7 +26,7 @@ export function validateCodexOptimizerJob(data: Record<string, unknown>): void {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
   } else if (data.shared_skill !== undefined) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   validateCodexReadJob({ action_protocol: CODEX_READ_PROTOCOL, prompt: 'optimizer scope', source_id: data.source_id,
-    allowed_tools: data.allowed_tools, allowed_slug_prefixes: data.allowed_slug_prefixes, max_turns: 16, no_self_fix: true });
+    ...(data.read_registry !== undefined ? { read_registry: data.read_registry } : {}), allowed_tools: data.allowed_tools, allowed_slug_prefixes: data.allowed_slug_prefixes, max_turns: 16, no_self_fix: true });
   for (const key of ['optimizer_model', 'target_model', 'judge_model']) {
     if (typeof data[key] !== 'string') throw new SubscriptionAdmissionError('subscription_invalid');
     assertPrivateRoute(data[key], `job:skillopt.${key}`);

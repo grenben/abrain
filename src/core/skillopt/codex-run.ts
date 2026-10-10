@@ -22,7 +22,8 @@ export async function prepareCodexSkillOpt(original: SkillOptOpts) {
   const opts: SkillOptOpts = { ...structuredClone(values), engine, operationContext: { ...operationContext! } };
   const sourceId = opts.operationContext!.sourceId!;
   validateCodexReadJob({ action_protocol: CODEX_READ_PROTOCOL, prompt: 'scope preflight', source_id: sourceId, no_self_fix: true,
-    allowed_tools: opts.codex!.allowedTools, allowed_slug_prefixes: opts.codex!.allowedSlugPrefixes, max_turns: 16 });
+    allowed_tools: opts.codex!.allowedTools, allowed_slug_prefixes: opts.codex!.allowedSlugPrefixes,
+    ...(opts.codex!.readRegistry !== undefined ? { read_registry: opts.codex!.readRegistry } : {}), max_turns: 16 });
   const prior = await readOptimizerRun(engine, host.runId);
   const files = snapshotOptimizerFiles(opts, prior ? { files: prior.input.files as unknown as OptimizerFiles,
     finalText: prior.result?.outcome === 'accepted' ? prior.result.finalText : undefined, complete: prior.state === 'complete' } : undefined);

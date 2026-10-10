@@ -3,12 +3,12 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [scoped discovery reads](private-codex-discovery.md)
-adds an explicit native registry for authorized listing and keyword search,
-with filters before pagination, bounded retained results and child compatibility
-checks. Schema head remains 265. Hybrid query/graph tools, broader optimizer
-producers, full dispatch coverage and production runtime qualification remain
-incomplete.
+Latest source checkpoint: [optimizer discovery producers](private-codex-optimizer-discovery.md)
+connects explicitly selected listing/keyword tools to CLI, evaluation phases,
+queued optimizers and shared canonical publication. Tool scope is immutable across
+request/child recovery; older workers reject discovery jobs before launch. Schema
+head remains 265. Hybrid query/graph tools, cycle/batch/remote producers, full
+dispatch coverage and production runtime qualification remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 

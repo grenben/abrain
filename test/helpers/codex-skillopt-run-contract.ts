@@ -54,6 +54,28 @@ export function codexSkilloptRunContract(f: Fixture) {
       const [row] = await f.engine().executeRaw<{ input: Record<string, any> }>('SELECT input FROM codex_skillopt_runs');
       expect(row!.input.sourceId).toBe('default'); expect(row!.input.codex).toEqual({ allowedTools: ['get_page'], allowedSlugPrefixes: ['notes/*'] });
     });
+    test('discovery-enabled CLI binds the chosen tools across every optimizer phase', async () => {
+      const args = ['synthetic-skill', '--skills-dir', dir, '--benchmark', benchmark, '--epochs', '1', '--batch-size', '5', '--lr', '1', '--lr-schedule', 'constant',
+        '--split', '1:1:1', '--reflect-max-tokens', '2048', '--no-mutate', '--force', '--json', ...localArgs(), '--read-tool', 'list_pages', '--read-tool', 'get_page'];
+      const exits: number[] = [];
+      const exit = spyOn(process, 'exit').mockImplementation(code => { exits.push(Number(code)); return undefined as never; }), out = spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        await runSkillOptCommand(f.engine(), args); await runSkillOptCommand(f.engine(), args);
+        const changed = args.filter((v, i, all) => v !== 'list_pages' && !(v === '--read-tool' && all[i + 1] === 'list_pages'));
+        await runSkillOptCommand(f.engine(), changed);
+      } finally { exit.mockRestore(); out.mockRestore(); }
+      const [row] = await f.engine().executeRaw<{ input: any }>('SELECT input FROM codex_skillopt_runs');
+      expect(row!.input.codex).toEqual({ allowedTools: ['list_pages', 'get_page'], allowedSlugPrefixes: ['notes/*'], readRegistry: 'codex-discovery-v1' });
+      const children = await f.engine().executeRaw<{ registry: string }>("SELECT data->>'read_registry' AS registry FROM minion_jobs WHERE name='subagent'");
+      expect(children.length).toBeGreaterThan(0); expect(children.every(r => r.registry === 'codex-discovery-v1')).toBe(true);
+      expect(f.calls().filter(c => c.schema.properties.response).every(c => c.schema.properties.response.anyOf.some((b: any) => b.properties.name?.const === 'brain_list_pages'))).toBe(true);
+      expect(exits).toEqual([0, 0, 2]); expect(f.calls()).toHaveLength(66);
+    });
+    test('discovery CLI invalid tools and bootstrap tool requests fail before admission', async () => {
+      for (const extra of [['--read-tool', 'shell'], ['--read-tool', 'get_page', '--read-tool', 'get_page'], ['--read-tool', 'list_pages', '--bootstrap-from-skill']])
+        await expect(withSkillOptAllowance(f.engine(), [...localArgs(), ...extra], async () => undefined)).rejects.toThrow();
+      expect(await f.engine().executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0); expect(f.calls()).toHaveLength(0);
+    });
     test('local preflight and dry-run never leave an unused durable allowance', async () => {
       const args = localArgs();
       await withSkillOptAllowance(f.engine(), args, async (_, scope) => {

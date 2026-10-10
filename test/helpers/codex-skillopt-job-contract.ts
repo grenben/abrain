@@ -42,6 +42,18 @@ export function codexSkilloptJobContract(f: Fixture) {
       const context = buildJobContext(f.engine(), queue, job, job.lock_token!, abort.signal, new AbortController().signal);
       return runWithJobSpend(f.engine(), job, context, () => runSkillOptJob(f.engine(), job.data, context));
     };
+    test('discovery-enabled queued optimizer preserves its registry and immutable tool scope', async () => {
+      const g = grant(), s = scope(), inputOpts = await input();
+      s.codex = { ...s.codex, allowedTools: ['get_page', 'list_pages'] };
+      const enhanced = { ...s, codex: { ...s.codex, readRegistry: 'codex-discovery-v1' as const } };
+      const submitted = await submitCodexSkillOpt(f.engine(), inputOpts, enhanced, g);
+      expect(submitted.data.read_registry).toBe('codex-discovery-v1');
+      await expect(submitCodexSkillOpt(f.engine(), inputOpts, scope(), g)).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect((await execute(await claim()))).toMatchObject({ outcome: 'accepted', cost_usd: null });
+      const children = await f.engine().executeRaw<{ registry: string }>("SELECT data->>'read_registry' AS registry FROM minion_jobs WHERE name='subagent'");
+      expect(children.length).toBeGreaterThan(0); expect(children.every(r => r.registry === 'codex-discovery-v1')).toBe(true);
+      expect((await submitCodexSkillOpt(f.engine(), inputOpts, enhanced, g)).id).toBe(submitted.id); expect(f.calls()).toHaveLength(66);
+    });
     test('real worker completes a permanently bound optimizer and its shared child allowance', async () => {
       const g = grant(), submitted = await submit(g);
       expect((await submit(g)).id).toBe(submitted.id); expect(f.calls()).toHaveLength(0);

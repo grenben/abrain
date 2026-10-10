@@ -23,7 +23,8 @@ export async function preflightNativeOptimizer(opts: SkillOptOpts,
   policy: NonNullable<ReturnType<typeof readPrivateCodexConfig>>) {
   assertNativeOptimizerControls(opts);
   validateCodexReadJob({ action_protocol: CODEX_READ_PROTOCOL, prompt: 'scope preflight', source_id: opts.operationContext!.sourceId, no_self_fix: true,
-    allowed_tools: opts.codex!.allowedTools, allowed_slug_prefixes: opts.codex!.allowedSlugPrefixes, max_turns: 16 });
+    allowed_tools: opts.codex!.allowedTools, allowed_slug_prefixes: opts.codex!.allowedSlugPrefixes,
+    ...(opts.codex!.readRegistry !== undefined ? { read_registry: opts.codex!.readRegistry } : {}), max_turns: 16 });
   const engine = opts.engine;
   if (Buffer.byteLength(files.skillText) > 12000) invalid();
   const benchmark = parseBenchmark(files.benchmarkText, files.benchmarkPath, { bootstrapReviewed: opts.bootstrapReviewed });

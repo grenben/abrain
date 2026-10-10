@@ -44,7 +44,7 @@ export async function submitCodexSkillOpt(engine: BrainEngine, input: SkillOptJo
     return { ...shared, input: shared.inputHash };
   });
   Object.assign(data, { optimizer_protocol: sharedSkill ? CODEX_SHARED_OPTIMIZER_JOB_PROTOCOL : CODEX_OPTIMIZER_JOB_PROTOCOL, optimizer_request_id: requestId,
-    optimizer_input_hash: typeof prepared.input === 'string' ? prepared.input : digest(prepared.input), source_id: original.sourceId, allowed_tools: codex.allowedTools, allowed_slug_prefixes: codex.allowedSlugPrefixes });
+    optimizer_input_hash: typeof prepared.input === 'string' ? prepared.input : digest(prepared.input), source_id: original.sourceId, ...(codex.readRegistry !== undefined ? { read_registry: codex.readRegistry } : {}), allowed_tools: codex.allowedTools, allowed_slug_prefixes: codex.allowedSlugPrefixes });
   validateCodexOptimizerJob(data);
   const dataHash = payloadHash(data), inputHash = digest({ dataHash, grant: { ...grant, requestId } });
   return engine.transaction(async tx => {
@@ -86,6 +86,6 @@ export async function codexOptimizerJobScope(engine: BrainEngine, data: Record<s
   if (!config) throw new SubscriptionAdmissionError('subscription_required');
   return { ...(data.optimizer_protocol === CODEX_SHARED_OPTIMIZER_JOB_PROTOCOL ? { sharedSkill: sharedOptimizerTarget(data.shared_skill) } : {}), operationContext: { engine, config, remote: false, sourceId: data.source_id as string, dryRun: false,
     logger: { info: console.log, warn: console.warn, error: console.error } },
-    codex: { allowedTools: structuredClone(data.allowed_tools as string[]), allowedSlugPrefixes: structuredClone(data.allowed_slug_prefixes as string[]) },
+    codex: { ...(data.read_registry !== undefined ? { readRegistry: data.read_registry as 'codex-discovery-v1' } : {}), allowedTools: structuredClone(data.allowed_tools as string[]), allowedSlugPrefixes: structuredClone(data.allowed_slug_prefixes as string[]) },
     codexExpectedInputHash: data.optimizer_input_hash as string };
 }

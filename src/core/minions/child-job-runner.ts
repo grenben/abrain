@@ -148,7 +148,7 @@ interface ChildExit {
  */
 export async function runJobInChild(opts: RunJobInChildOpts): Promise<unknown> {
   if (opts.codexAuthorized && !childSubscriptionEnforcementReady()) throw childConfigurationError('child_protocol_incompatible');
-  if (opts.codexAuthorized && opts.jobName === 'subagent' && !childCodexActionsReady(opts.codexDiscovery)) throw childConfigurationError('child_protocol_incompatible');
+  if (opts.codexAuthorized && (opts.jobName === 'subagent' || opts.codexDiscovery) && !childCodexActionsReady(opts.codexDiscovery)) throw childConfigurationError('child_protocol_incompatible');
   if (opts.spendAuthorized && !childSpendEnforcementReady()) throw new SpendEnforcementUnavailableError();
   let executionStopped = false;
   let configurationError: LocalConfigurationError | undefined;

@@ -39,6 +39,31 @@ export function codexSkilloptRolloutContract(f: Fixture) {
       expect(f.calls()).toHaveLength(2); expect(f.calls()[0].argv).toContain('--output-schema');
       expect(f.calls()[0].prompt).toContain('candidate_skill');
     });
+    test('discovery-enabled rollout retains scoped actions and rejects a changed registry', async () => {
+      const codex = { ...opts().codex!, allowedTools: ['get_page', 'list_pages'], readRegistry: 'codex-discovery-v1' as const };
+      f.replies({ response: { kind: 'tool', name: 'brain_list_pages', arguments: { limit: 2, offset: 0 } } }, f.get(), f.final);
+      await run(async () => {
+        const result = await runRollout(opts({ codex }));
+        expect(result.tool_calls.map(t => t.name)).toEqual(['list_pages', 'get_page']);
+        expect(result.tool_calls[0]!.output).toMatchObject({ mode: 'listing', items: expect.arrayContaining([
+          expect.objectContaining({ slug: 'notes/one', source_id: 'default' }),
+        ]) });
+        expect(await runRollout(opts({ codex }))).toEqual(result);
+        await expect(runRollout(opts())).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+        expect(await f.engine().executeRaw("SELECT data->>'read_registry' AS registry FROM minion_jobs")).toEqual([{ registry: 'codex-discovery-v1' }]);
+      }); expect(f.calls()).toHaveLength(3);
+    });
+    test('discovery-enabled validation gate carries the registry into scored child history', async () => {
+      const base = opts();
+      f.replies({ response: { kind: 'tool', name: 'brain_list_pages', arguments: { limit: 2, offset: 0 } } }, f.final);
+      await run(async () => {
+        const result = await runValidationGate({ engine: f.engine(), operationContext: base.operationContext, candidateSkillText: base.skillText,
+          selSet: [base.task], bestScore: 0, targetModel: base.targetModel, runsPerTask: 1,
+          codex: { evaluationId: 'discover-eval', allowedTools: ['list_pages'], allowedSlugPrefixes: ['notes/*'], readRegistry: 'codex-discovery-v1' } });
+        expect(result.selScore).toBe(1);
+        expect(await f.engine().executeRaw("SELECT data->>'read_registry' AS registry FROM minion_jobs")).toEqual([{ registry: 'codex-discovery-v1' }]);
+      }); expect(f.calls()).toHaveLength(2);
+    });
     test('same evaluation cannot change task, candidate, scope, model or turn limit', async () => {
       await run(async () => {
         await runRollout(opts());

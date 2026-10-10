@@ -125,7 +125,7 @@ export function codexDiscoveryContract(f: Fixture) {
     });
     test('an older child cannot execute a discovery job', async () => {
       noteChildSubscriptionEnforcement(['codex-subscription-v1', 'codex-host-read-v1', 'codex-host-actions-v1']);
-      await expect(runJobInChild({ jobId: 1, jobName: 'subagent', codexAuthorized: true, codexDiscovery: true, lockToken: 'unused',
+      for (const jobName of ['subagent', 'skillopt']) await expect(runJobInChild({ jobId: 1, jobName, codexAuthorized: true, codexDiscovery: true, lockToken: 'unused',
         abortSignal: new AbortController().signal, shutdownSignal: new AbortController().signal,
         invocation: { cmd: '/nonexistent/forbidden', argsPrefix: [] }, tiniPath: '' })).rejects.toMatchObject({ reasonCode: 'child_protocol_incompatible' });
     });

@@ -20,7 +20,7 @@ export async function runOptimizerLoop(input: OptimizerLoopInput, host: CodexSub
   const score = (id: string, candidate: string, tasks: BenchmarkTask[], bestScore: number, runsPerTask = 3) => runValidationGate({
     engine: opts.engine, operationContext: opts.operationContext, candidateSkillText: candidate, selSet: tasks, bestScore,
     targetModel: opts.targetModel, judgeModel: opts.judgeModel, runsPerTask, deadlineMs: claim.deadline, abortSignal: host.signal,
-    codex: { evaluationId: id, allowedTools: opts.codex!.allowedTools, allowedSlugPrefixes: opts.codex!.allowedSlugPrefixes } });
+    codex: { ...(opts.codex!.readRegistry !== undefined ? { readRegistry: opts.codex!.readRegistry } : {}), evaluationId: id, allowedTools: opts.codex!.allowedTools, allowedSlugPrefixes: opts.codex!.allowedSlugPrefixes } });
   if (state.baselineScore === null) {
     state.baselineScore = state.bestScore = (await score('baseline', baseline, split.sel, -1)).selScore;
     await saveOptimizerCheckpoint(host, claim, state);
