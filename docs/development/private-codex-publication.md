@@ -1,8 +1,9 @@
 # Private Codex publication checkpoint
 
 This source checkpoint implements bounded **pattern publication**. It does not
-activate private mode or qualify the installed Codex runtime. Synthesis integration
-and the full transcript → triage → reflection → pattern fixture remain next steps.
+activate private mode or qualify the installed Codex runtime. The subsequent
+[synthesis checkpoint](private-codex-synthesis.md) adds bounded synthesis and the
+transcript → triage → reflection → pattern fixture.
 
 ## Implemented path
 
@@ -93,8 +94,8 @@ PgBouncer remain unverified in this checkpoint; neither was provisioned here.
 
 ## Remaining limitations and upgrade handoff
 
-- Private synthesis still needs native proposals and retained publication integration,
-  including transcript identity, chunk completion, required reverse writes and summaries.
+- Bounded private synthesis now uses this retained-plan path; its coverage and
+  remaining limits are recorded in the [synthesis checkpoint](private-codex-synthesis.md).
 - Patterns v1 creates new public notes. Updating existing patterns needs a separately
   validated edit proposal and conflict workflow; it currently refuses such proposals.
 - An accepted plan with a terminal conflict blocks new proposals for that source.

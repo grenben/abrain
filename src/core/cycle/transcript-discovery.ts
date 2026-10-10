@@ -39,6 +39,8 @@ export interface DiscoveredTranscript {
 }
 
 export interface DiscoverOpts {
+  /** Optional host reader enforcing a bounded private snapshot; its failures are explicit. */
+  readContent?: (path: string) => string;
   /** Source directory. Required. */
   corpusDir: string;
   /** Optional second source. */
@@ -325,8 +327,9 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
 
       let content: string | null;
       try {
-        content = readFileSync(filePath, 'utf8');
-      } catch {
+        content = opts.readContent ? opts.readContent(filePath) : readFileSync(filePath, 'utf8');
+      } catch (error) {
+        if (opts.readContent) throw error;
         continue;
       }
       // #6091: turns captured under memory.auto_writeback off never feed synthesis.
@@ -372,14 +375,14 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
  */
 export function readSingleTranscript(
   filePath: string,
-  opts: { minChars?: number; excludePatterns?: string[]; bypassGuard?: boolean } = {},
+  opts: { minChars?: number; excludePatterns?: string[]; bypassGuard?: boolean; readContent?: (path: string) => string } = {},
 ): DiscoveredTranscript | null {
   const minChars = opts.minChars ?? 2000;
   const bypass = opts.bypassGuard === true;
   const excludes = compileLabeledExcludePatterns(opts.excludePatterns);
   let content: string;
   try {
-    content = readFileSync(filePath, 'utf8');
+    content = opts.readContent ? opts.readContent(filePath) : readFileSync(filePath, 'utf8');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`could not read transcript at ${filePath}: ${msg}`);

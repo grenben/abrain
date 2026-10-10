@@ -1,3 +1,7 @@
+import { buildDreamSummarySlug } from './synthesize-summary-slug.ts';
+export { buildDreamSummarySlug } from './synthesize-summary-slug.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivateSynthesize } from './synthesize-codex.ts';
 import { makeJudgeClient, type JudgeClient } from './triage-client.ts';
 export { makeJudgeClient, type JudgeClient } from './triage-client.ts';
 import { assertTriageRoute, isCodexTriageModel, validateCodexTriage, triageVersionForModel } from './triage-codex.ts';
@@ -396,7 +400,7 @@ export async function runPhaseSynthesize(
   // calls keep their own job:* tag — the innermost AsyncLocalStorage phase
   // wins (minions/worker.ts wraps each job), and that is intentional: the
   // authoritative child spend rolls up from minion_jobs token columns below.
-  return withChatPhase('phase:synthesize', () => runPhaseSynthesizeInner(engine, opts));
+  return withChatPhase('phase:synthesize', () => readPrivateCodexConfig() ? runPrivateSynthesize(engine, opts) : runPhaseSynthesizeInner(engine, opts));
 }
 
 async function runPhaseSynthesizeInner(
@@ -1553,13 +1557,6 @@ export interface SynthConfig {
   mode: 'agentic' | 'oneshot';
 }
 
-/** Keep orchestrator summaries inside a configured non-default namespace. */
-export function buildDreamSummarySlug(outputRoot: string, summaryDate: string): string {
-  return outputRoot === 'wiki'
-    ? `dream-cycle-summaries/${summaryDate}`
-    : `${outputRoot}/dream-cycle-summaries/${summaryDate}`;
-}
-
 /** #2415: shared output-root resolution (synthesize + patterns phases). */
 export async function loadOutputRoot(engine: BrainEngine): Promise<string> {
   const raw = await engine.getConfig('dream.synthesize.output_root');
@@ -1780,7 +1777,7 @@ export async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig>
  * cancelled rows are excluded so retriage-cancelled jobs don't eat budget;
  * dead rows count through the key the queue recorded when it released them.
  */
-async function countRecentSynthSubmissions(engine: BrainEngine, sourceId: string): Promise<number> {
+export async function countRecentSynthSubmissions(engine: BrainEngine, sourceId: string): Promise<number> {
   const rows = await engine.executeRaw<{ n: number }>(
     `SELECT COUNT(*)::int AS n
        FROM minion_jobs

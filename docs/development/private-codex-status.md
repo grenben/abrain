@@ -40,7 +40,7 @@ The installed artifact has not changed. Private activation and live verification
 | B. Strict routing | absent | absent | partial | `private-policy`, gateway/provider construction guards, `model-config`, special atom resolver, and legacy subagent entry gate. Explicit conflicting pins fail; default roles choose the configured Codex model. Complete queue/eval/pin-plane coverage remains open. |
 | C. Subscription accounting | absent | absent | partial | `subscription-admission`, migration v223, `codex-dispatch`, async host scopes, honest null costs, independent auxiliary USD guards. PGLite and native PostgreSQL tests cover account concurrency, immutable envelopes, bounds, stale ownership and unresolved retention. Queue/worker binding is implemented below; explicit CLI and two scheduled producers now issue allowances; other producers and durable operator reconciliation remain open. Migration v225 preserves unknown subscription totals in extraction rollups alongside API subtotals. The lane is shared within one brain DB, not across unrelated DBs. |
 | D. Bounded feature coverage | absent | absent | partial | Actual gateway chat/expansion/OCR use the proposal path; schema/image transport and valid empty outcomes tested. `private-roles` inventories roles without claiming feature acceptance. Facts/classifiers, atoms, grading and chunk synopses now have native schemas and semantic checks; see the bounded-role follow-up. Other roles and full publication recovery still require fixtures and fixes. |
-| E. Synthesis/pattern publication | absent | unverified | partial | Private patterns now use native proposals, v226 retained plans, stable prepared-write receipts, evidence revision checks, source-scoped provenance and partial-commit recovery. PGLite/PostgreSQL fixtures cover the pattern path. Synthesis integration, full transcript-to-pattern acceptance and operator reconciliation tooling remain open; see the publication checkpoint. |
+| E. Synthesis/pattern publication | absent | unverified | partial | Private patterns now use native proposals, v226 retained plans, stable prepared-write receipts, evidence revision checks, source-scoped provenance and partial-commit recovery. PGLite/PostgreSQL fixtures cover the pattern path. Bounded private synthesis now shares the retained-plan path, with multi-chunk completion, required summary receipts and transcript-to-pattern fixtures on both engines. Existing-page edits, full worker/crash acceptance and operator reconciliation tooling remain open; see the synthesis checkpoint. |
 | F. Host-owned action loop | absent | absent | absent | Existing ledger/canonical IDs, delegated tools, receipts and worker leases were located. Codex native tools remain false; the unfinished private minion path refuses execution before Anthropic construction. Sequential host action schema/loop, fencing, recovery and proven writes still need implementation. Deterministic worker registration remains possible. |
 | G. Diagnostics/migration | absent | absent | partial | `private-codex audit --json` is a new engine-free, no-call source command, always incomplete until coverage closes. No pin preview/apply/rollback or queued-job drain/park/resubmit tooling is implemented yet. |
 
@@ -256,6 +256,15 @@ prepared-write coordinator were pre-existing; this step connects them through a
 retained whole-proposal plan and deterministic receipt identities. Migration v226
 has parity across both supported engines. The installed artifact, production
 schema, runtime qualification and activation remain unchanged.
+
+## Bounded synthesis follow-up
+
+The [synthesis checkpoint](private-codex-synthesis.md) adds the private dispatcher,
+chunk schemas and grounding, bounded file identities, required summaries, durable
+daily call reservations and completion/cooldown behavior. It reuses pre-existing
+triage, the adapter and retained publication machinery. No production migration,
+installation, live verification or activation occurred. The overall matrix remains
+partial; existing-page edits and the host-owned action loop are still unfinished.
 
 ## Upgrade handoff and remaining acceptance
 

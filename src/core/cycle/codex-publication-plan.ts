@@ -1,17 +1,18 @@
+import { validatePublicationFiles, type PublicationFileEvidence } from './codex-publication-files.ts';
 import { isQuarantined } from '../quarantine.ts';
 import { opError } from '../ops/contract.ts';
 import type { BrainEngine } from '../engine.ts';
 import { digest } from '../persistence/digest.ts';
-import { validateMaintenance, submitMaintenanceIntent, type MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
+import { validateMaintenance, submitMaintenanceIntent, submitDatabaseMaintenanceIntent, type MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { getWriteRequest } from '../persistence/journal.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 
 export interface PublicationEvidence { slug: string; id: number; revision: string; excerpt: string }
-export interface PublicationPage { slug: string; content: string; expectedRevision: string | null; evidence: PublicationEvidence[] }
+export interface PublicationPage { slug: string; content: string; expectedRevision: string | null; evidence: PublicationEvidence[]; files?: PublicationFileEvidence[]; file?: boolean }
 export interface PublicationPayload {
   version: 1; authority: MaintenanceAuthority['writer']; pages: PublicationPage[];
-  evidence: PublicationEvidence[]; watermark: { key: string; value: string }; skipped: boolean;
+  evidence: PublicationEvidence[]; files?: PublicationFileEvidence[]; watermark: { key: string; value: string }; skipped: boolean;
 }
 export interface PublicationPlan { plan_id: string; payload: PublicationPayload; payload_hash: string; state: 'accepted' | 'complete' }
 function assertActive(signal?: AbortSignal) {
@@ -38,7 +39,8 @@ export async function retainPublication(engine: BrainEngine, authority: Maintena
     assertActive(signal);
     await codexSubscriptionContext()?.checkAuthorityInTransaction?.(tx);
     await tx.lockPageKeys([...payload.pages, ...payload.evidence].map(page => ({ sourceId: authority.writer.sourceId, slug: page.slug })));
-    await validateMaintenance(tx, authority, payload.evidence[0]!.slug);
+    await validateMaintenance(tx, authority, payload.pages[0]?.slug ?? payload.evidence[0]?.slug ?? 'reflections');
+    validatePublicationFiles(payload.files ?? []);
     await validatePublicationEvidence(tx, authority.writer.sourceId, payload.evidence);
     for (const page of payload.pages) {
       await validateMaintenance(tx, authority, page.slug);
@@ -68,8 +70,10 @@ export async function executePublication(engine: BrainEngine, authority: Mainten
     assertActive(signal);
     await codexSubscriptionContext()?.checkAuthority?.();
     const page = plan.payload.pages[i]!;
-    await submitMaintenanceIntent(engine, authority, page.slug, { kind: 'managed_maintenance_codex_page',
-      content: page.content, expected_revision: page.expectedRevision, evidence: page.evidence }, publicationRequestId(plan.plan_id, i));
+    const submit = page.file === false ? submitDatabaseMaintenanceIntent : submitMaintenanceIntent;
+    await submit(engine, authority, page.slug, { kind: page.files ? 'managed_maintenance_codex_synthesis_page' : 'managed_maintenance_codex_page',
+      content: page.content, expected_revision: page.expectedRevision, evidence: page.evidence,
+      ...(page.files ? { files: page.files } : {}) }, publicationRequestId(plan.plan_id, i));
     const receipt = await getWriteRequest(engine, authority.writer.principal, publicationRequestId(plan.plan_id, i));
     if (!receipt || receipt.state !== 'committed') throw new Error('codex_publication_needs_reconciliation');
   }
@@ -81,9 +85,10 @@ export async function executePublication(engine: BrainEngine, authority: Mainten
     if (!current || current.payload_hash !== plan.payload_hash) fail();
     // Concurrent recovery may already have completed this plan and a newer one.
     if (current.state === 'complete') return;
-    await validateMaintenance(tx, authority, plan.payload.pages[0]?.slug ?? plan.payload.evidence[0]!.slug);
+    await validateMaintenance(tx, authority, plan.payload.pages[0]?.slug ?? plan.payload.evidence[0]?.slug ?? 'reflections');
     // A clean zero still verifies the evidence before advancing its watermark.
     if (plan.payload.skipped) {
+      validatePublicationFiles(plan.payload.files ?? []);
       await tx.lockPageKeys(plan.payload.evidence.map(page => ({ sourceId: authority.writer.sourceId, slug: page.slug })));
       await validatePublicationEvidence(tx, authority.writer.sourceId, plan.payload.evidence);
     }
