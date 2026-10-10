@@ -3,11 +3,12 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [native optimizer background jobs](private-codex-skillopt-jobs.md)
-connects explicit CLI submission to permanent request/job identities and fenced
-worker execution. Migration 263 preserves queued recovery; migration 262 retains
-whole-run progress. Cycle/batch/remote/bootstrap admission,
-shared canonical publication recovery and broader read tools remain incomplete.
+Latest source checkpoint: [native shared optimizer publication](private-codex-shared-optimizer.md)
+retains approved staging, accepted results and fenced canonical bundle receipts.
+Migration 264 adds recovery storage and publication protocol 6. The earlier
+[background optimizer](private-codex-skillopt-jobs.md) connects unmanaged CLI
+submission to durable jobs. Shared CLI/worker producers, cycle/batch/remote/bootstrap
+admission and broader read tools remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 
@@ -48,7 +49,7 @@ The installed artifact has not changed. Private activation and live verification
 | D. Bounded feature coverage | absent | absent | partial | Actual gateway chat/expansion/OCR use the proposal path; schema/image transport and valid empty outcomes tested. `private-roles` inventories roles without claiming feature acceptance. Facts/classifiers, atoms, grading, drift, take proposals and chunk synopses now have native schemas and semantic checks; private take acceptance retains reviewer plans and reconciles canonical receipts; see the bounded-role follow-up. Other roles and full publication recovery still require fixtures and fixes. |
 | E. Synthesis/pattern publication | absent | unverified | partial | Private patterns now use native proposals, v226 retained plans, stable prepared-write receipts, evidence revision checks, source-scoped provenance and partial-commit recovery. PGLite/PostgreSQL fixtures cover the pattern path. Bounded private synthesis now shares the retained-plan path, with multi-chunk completion, required summary receipts and transcript-to-pattern fixtures on both engines. Existing-page edits, full worker/crash acceptance and operator reconciliation tooling remain open; see the synthesis checkpoint. |
 | F. Host-owned action loop | absent | absent | partial | Explicit `codex-host-read-v1` and `codex-host-actions-v1` jobs use sequential native proposals, scoped page reads and receipt-backed page writes. Migration v227 retains host authority; page protocol 3 preserves untrusted write semantics and fences publication against stale jobs/revisions. Fake-executable PGLite/PostgreSQL fixtures cover 41 action cases. Native tools remain false; broader reads, operator reconciliation and complete process-crash acceptance remain open. See `private-codex-actions.md`. |
-| G. Diagnostics/migration | absent | absent | partial | `private-codex audit --json` is an engine-free, no-call source command, always incomplete until coverage closes. Pin migration v248 and job parking v249 have explicit previews, receipts and rollback. Queued-job previews identify drain requirements; durable fences prevent ordinary resume, and reviewed unstarted standalone jobs get new queue identities/grants. File migration requires other config writers stopped. Started/ambiguous work and graph replacements require reconciliation/new workflow review. Full worker/pin inventory and operator reconciliation remain incomplete. See `private-codex-pins.md` and `private-codex-job-upgrade.md`. |
+| G. Diagnostics/migration | absent | absent | partial | `private-codex audit --json` is an engine-free, no-call source command, always incomplete until coverage closes. Pin migration v228 and job parking v229 have explicit previews, receipts and rollback. Queued-job previews identify drain requirements; durable fences prevent ordinary resume, and reviewed unstarted standalone jobs get new queue identities/grants. Started/ambiguous work and graph replacements require reconciliation/new workflow review. Full worker/pin inventory and operator reconciliation remain incomplete. See `private-codex-pins.md` and `private-codex-job-upgrade.md`. |
 
 ## Changes developed
 
@@ -93,7 +94,7 @@ incomplete.
 
 [Private take proposals](private-codex-take-proposals.md) add whole-batch native
 schema/quote validation, cache isolation and transactional proposal persistence.
-Migration v250 retains host-bound source/revision/quote evidence. Failed proposals
+Migration v230 retains host-bound source/revision/quote evidence. Failed proposals
 never become empty cache entries; receipt permission failures preserve committed
 proposal counts. Canonical take acceptance now retains reviewer edits and atomically
 commits the proposal claim and write admission atomically before effects; retries reconcile the original receipt, including
@@ -348,7 +349,7 @@ The [calibration checkpoint](private-codex-calibration.md) adds native structure
 voice judgments and explicit failure handling with one shared content-repair
 allowance. The inventory separates profile generation, voice review and the
 think A/B harness. Private profile generation now implements source-scoped
-metrics, native patterns/tags, explicit CLI allowances and v251 retained receipts
+metrics, native patterns/tags, explicit CLI allowances and v231 retained receipts
 with authority/revision checks. Broader calibration remains partial: think A/B,
 full scheduled dispatch and live runtime qualification are unverified. Supported
 judge modes are not proof of wired product surfaces. Installed status is unchanged.
@@ -365,7 +366,7 @@ GBrain and activation are unchanged.
 
 ## Think publication follow-up
 
-The [publication checkpoint](private-codex-think-publication.md) adds v252 retained
+The [publication checkpoint](private-codex-think-publication.md) adds v232 retained
 think plans, protocol-4 canonical page/take requests, citation transactionality,
 stable replay and durable worker fences. Managed-file partial completion is
 exercised on both engines. CLI subscription grants, auto-think completion,
@@ -376,7 +377,7 @@ activation are unchanged.
 
 [CLI allowances and automatic think](private-codex-think-automation.md) wrap the
 local command in durable subscription and independent paid-retrieval limits. The
-actual cycle dispatcher now includes opt-in `auto_think`; v253 retains source-bound
+actual cycle dispatcher now includes opt-in `auto_think`; v233 retains source-bound
 batches and answers, fences writes, blocks replacement of unfinished work, and
 starts cooldown only after all selected answers and required saves complete.
 Installed capabilities and activation remain unchanged; runtime qualification,
@@ -385,7 +386,7 @@ operator reconciliation and remaining generation coverage are incomplete.
 ## Calibration A/B follow-up
 
 [Native calibration A/B trials](private-codex-think-ab.md) connect the production
-think path to retained v254 comparisons and explicit atomic preference receipts.
+think path to retained v234 comparisons and explicit atomic preference receipts.
 Profile/evidence drift, failures and partial trials do not become votes. Local
 CLI generation uses explicit subscription allowances; inspection and rating are
 model-free. Runtime isolation, full crash acceptance, operator recovery and the
@@ -405,12 +406,12 @@ not qualify a production Codex executable or activate the installed brain.
 service calls, retain independent embedding admission, and fence publication
 against job/source/cancellation changes. Native synopsis schema v2 binds prompt
 and chunk evidence. Contextual job identities are v2 and require an explicit
-source. Migration v255 preserves small paid charges in both accounting tables.
+source. Migration v235 preserves small paid charges in both accounting tables.
 This is source development with isolated checks, not an installed upgrade.
 
 ## Proposal-cache follow-up
 
-[Native proposal caching](private-codex-proposal-cache.md) adds v256 durable raw
+[Native proposal caching](private-codex-proposal-cache.md) adds v236 durable raw
 responses in the subscription owner's database. The synopsis seam revalidates
 schema, quote evidence, authority and grant lifetime on every scoped reuse;
 failed calls never become cache entries or refunded attempts. LongMemEval's

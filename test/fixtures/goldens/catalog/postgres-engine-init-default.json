@@ -81,6 +81,19 @@
       "codex_publication_plans.codex_publication_plans_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "codex_publication_plans.codex_publication_plans_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
       "codex_publication_plans.codex_publication_plans_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check2": "c CHECK (((admission IS NULL) = (admission_hash IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check3": "c CHECK (((response IS NULL) = (response_hash IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check4": "c CHECK (((result IS NULL) OR ((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 524288) AND (result_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check5": "c CHECK (((admission IS NULL) OR ((result IS NOT NULL) AND (jsonb_typeof(admission) = 'object'::text) AND (octet_length((admission)::text) <= 2097152) AND (admission_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check6": "c CHECK (((response IS NULL) OR ((result IS NOT NULL) AND (jsonb_typeof(response) = 'object'::text) AND (octet_length((response)::text) <= 524288) AND (response_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 2097152)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_pkey": "p PRIMARY KEY (run_id)",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_request_id_key": "u UNIQUE (request_id)",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
       "codex_skillopt_rollouts.codex_skillopt_rollouts_check": "c CHECK (((trajectory IS NULL) = (trajectory_hash IS NULL)))",
       "codex_skillopt_rollouts.codex_skillopt_rollouts_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
       "codex_skillopt_rollouts.codex_skillopt_rollouts_invocation_id_check": "c CHECK ((invocation_id ~ '^[A-Za-z0-9._:-]{1,160}$'::text))",
@@ -381,7 +394,7 @@
       "persistence_requests.persistence_requests_preparation_attempts_check": "c CHECK ((preparation_attempts >= 0))",
       "persistence_requests.persistence_requests_principal_kind_check": "c CHECK ((principal_kind = ANY (ARRAY['oauth_client'::text, 'legacy_token'::text, 'local_cli'::text, 'local_stdio'::text, 'application'::text])))",
       "persistence_requests.persistence_requests_principal_kind_principal_id_request_id_key": "u UNIQUE (principal_kind, principal_id, request_id)",
-      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2, 3, 4, 5])))",
+      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2, 3, 4, 5, 6])))",
       "persistence_requests.persistence_requests_sequence_key": "u UNIQUE (sequence)",
       "persistence_requests.persistence_requests_state_check": "c CHECK ((state = ANY (ARRAY['queued'::text, 'running'::text, 'recovering'::text, 'committed'::text, 'conflict'::text, 'failed'::text, 'cancelled'::text])))",
       "persistence_requests.persistence_requests_target_kind_check": "c CHECK ((target_kind = ANY (ARRAY['page'::text, 'skill_bundle'::text])))",
@@ -569,7 +582,7 @@
       "gbrain_graduation_fence()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=cd4642fe8deee2a3c14ef41f53862f0a449b2d8a10e47177bd4f5d2e05ce8803",
       "gbrain_guard_effect_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e8b5589dafd4a355106104daffdf57c7776d34fe18c5b5f5336a27de188688a1",
       "gbrain_guard_protocol_activation()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=f27354966c25d961fcecbffebba0e45747ad3de23575351319f6aee4f9aefd47",
-      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=1db5b598655d773a36d36be8239683a6606e1947e038bcb1391392b8bd5b13cf",
+      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=fd3abdd2aafe709985fd2a7a6df0dc62386b503c94fdb14c0ad1a466dd993097",
       "gbrain_guard_skill_publication()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e854c0d058e75a65c3a90127c5c417380975100e83fc34288f6085e786df10a9",
       "gbrain_lease_shared_skill_delivery()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=5e493c1ac8dce8cb025a736629e563437c4b214744137c302c532c20bf7e7acf",
       "gbrain_preserve_fact_withdrawal()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=9beb118551a08451a228146373f50f2aa2ce0cfe89937e937d361b33224aa0aa",
@@ -638,6 +651,9 @@
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "codex_publication_plans": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_shared_skill_optimizations": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "codex_skillopt_rollouts": [
@@ -1074,6 +1090,8 @@
       "codex_proposal_cache_pkey": "CREATE UNIQUE INDEX codex_proposal_cache_pkey ON public.codex_proposal_cache USING btree (namespace, binding_hash, request_hash)",
       "codex_publication_pending": "CREATE UNIQUE INDEX codex_publication_pending ON public.codex_publication_plans USING btree (source_id, source_incarnation, kind) WHERE (state = 'accepted'::text)",
       "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
+      "codex_shared_skill_optimizations_pkey": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_pkey ON public.codex_shared_skill_optimizations USING btree (run_id)",
+      "codex_shared_skill_optimizations_request_id_key": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_request_id_key ON public.codex_shared_skill_optimizations USING btree (request_id)",
       "codex_skillopt_rollouts_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_rollouts_job_id_key ON public.codex_skillopt_rollouts USING btree (job_id)",
       "codex_skillopt_rollouts_pkey": "CREATE UNIQUE INDEX codex_skillopt_rollouts_pkey ON public.codex_skillopt_rollouts USING btree (run_id, invocation_id)",
       "codex_skillopt_runs_pkey": "CREATE UNIQUE INDEX codex_skillopt_runs_pkey ON public.codex_skillopt_runs USING btree (run_id)",
@@ -1810,6 +1828,26 @@
           "8 state text/text NOT NULL DEFAULT 'accepted'::text",
           "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
           "10 completed_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_shared_skill_optimizations": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 request_id uuid/uuid NOT NULL",
+          "3 protocol integer/int4 NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 input jsonb/jsonb NOT NULL",
+          "6 owner_token uuid/uuid NULL",
+          "7 lease_until timestamp with time zone/timestamptz NULL",
+          "8 publication_fence jsonb/jsonb NULL",
+          "9 result jsonb/jsonb NULL",
+          "10 result_hash text/text NULL",
+          "11 admission jsonb/jsonb NULL",
+          "12 admission_hash text/text NULL",
+          "13 response jsonb/jsonb NULL",
+          "14 response_hash text/text NULL",
+          "15 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { configDir } from '../config.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { opError, OperationError, type OperationContext } from '../ops/contract.ts';
 import { hostFix } from '../ops/op-fix.ts';
 import { skillHeadFix } from './fixes.ts';
@@ -47,7 +48,7 @@ export async function sharedOptimizerSkillsDir(ctx: OperationContext, sourceId: 
   return join(root, 'skills');
 }
 
-async function authorize(ctx: OperationContext, opts: SkillOptOpts): Promise<void> {
+export async function authorizeSharedOptimizer(ctx: OperationContext, opts: SkillOptOpts): Promise<void> {
   const target = opts.sharedSkill!;
   let active = ctx;
   if (ctx.remote !== false) {
@@ -71,7 +72,7 @@ async function authorize(ctx: OperationContext, opts: SkillOptOpts): Promise<voi
 }
 
 
-export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillOptOpts) => Promise<RunSkillOptResult>): Promise<RunSkillOptResult> {
+export async function prepareSharedOptimizer(opts: SkillOptOpts) {
   const target = opts.sharedSkill;
   const ctx = opts.operationContext && target ? { ...opts.operationContext, sourceId: target.source_id } : undefined;
   if (!ctx || ctx.engine !== opts.engine || !target) {
@@ -84,7 +85,7 @@ export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillO
     throw opError('invalid_params', 'Shared optimization does not permit legacy resume, write capture, or evaluation ablations.',
       'Drop the resume run id, write capture, validation-gate and optimizer/reflect mode overrides, then start the optimization again; shared skills always run the full gated evaluation.');
   }
-  await authorize(ctx, opts);
+  await authorizeSharedOptimizer(ctx, opts);
   if (await getWriteRequest(ctx.engine, await requestPrincipalForContext(ctx), target.request_id)) {
     throw new OperationError('request_already_submitted', 'This optimizer publication request has already been submitted.',
       `Read get_write_request with request_id=${target.request_id}; do not rerun paid optimization to poll a publication.`);
@@ -128,8 +129,11 @@ export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillO
           { fix: skillHeadFix(target.source_id, target.pack_id, opts.skillName, target.expected_revision) });
       }
     } else {
-      if (lstatSync(realpathSync(input)).size > SHARED_SKILL_LIMITS.bundleBytes) throw opError('invalid_params', 'The evaluation input exceeds the bounded staging size.', EVAL_INPUT_HINT);
-      bytes = readFileSync(input);
+      if (readPrivateCodexConfig()) bytes = (await import('./codex-optimizer-files.ts')).readNativeOptimizerFile(input);
+      else {
+        if (lstatSync(realpathSync(input)).size > SHARED_SKILL_LIMITS.bundleBytes) throw opError('invalid_params', 'The evaluation input exceeds the bounded staging size.', EVAL_INPUT_HINT);
+        bytes = readFileSync(input);
+      }
     }
     if (bytes.length > SHARED_SKILL_LIMITS.bundleBytes) throw opError('invalid_params', 'The evaluation input exceeds the bounded staging size.', EVAL_INPUT_HINT);
     evaluationInputs.push(bytes);
@@ -137,7 +141,8 @@ export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillO
   const canonicalFile = join(skillsDir, opts.skillName, 'SKILL.md');
   for (const file of files) {
     const path = join(dirname(skillsDir), file.path), stat = lstatSync(path);
-    if (!stat.isFile() || stat.nlink !== 1 || realpathSync(path) !== path || sha256(readFileSync(path)) !== file.sha256) {
+    if (!stat.isFile() || stat.nlink !== 1 || realpathSync(path) !== path || sha256(readPrivateCodexConfig()
+      ? (await import('./codex-optimizer-files.ts')).readNativeOptimizerFile(path) : readFileSync(path)) !== file.sha256) {
       throw opError('local_conflict', 'Canonical skill bytes differ from the selected approved revision.',
         `${file.path} in source ${target.source_id}'s checkout differs from revision ${target.expected_revision}, so the checkout has unpublished edits. Restore the published bytes, or publish the edit through import_skill_proposal, before optimizing; nothing ran.`);
     }
@@ -148,6 +153,12 @@ export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillO
   }
   const bundled = getBundledSkillContext(skillsDir, opts.skillName);
   const mutate = shouldMutateSkillFile(bundled, opts).mutate;
+  return { target, ctx, skillsDir, skill, stored, files, evaluationInputs, bundled, mutate };
+}
+
+export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillOptOpts) => Promise<RunSkillOptResult>): Promise<RunSkillOptResult> {
+  if (readPrivateCodexConfig()) return (await import('./codex-optimizer.ts')).optimizeCodexSharedSkill(opts, run);
+  const { target, ctx, skillsDir, skill, stored, files, evaluationInputs, bundled, mutate } = await prepareSharedOptimizer(opts);
   const proposalId = randomUUID(), root = join(configDir(), 'skillopt-proposals', proposalId);
   assertLegacySkillFilesystemWrite(root);
   mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(root, 0o700);
@@ -169,7 +180,7 @@ export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillO
       ...(ctx.remote !== false ? { proposedPath: undefined } : {}) };
     if (opts.dryRun || !mutate || result.outcome !== 'accepted' || result.finalText === skill.body) return response;
     lintCandidate(skill.body, result.finalText);
-    await authorize(ctx, opts);
+    await authorizeSharedOptimizer(ctx, opts);
     const input = files.map(file => ({ ...file, encoding: 'base64' as const,
       content: file.path === `skills/${opts.skillName}/SKILL.md` ? Buffer.from(result.finalText).toString('base64') : file.content }));
     const publication = await submitSharedSkillMutation(ctx, 'put_skill', { ...target, name: opts.skillName, files: input,

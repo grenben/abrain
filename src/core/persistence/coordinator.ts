@@ -353,6 +353,7 @@ export async function publishMutation(engine: BrainEngine, row: WriteRequest, pr
       await bindPublicationTimeouts(tx);
       await declareDurablePersistence(tx);
       const liveBinding = await guardOwnership(tx, row, hostId);
+      if (row.protocol_version === 6) await (await import('../shared-skills/codex-optimizer-publication.ts')).authorizeSharedOptimizerRequest(tx, row, true);
       if (row.protocol_version === 5) await (await import('../brainstorm/codex-publication-guard.ts')).authorizeBrainstormRequest(tx, row, true);
       if (row.protocol_version === 4) await (await import('../think/publication-guard.ts')).authorizeThinkRequest(tx, row, true);
       if (prepared.sourceExclusive && !prepared.exclusiveSources?.length) await tx.executeRaw('SELECT id FROM sources WHERE id=$1 FOR UPDATE', [row.source_id]);
