@@ -41,7 +41,7 @@ import { resolveExcludePrivatePages } from '../search/private-visibility.ts';
 import { deliverEvidence, effectivePlan, resolveEvidencePlan, EVIDENCE_BLOCK_CHAR_CAP, THINK_RETURN_UNIT_CONFIG_KEY, type DeliveryMeta } from '../search/evidence-delivery.ts';
 import { startThinkDecide, thinkAbstainResult, type ThinkAbstention } from './decide.ts';
 import { classifyIntent } from './intent.ts';
-import { deriveTrust, derivedMaintenanceTransaction, type TaintRef } from '../trust/taint.ts';
+import { declareDerivation, deriveTrust, derivedMaintenanceTransaction, type TaintRef } from '../trust/taint.ts';
 
 /** Anthropic Messages client interface — same shape used by subagent.ts so test stubs can be shared. */
 export interface ThinkLLMClient {
@@ -1165,8 +1165,7 @@ export async function persistSynthesis(
   ].filter(Boolean).join('\n');
 
   const derivation = await deriveTrust(engine, result.taint_refs ?? [], { channel: 'derive:think' });
-  const page = await derivedMaintenanceTransaction(engine, derivation, async tx => {
-    const written = await tx.putPage(slug, {
+  const input = {
     title: result.question.slice(0, 200),
     type: 'synthesis',
     compiled_truth: body,
@@ -1179,9 +1178,13 @@ export async function persistSynthesis(
       takes_gathered: result.takesGathered,
       ...(result.persist?.unverified_claims.length ? { unverified_claims: result.persist.unverified_claims.map(c => ({ ...c, sources: ['think evidence'], detected_at: today })) } : {}),
     },
-  }, scope.sourceId ? { sourceId: scope.sourceId } : undefined);
-    return { result: written, rows: [{ table: 'pages' as const, id: written.id, sourceId: scope.sourceId ?? 'default' }] };
-  });
+  };
+  const { saveManagedThink } = await import('./managed-save.ts');
+  const page = await saveManagedThink(engine, slug, input, scope.sourceId, declareDerivation(derivation.trust, derivation.inputs)) ??
+    await derivedMaintenanceTransaction(engine, derivation, async tx => {
+      const written = await tx.putPage(slug, input, scope.sourceId ? { sourceId: scope.sourceId } : undefined);
+      return { result: written, rows: [{ table: 'pages' as const, id: written.id, sourceId: scope.sourceId ?? 'default' }] };
+    });
 
   const persisted = await persistCitations(engine, page.id, result.citations, scope);
   return { slug, evidenceInserted: persisted.inserted, warnings: persisted.warnings };

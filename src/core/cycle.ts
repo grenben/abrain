@@ -79,7 +79,7 @@ export type CyclePhase =
   //    judge model to verdict them. Auto-resolve OFF by default (D17).
   //  - calibration_profile: aggregates the resolved subset into 2-4
   //    narrative pattern statements + active bias tags. Voice-gated.
-  | 'propose_takes' | 'grade_takes' | 'calibration_profile'
+  | 'propose_takes' | 'grade_takes' | 'calibration_profile' | 'auto_think'
   | 'edge_contradictions' // temporal typed edges: LLM flags conflicts, date math closes
   // #2653 — drift detection (default OFF; dream.drift.enabled). LLM-judges
   // soft-band takes against recent timeline evidence; report-only in v1
@@ -179,6 +179,7 @@ export const ALL_PHASES: CyclePhase[] = [
   'propose_takes',
   'grade_takes',
   'calibration_profile',
+  'auto_think',
   'edge_contradictions', // temporal typed edges; after extract so it judges fresh relationship state
   // #2653 — drift detection. Default OFF (dream.drift.enabled). Runs AFTER
   // the calibration trio (fresh take resolutions) and BEFORE embed so the
@@ -347,6 +348,7 @@ const NEEDS_LOCK_PHASES: ReadonlySet<CyclePhase> = new Set([
   'propose_takes',
   'grade_takes',
   'calibration_profile',
+  'auto_think',
   // #2653 — writes the reports/drift-<date> page.
   'drift',
   'standing_questions', // C4: writes pinned answers and question pages.
@@ -2745,6 +2747,14 @@ export async function runCycle(
       }
     }
 
+    if (phases.includes('auto_think')) {
+      checkAborted(cycleSignal); progress.start('cycle.auto_think');
+      const { runCycleAutoThink } = await import('./cycle/auto-think.ts');
+      const { result, duration_ms } = await timePhase(() => runCycleAutoThink(engine, { dryRun, sourceId: cycleSourceId, brainDir: brainDir ?? undefined, signal: cycleSignal, deadlineAtMs: opts.deadlineAtMs }), 'auto_think');
+      result.duration_ms = duration_ms; phaseResults.push(result); progress.finish();
+      await safeYield(opts.yieldBetweenPhases);
+    }
+
     // Temporal typed edges: proposes (or, certified, applies) closures for live relationships that cannot both hold.
     if (phases.includes('edge_contradictions')) {
       checkAborted(cycleSignal);
@@ -2761,29 +2771,13 @@ export async function runCycle(
     // reports/drift-<date> page, mutates no takes regardless of
     // dream.drift.auto_update.
     if (phases.includes('drift')) {
-      checkAborted(cycleSignal);
-      if (!engine) {
-        phaseResults.push({
-          phase: 'drift',
-          status: 'skipped',
-          duration_ms: 0,
-          summary: 'no database connected',
-          details: { reason: 'no_database' },
-        });
-      } else {
-        progress.start('cycle.drift');
-        const { runCycleDrift } = await import('./cycle/drift.ts');
-        const { result, duration_ms } = await timePhase(() => runCycleDrift(engine, {
-            sourceId: cycleSourceId,
-            dryRun,
-            brainDir: brainDir ?? undefined,
-            forceEnabled: opts.onceForPhase === 'drift',
-            cycleDate,
-          }), 'drift');
-        result.duration_ms = duration_ms;
-        phaseResults.push(result);
-        progress.finish();
-      }
+      checkAborted(cycleSignal); progress.start('cycle.drift');
+      const { runCycleDriftOrSkip } = await import('./cycle/drift.ts');
+      const { result, duration_ms } = await timePhase(() => runCycleDriftOrSkip(engine, {
+        sourceId: cycleSourceId, dryRun, brainDir: brainDir ?? undefined,
+        forceEnabled: opts.onceForPhase === 'drift', cycleDate,
+      }), 'drift');
+      result.duration_ms = duration_ms; phaseResults.push(result); progress.finish();
       await safeYield(opts.yieldBetweenPhases);
     }
 

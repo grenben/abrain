@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { AUTO_THINK_SCHEMA_SQL } from '../src/core/cycle/auto-think-schema.ts';
 import { THINK_PUBLICATION_SCHEMA_SQL } from '../src/core/think/publication-schema.ts';
 import { CODEX_UPGRADE_SCHEMA_SQL } from '../src/core/ai/private-upgrade-schema.ts';
 import { CODEX_JOB_UPGRADE_SCHEMA_SQL } from '../src/core/minions/codex-upgrade-schema.ts';
@@ -120,6 +121,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/ai/private-upgrade-schema.ts', expr: 'CODEX_UPGRADE_SCHEMA_SQL', postgres: CODEX_UPGRADE_SCHEMA_SQL, pglite: CODEX_UPGRADE_SCHEMA_SQL },
   { source: 'src/core/minions/codex-upgrade-schema.ts', expr: 'CODEX_JOB_UPGRADE_SCHEMA_SQL', postgres: CODEX_JOB_UPGRADE_SCHEMA_SQL, pglite: CODEX_JOB_UPGRADE_SCHEMA_SQL },
   { source: 'src/core/think/publication-schema.ts', expr: 'THINK_PUBLICATION_SCHEMA_SQL', postgres: THINK_PUBLICATION_SCHEMA_SQL, pglite: THINK_PUBLICATION_SCHEMA_SQL },
+  { source: 'src/core/cycle/auto-think-schema.ts', expr: 'AUTO_THINK_SCHEMA_SQL', postgres: AUTO_THINK_SCHEMA_SQL, pglite: AUTO_THINK_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;

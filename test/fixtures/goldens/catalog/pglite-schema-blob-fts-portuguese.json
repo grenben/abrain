@@ -14,6 +14,11 @@
       "chronicle_page_state.chronicle_page_state_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "chronicle_page_state.chronicle_page_state_state_check": "c CHECK ((state = ANY (ARRAY['pending'::text, 'skipped'::text, 'extracted'::text, 'failed'::text])))",
       "chronicle_page_state.chronicle_page_state_trigger_check": "c CHECK ((trigger = ANY (ARRAY['auto'::text, 'backfill'::text])))",
+      "codex_auto_think_runs.codex_auto_think_runs_pkey": "p PRIMARY KEY (run_id, source_id)",
+      "codex_auto_think_runs.codex_auto_think_runs_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_auto_think_runs.codex_auto_think_runs_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_auto_think_runs.codex_auto_think_runs_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_auto_think_runs.codex_auto_think_runs_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
       "codex_parked_jobs.codex_parked_jobs_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id)",
       "codex_parked_jobs.codex_parked_jobs_pkey": "p PRIMARY KEY (job_id)",
       "codex_parked_jobs.codex_parked_jobs_receipt_id_fkey": "f FOREIGN KEY (receipt_id) REFERENCES codex_upgrade_receipts(id)",
@@ -371,6 +376,9 @@
       "chronicle_page_state": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_auto_think_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "codex_parked_jobs": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -701,6 +709,9 @@
       "chronicle_page_state_page_idx": "CREATE INDEX chronicle_page_state_page_idx ON public.chronicle_page_state USING btree (page_id)",
       "chronicle_page_state_pkey": "CREATE UNIQUE INDEX chronicle_page_state_pkey ON public.chronicle_page_state USING btree (source_id, page_id, content_hash, extractor_version)",
       "chronicle_page_state_work_idx": "CREATE INDEX chronicle_page_state_work_idx ON public.chronicle_page_state USING btree (source_id, state, next_attempt_at)",
+      "codex_auto_think_cooldown": "CREATE INDEX codex_auto_think_cooldown ON public.codex_auto_think_runs USING btree (source_id, completed_at DESC) WHERE (state = 'complete'::text)",
+      "codex_auto_think_pending": "CREATE UNIQUE INDEX codex_auto_think_pending ON public.codex_auto_think_runs USING btree (source_id) WHERE (state = 'accepted'::text)",
+      "codex_auto_think_runs_pkey": "CREATE UNIQUE INDEX codex_auto_think_runs_pkey ON public.codex_auto_think_runs USING btree (run_id, source_id)",
       "codex_parked_jobs_pkey": "CREATE UNIQUE INDEX codex_parked_jobs_pkey ON public.codex_parked_jobs USING btree (job_id)",
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
       "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
@@ -1129,6 +1140,20 @@
           "26 cost_attempts ARRAY/_int4 NOT NULL DEFAULT '{}'::integer[]"
         ],
         "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_auto_think_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 source_id text/text NOT NULL",
+          "3 source_incarnation uuid/uuid NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 binding jsonb/jsonb NOT NULL",
+          "6 results jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb",
+          "7 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "9 completed_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
       },
       "codex_parked_jobs": {
         "columns": [

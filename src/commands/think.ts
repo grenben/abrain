@@ -2,9 +2,11 @@
  * v0.28: `gbrain think <question>` CLI.
  *
  * Thin wrapper around runThink + persistSynthesis. Local CLI = remote=false,
- * so --save and --take are honored. Reads ANTHROPIC_API_KEY from the env;
- * degrades to gather-only output with a warning if missing.
+ * so --save and --take are honored. Strict private calls require an explicit
+ * subscription envelope; API mode retains its gather-only behavior.
  */
+import { withThinkSubscription, THINK_ALLOWANCE_FLAGS, hasThinkAllowanceFlags } from './think-subscription.ts';
+import { usageError } from '../cli/cli-error.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import { runThink, persistSynthesis, stripGapsSection } from '../core/think/index.ts';
 import { loadConfig, isThinClient } from '../core/config.ts';
@@ -67,6 +69,11 @@ Options:
                            resolve against (default: today in brain.timezone)
   --with-calibration       Inject the active calibration profile (anti-bias rewrite)
   --calibration-holder <h> Holder whose calibration profile to use (default: self)
+  --codex-max-attempts N    Explicit private subscription attempt allowance
+  --codex-max-turns N       Maximum accepted turns (at most attempts)
+  --codex-deadline <UTC>    Absolute ISO UTC deadline within 24 hours
+  --codex-request-id <UUID> Reuse the same identity and options for recovery
+  --max-usd <amount>       Separate paid embedding/reranking cap in private mode
   --json                   Output as JSON
   --help                   Show this help
 
@@ -78,9 +85,10 @@ exits non-zero.
 Dates: the reader sees today's date in brain.timezone and each page's content
 date; see docs/guides/time-aware-recall.md.
 
-Set ANTHROPIC_API_KEY (or run: gbrain config set anthropic_api_key ...) to run
-real synthesis. Without it AND without --save, the gather phase still runs and
-prints what would have been the input (exit 0).
+Strict private mode requires the three Codex allowance flags. Codex CLI owns
+subscription authentication. A USD cap alone does not authorize subscription
+calls; --max-usd separately bounds paid retrieval. Outside private mode, an
+API provider enables synthesis; without one, gather-only output remains available.
 `);
     return;
   }
@@ -89,7 +97,7 @@ prints what would have been the input (exit 0).
   // #4508: --source and --calibration-holder were MISSING here — the flag and
   // its value joined the positional question, so `think "q" --source X`
   // echoed `# --source X q` and silently ignored the scope.
-  const flagNames = ['--anchor', '--rounds', '--model', '--since', '--until', '--source', '--calibration-holder', '--reference-date'];
+  const flagNames = ['--anchor', '--rounds', '--model', '--since', '--until', '--source', '--calibration-holder', '--reference-date', ...THINK_ALLOWANCE_FLAGS];
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -139,6 +147,7 @@ prints what would have been the input (exit 0).
   let takePath: string | undefined;
   const cfg = loadConfig();
   if (isThinClient(cfg)) {
+    if (hasThinkAllowanceFlags(args)) throw usageError('Subscription allowances must be authorized on the brain host.', 'Run think on the host; remote arguments cannot grant inference or spending authority.');
     if (save || take) {
       console.error(
         '[thin-client] --save and --take are server-gated for remote callers ' +
@@ -190,14 +199,14 @@ prints what would have been the input (exit 0).
         // ambient source, a connection failure, a genuine bug — propagates.
         if (source !== undefined || !isUndefinedTableError(err)) throw err;
       }
-      result = await runThink(engine, {
+      const thinkOptions = {
         question, anchor, rounds, save, take, model, since, until,
         ...(referenceDate ? { referenceDate } : {}),
         // Fail-closed trust: local CLI must say so explicitly, or trajectory
         // injection degrades to visibility='world' rows.
-        remote: false,
+        remote: false as const,
         // #3734: activate takes' vector retrieval arm for CLI think.
-        embedQuestion: (q) => embedQuery(q),
+        embedQuestion: (q: string) => embedQuery(q),
         // #4508/#4652: thread the validated scope (RunThinkOpts.sourceId /
         // allowedSources — the array wins inside runGather, same as search).
         ...(sourceId ? { sourceId } : {}),
@@ -210,44 +219,47 @@ prints what would have been the input (exit 0).
         withCalibration,
         ...(calibrationHolder ? { calibrationHolder } : {}),
         // Local CLI: no MCP allow-list filter — operator owns the brain.
+      };
+      await withThinkSubscription(engine, args, thinkOptions, async () => {
+        result = await runThink(engine, thinkOptions);
+
+        // Persist if --save (the runThink path doesn't auto-persist; CLI does it explicitly)
+        if (save) {
+          const persisted = await persistSynthesis(engine, result, { sourceId, allowedSources });
+          savedSlug = persisted.slug || undefined;  // '' = persist-skip signal (#10)
+          evidenceInserted = persisted.evidenceInserted;
+          for (const w of persisted.warnings) result.warnings.push(w);
+          // #1698 (F2): --save requested but no synthesis was produced (no LLM, empty,
+          // or malformed) → exit non-zero. Saving nothing with exit 0 when the user
+          // explicitly asked to save is itself a silent failure.
+          if (!persisted.slug) {
+            console.error(
+              'think: --save requested but no synthesis was produced (no LLM available ' +
+              'or empty result) — nothing saved.',
+            );
+            process.exit(1);
+          }
+        }
+
+        // #2556: --take was documented (and parsed) since v0.28 but never
+        // executed — runThink ignored opts.take entirely. Persist md-first
+        // through the canonical takes write-through; a refusal (no repo, empty
+        // answer, failed synthesis, write error) exits non-zero (same F2
+        // posture as --save: the user explicitly asked for a persist).
+        if (take && anchor) {
+          const { persistTakeFromSynthesis } = await import('../core/think/persist-take.ts');
+          const persisted = await persistTakeFromSynthesis(engine, result, { anchor, sourceId });
+          takeRow = persisted.take_row;
+          takePath = persisted.path;
+          for (const w of persisted.warnings) result.warnings.push(w);
+          if (persisted.take_row === null) {
+            console.error(
+              `think: --take requested but no take row was appended (${persisted.warnings.join(', ') || 'unknown reason'}).`,
+            );
+            process.exit(1);
+          }
+        }
       });
-
-      // Persist if --save (the runThink path doesn't auto-persist; CLI does it explicitly)
-      if (save) {
-        const persisted = await persistSynthesis(engine, result, { sourceId, allowedSources });
-        savedSlug = persisted.slug || undefined;  // '' = persist-skip signal (#10)
-        evidenceInserted = persisted.evidenceInserted;
-        for (const w of persisted.warnings) result.warnings.push(w);
-        // #1698 (F2): --save requested but no synthesis was produced (no LLM, empty,
-        // or malformed) → exit non-zero. Saving nothing with exit 0 when the user
-        // explicitly asked to save is itself a silent failure.
-        if (!persisted.slug) {
-          console.error(
-            'think: --save requested but no synthesis was produced (no LLM available ' +
-            'or empty result) — nothing saved.',
-          );
-          process.exit(1);
-        }
-      }
-
-      // #2556: --take was documented (and parsed) since v0.28 but never
-      // executed — runThink ignored opts.take entirely. Persist md-first
-      // through the canonical takes write-through; a refusal (no repo, empty
-      // answer, failed synthesis, write error) exits non-zero (same F2
-      // posture as --save: the user explicitly asked for a persist).
-      if (take && anchor) {
-        const { persistTakeFromSynthesis } = await import('../core/think/persist-take.ts');
-        const persisted = await persistTakeFromSynthesis(engine, result, { anchor, sourceId });
-        takeRow = persisted.take_row;
-        takePath = persisted.path;
-        for (const w of persisted.warnings) result.warnings.push(w);
-        if (persisted.take_row === null) {
-          console.error(
-            `think: --take requested but no take row was appended (${persisted.warnings.join(', ') || 'unknown reason'}).`,
-          );
-          process.exit(1);
-        }
-      }
     } catch (e) {
       // #1698: an unresolvable explicit --model throws here. Clean non-zero exit
       // with the actionable message, not a stack trace.

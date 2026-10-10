@@ -29,6 +29,11 @@
       "code_edges_symbol.code_edges_symbol_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "code_edges_symbol.code_edges_symbol_unique": "u UNIQUE (from_chunk_id, to_symbol_qualified, edge_type)",
       "code_traversal_cache.code_traversal_cache_pkey": "p PRIMARY KEY (id)",
+      "codex_auto_think_runs.codex_auto_think_runs_pkey": "p PRIMARY KEY (run_id, source_id)",
+      "codex_auto_think_runs.codex_auto_think_runs_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_auto_think_runs.codex_auto_think_runs_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_auto_think_runs.codex_auto_think_runs_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_auto_think_runs.codex_auto_think_runs_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
       "codex_parked_jobs.codex_parked_jobs_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id)",
       "codex_parked_jobs.codex_parked_jobs_pkey": "p PRIMARY KEY (job_id)",
       "codex_parked_jobs.codex_parked_jobs_receipt_id_fkey": "f FOREIGN KEY (receipt_id) REFERENCES codex_upgrade_receipts(id)",
@@ -538,6 +543,9 @@
       "code_traversal_cache": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_auto_think_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "codex_parked_jobs": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -955,6 +963,9 @@
       "code_traversal_cache_key_idx": "CREATE UNIQUE INDEX code_traversal_cache_key_idx ON public.code_traversal_cache USING btree (symbol_qualified, depth, source_id)",
       "code_traversal_cache_pkey": "CREATE UNIQUE INDEX code_traversal_cache_pkey ON public.code_traversal_cache USING btree (id)",
       "code_traversal_cache_source_idx": "CREATE INDEX code_traversal_cache_source_idx ON public.code_traversal_cache USING btree (source_id)",
+      "codex_auto_think_cooldown": "CREATE INDEX codex_auto_think_cooldown ON public.codex_auto_think_runs USING btree (source_id, completed_at DESC) WHERE (state = 'complete'::text)",
+      "codex_auto_think_pending": "CREATE UNIQUE INDEX codex_auto_think_pending ON public.codex_auto_think_runs USING btree (source_id) WHERE (state = 'accepted'::text)",
+      "codex_auto_think_runs_pkey": "CREATE UNIQUE INDEX codex_auto_think_runs_pkey ON public.codex_auto_think_runs USING btree (run_id, source_id)",
       "codex_parked_jobs_pkey": "CREATE UNIQUE INDEX codex_parked_jobs_pkey ON public.codex_parked_jobs USING btree (job_id)",
       "codex_publication_pending": "CREATE UNIQUE INDEX codex_publication_pending ON public.codex_publication_plans USING btree (source_id, source_incarnation, kind) WHERE (state = 'accepted'::text)",
       "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
@@ -1587,6 +1598,20 @@
           "7 xmin_max bigint/int8 NOT NULL",
           "8 cluster_generation bigint/int8 NOT NULL DEFAULT 0",
           "9 computed_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_auto_think_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 source_id text/text NOT NULL",
+          "3 source_incarnation uuid/uuid NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 binding jsonb/jsonb NOT NULL",
+          "6 results jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb",
+          "7 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "9 completed_at timestamp with time zone/timestamptz NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },

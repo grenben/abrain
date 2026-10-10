@@ -473,3 +473,9 @@ export async function runCycleDrift(engine: BrainEngine, opts: DriftPhaseOpts): 
   return { phase: 'drift', duration_ms: 0, summary: result.detail, details: { ...result.totals },
     status: result.status === 'complete' ? 'ok' : result.status === 'partial' ? 'warn' : result.status === 'failed' ? 'fail' : 'skipped' };
 }
+
+/** The dispatcher can report a disconnected phase without importing provider state. */
+export async function runCycleDriftOrSkip(engine:BrainEngine|null,opts:DriftPhaseOpts):Promise<PhaseResult>{
+  if(!engine)return{phase:'drift',status:'skipped',duration_ms:0,summary:'no database connected',details:{reason:'no_database'}};
+  return runCycleDrift(engine,opts);
+}

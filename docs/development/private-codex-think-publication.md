@@ -106,9 +106,9 @@ runtime or installed-artifact qualification.
 
 ## Remaining work and upgrade handoff
 
-Direct think CLI subscription grants, auto-think budgets and completion/cooldown
-handling, calibration A/B trials and the remaining generation roles are separate
-unfinished work. Full process-kill coverage, lease-rebinding/operator recovery,
+Direct CLI grants and automatic-think batch completion are covered in the
+[subsequent automation checkpoint](private-codex-think-automation.md). Calibration
+A/B trials and the remaining generation roles are unfinished work. Full process-kill coverage, lease-rebinding/operator recovery,
 broader federated evidence/lineage review and real runtime isolation remain open.
 
 After deployment authorization and the remaining acceptance gates: build the

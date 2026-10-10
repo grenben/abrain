@@ -365,3 +365,13 @@ stable replay and durable worker fences. Managed-file partial completion is
 exercised on both engines. CLI subscription grants, auto-think completion,
 operator recovery and process-kill acceptance remain open. Installed status and
 activation are unchanged.
+
+## Think CLI and automatic-question follow-up
+
+[CLI allowances and automatic think](private-codex-think-automation.md) wrap the
+local command in durable subscription and independent paid-retrieval limits. The
+actual cycle dispatcher now includes opt-in `auto_think`; v253 retains source-bound
+batches and answers, fences writes, blocks replacement of unfinished work, and
+starts cooldown only after all selected answers and required saves complete.
+Installed capabilities and activation remain unchanged; runtime qualification,
+operator reconciliation and remaining generation coverage are incomplete.

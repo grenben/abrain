@@ -292,6 +292,16 @@ const MATRIX: Record<CyclePhase, Entry> = {
     reply: () => JSON.stringify(['You were right about widget launches in 5 of 5 calls.']),
     assert: async ({ result }) => { expect(result.details.total_resolved).toBe(5); },
   },
+  auto_think: {
+    config: { 'dream.auto_think.enabled':'true', 'dream.auto_think.questions':'["Widget launch"]', 'dream.auto_think.max_per_cycle':'1', 'dream.auto_think.cooldown_days':'0', 'dream.auto_think.budget':'10', 'dream.auto_think.auto_commit':'true' },
+    seed: async ({engine,sourceId})=>put(engine,sourceId,'notes/think-example',page('note','Widget','The widget launched.')),
+    reply: ()=>JSON.stringify({answer:'The widget launched. [notes/think-example]',citations:[{page_slug:'notes/think-example',row_num:null,citation_index:1}],gaps:[]}),
+    assert: async ({engine,sourceId,result})=>{
+      expect(result.status).toBe('ok');expect(result.details.synthesized).toBe(1);
+      const rows=await engine.executeRaw<{slug:string}>("SELECT slug FROM persistence_requests WHERE source_id=$1 AND slug LIKE 'synthesis/widget-launch-%' AND state='committed'",[sourceId]);
+      expect(rows).toHaveLength(1);expect((await engine.getPage(rows[0]!.slug,{sourceId}))?.compiled_truth).toContain('The widget launched.');
+    },
+  },
   drift: {
     config: { 'dream.drift.enabled': 'true' },
     seed: async ({ engine, sourceId }) => put(engine, sourceId, 'notes/drift-example', page('note', 'Drift',

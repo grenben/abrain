@@ -1,19 +1,11 @@
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivateAutoThink } from './auto-think-codex.ts';
+import { OperationError } from '../ops/contract.ts';
+import type { PhaseResult } from '../cycle.ts';
 import { formatCycleCost } from './budget-meter.ts';
-/**
- * v0.28: auto-think dream phase.
- *
- * Reads `dream.auto_think.questions[]` from config, runs `gbrain think` on
- * each one, persists the result as a synthesis page if `auto_commit=true`
- * (default false — write to a draft staging area instead). Capped by
- * `max_per_cycle` and the BudgetMeter's USD cap.
- *
- * Cooldown: `dream.auto_think.last_completion_ts` written ONLY on success
- * so retries after partial failures pick back up.
- *
- * Default-disabled. Operator opts in:
- *   gbrain config set dream.auto_think.enabled true
- *   gbrain config set dream.auto_think.questions '["What patterns ...","Who ..."]'
- */
+/** Opt-in automatic questions, dispatched by ordinary and queued cycles.
+ * Private mode retains drafts and requires every selected answer/save before
+ * cooldown. API mode preserves its legacy budget and completion behavior. */
 
 import type { BrainEngine } from '../engine.ts';
 import { runThink, persistSynthesis, type ThinkLLMClient } from '../think/index.ts';
@@ -21,13 +13,6 @@ import { resolveModel } from '../model-config.ts';
 import { embedQuery } from '../embedding.ts';
 import { BudgetMeter, loadAllowUnpriced, loadPricingOverrides, parseBudgetUsd } from './budget-meter.ts';
 
-/**
- * Local phase-result type for auto-think/drift. These phases are not yet
- * wired into cycle.ts's main dispatcher (deferred to v0.28.x); they ship
- * standalone for now and are invoked via `gbrain dream --phase auto_think`
- * once the dispatcher integration lands. Adopting cycle.ts's PhaseResult
- * shape forces premature CyclePhase enum extension.
- */
 export interface DreamPhaseResult {
   name: 'auto_think' | 'drift';
   status: 'complete' | 'partial' | 'failed' | 'skipped';
@@ -38,6 +23,8 @@ export interface DreamPhaseResult {
 
 export interface AutoThinkPhaseOpts {
   brainDir?: string;
+  signal?: AbortSignal;
+  deadlineAtMs?: number | null;
   dryRun: boolean;
   /** Inject LLM client (tests). Defaults to the real Anthropic SDK. */
   client?: ThinkLLMClient;
@@ -67,8 +54,9 @@ async function loadConfig(engine: BrainEngine): Promise<AutoThinkConfig> {
   if (questionsStr) {
     try {
       const parsed = JSON.parse(questionsStr);
+      if (readPrivateCodexConfig() && (!Array.isArray(parsed) || parsed.some(q=>typeof q !== 'string'))) throw new Error('invalid questions');
       if (Array.isArray(parsed)) questions = parsed.filter(q => typeof q === 'string');
-    } catch { /* ignore */ }
+    } catch { if(readPrivateCodexConfig()) throw new OperationError('invalid_params','Automatic think questions must be a JSON string array.','Correct dream.auto_think.questions before running the phase.'); }
   }
 
   // getNumberConfig (not `parse* || N`) so a configured 0 is honored — a bare
@@ -78,6 +66,7 @@ async function loadConfig(engine: BrainEngine): Promise<AutoThinkConfig> {
   const budgetUsd = parseBudgetUsd(await engine.getConfig('dream.auto_think.budget'), 2.0);
   const cooldownDays = Math.max(0, await getNumberConfig(engine, 'dream.auto_think.cooldown_days', 30));
 
+  if(readPrivateCodexConfig() && maxPerStr && !/^(?:[1-9]|1[0-9]|20)$/.test(maxPerStr))throw new OperationError('invalid_params','Automatic think max_per_cycle must be between 1 and 20.','Use a bounded integer.');
   return {
     enabled: enabledStr === 'true',
     questions,
@@ -115,6 +104,7 @@ export async function runPhaseAutoThink(
 ): Promise<DreamPhaseResult> {
   const start = Date.now();
   const config = await loadConfig(engine);
+  if(readPrivateCodexConfig())return runPrivateAutoThink(engine,opts,config);
 
   if (!config.enabled) {
     return skipped('not_configured', 'dream.auto_think.enabled is false');
@@ -232,3 +222,11 @@ export async function runPhaseAutoThink(
 
 // Test-only export: pin config-resolution behavior at function granularity.
 export const __testing = { loadConfig };
+
+/** Common phase adapter for dream, scheduled cycles and queued workers. */
+export async function runCycleAutoThink(engine:BrainEngine|null,opts:AutoThinkPhaseOpts):Promise<PhaseResult>{
+  if(!engine)return{phase:'auto_think',status:'skipped',duration_ms:0,summary:'no database connected',details:{reason:'no_database'}};
+  const result=await runPhaseAutoThink(engine,opts);
+  return{phase:'auto_think',status:result.status==='complete'?'ok':result.status==='partial'?'warn':result.status==='failed'?'fail':'skipped',
+    duration_ms:result.duration_ms,summary:result.detail,details:{...result.totals,...readPrivateCodexConfig()?{billing:'subscription',cost_usd:null}:{}}};
+}

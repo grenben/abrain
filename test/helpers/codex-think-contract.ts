@@ -1,3 +1,4 @@
+import { codexThinkAutomationContract } from './codex-think-automation-contract.ts';
 import { beforeAll, beforeEach, afterAll, test, expect } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, renameSync } from 'node:fs';
@@ -40,6 +41,7 @@ import {readFileSync,writeFileSync,appendFileSync,statSync} from 'node:fs';
 const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1],schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8'));
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt:readFileSync(0,'utf8'),mode:statSync(arg('--output-schema')).mode&511,envKeys:Object.keys(process.env)})+'\\n');
 const value=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
+if(value.wait) await new Promise(()=>setInterval(()=>{},1000));
 const text=value.raw??JSON.stringify({evidence_hash:schema.properties.evidence_hash.enum[0],...value});
 writeFileSync(arg('--output-last-message'),text);
 for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},
@@ -285,4 +287,6 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     reply({...valid,answer:'"Fictional orbital certainty" [notes/orbit]',citations:[{page_slug:slug,row_num:null,citation_index:1}]});
     await run(async()=>{const result=await think({question:'Orbit: "Fictional orbital certainty"'});expect(result.quote_check?.unverified).toBe(1);expect(result.answer).toContain('[unverified]');});
   });
+  codexThinkAutomationContract({engine:()=>engine,sourceId,root,run,reply,valid,calls});
+
 }
