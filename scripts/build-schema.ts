@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL } from '../src/core/brainstorm/codex-fixture-schema.ts';
+import { SUBSCRIPTION_GROUP_SCHEMA_SQL } from '../src/core/ai/subscription-group-schema.ts';
 import { CODEX_BRAINSTORM_SCHEMA_SQL } from '../src/core/brainstorm/codex-schema.ts';
 import { THINK_AB_SCHEMA_SQL } from '../src/core/calibration/think-ab-schema.ts';
 import { CODEX_EVAL_SCHEMA_SQL } from '../src/core/ai/codex-eval-schema.ts';
@@ -132,6 +133,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/brainstorm/codex-fixture-schema.ts', expr: 'CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL', postgres: CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL, pglite: CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL },
   { source: 'src/core/ai/codex-eval-schema.ts', expr: 'CODEX_EVAL_SCHEMA_SQL', postgres: CODEX_EVAL_SCHEMA_SQL, pglite: CODEX_EVAL_SCHEMA_SQL },
   { source: 'src/core/ai/codex-proposal-cache-schema.ts', expr: 'CODEX_PROPOSAL_CACHE_SCHEMA_SQL', postgres: CODEX_PROPOSAL_CACHE_SCHEMA_SQL, pglite: CODEX_PROPOSAL_CACHE_SCHEMA_SQL },
+  { source: 'src/core/ai/subscription-group-schema.ts', expr: 'SUBSCRIPTION_GROUP_SCHEMA_SQL', postgres: SUBSCRIPTION_GROUP_SCHEMA_SQL, pglite: SUBSCRIPTION_GROUP_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;

@@ -1,6 +1,7 @@
 import { codexSkilloptScoreContract } from './codex-skillopt-score-contract.ts';
 import { codexSkilloptReflectContract } from './codex-skillopt-reflect-contract.ts';
 import { codexSkilloptBootstrapContract } from './codex-skillopt-bootstrap-contract.ts';
+import { codexSubscriptionGroupContract } from './codex-subscription-group-contract.ts';
 import { codexBrainstormEvalContract } from './codex-brainstorm-eval-contract.ts';
 import { codexBrainstormRunContract } from './codex-brainstorm-run-contract.ts';
 import { codexBrainstormJudgeContract } from './codex-brainstorm-judge-contract.ts';
@@ -315,6 +316,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   codexSkilloptScoreContract({engine:()=>engine,run,reply,calls});
   codexSkilloptReflectContract({engine:()=>engine,run,reply,calls});
   codexSkilloptBootstrapContract({engine:()=>engine,run,reply,calls});
+  codexSubscriptionGroupContract({engine:()=>engine,run,reply,calls});
   codexBrainstormJudgeContract({engine:()=>engine,run,reply,calls});
   codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
   codexProposalCacheContract({engine:()=>engine,run,reply,calls});

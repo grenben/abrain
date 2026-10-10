@@ -7,6 +7,8 @@ import type { BrainEngine } from '../../src/core/engine.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
 import { MinionWorker } from '../../src/core/minions/worker.ts';
 import { runWithJobSpend } from '../../src/core/minions/spend-authorization.ts';
+import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
+import { CODEX_JOB_ACCOUNT_LANE } from '../../src/core/minions/subscription-jobs.ts';
 import { buildJobContext } from '../../src/core/minions/job-context.ts';
 import type { MinionJob } from '../../src/core/minions/types.ts';
 import { makeSubagentHandler } from '../../src/core/minions/handlers/subagent.ts';
@@ -73,6 +75,28 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     await engine?.disconnect(); await cleanup?.(); unregister?.(); resetGateway(); globalThis.fetch = fetch;
     for (const [k, v] of saved) if (v === undefined) delete process.env[k]; else process.env[k] = v;
     rmSync(root, { recursive: true, force: true });
+  });
+  test('trusted child jobs use distinct ledgers while consuming one parent allowance', async () => {
+    const parent = { ...grant(3), runId: 'aggregate-action-root', accountLane: CODEX_JOB_ACCOUNT_LANE };
+    await createSubscriptionRun(engine, parent);
+    const child = { maxAttempts: 2, maxTurns: 2, deadline: parent.deadline, parentRunId: parent.runId };
+    for (let i = 0; i < 2; i++) await queue.add('subagent', data({ prompt: `Read notes/one, task ${i}.` }), { max_attempts: 1 }, { allowProtectedSubmit: true, codexSubscription: child });
+    const one = (await queue.claim('group-worker-one', 60000, 'default', ['subagent']))!;
+    const two = (await queue.claim('group-worker-two', 60000, 'default', ['subagent']))!;
+    replies(get(), final, get(), final);
+    expect(await run(one)).toMatchObject({ stop_reason: 'end_turn', cost_usd: null });
+    await expect(run(two)).rejects.toMatchObject({ code: 'subscription_exhausted' });
+    expect(calls()).toHaveLength(3);
+    expect(await engine.executeRaw('SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [parent.runId])).toEqual([{ attempts: 3, accepted_turns: 3 }]);
+    const rows = await engine.executeRaw<{job_id:number|bigint;gbrain_tool_use_id:string;status:string}>('SELECT job_id,gbrain_tool_use_id::text,status FROM subagent_tool_executions ORDER BY job_id');
+    expect(rows.map(r => String(r.job_id))).toEqual([String(one.id), String(two.id)]);expect(rows.every(r => r.status === 'complete')).toBe(true);
+    expect(rows[0]!.gbrain_tool_use_id).not.toBe(rows[1]!.gbrain_tool_use_id);
+    await expect(run(two)).rejects.toMatchObject({ code: 'subscription_exhausted' });expect(calls()).toHaveLength(3);
+  });
+  test('job data cannot grant a parent allowance and invalid trusted parents roll back insertion', async () => {
+    await expect(submit({ parentRunId: 'model-authored-parent' })).rejects.toThrow('unsupported_job_field');
+    await expect(queue.add('subagent', data(), {}, { allowProtectedSubmit: true, codexSubscription: { ...grant(), parentRunId: 'missing-parent' } })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+    expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);expect(calls()).toHaveLength(0);
   });
   test('actual worker executes sequential schema reads with durable canonical history and null cost', async () => {
     const job = await submit(); const worker = new MinionWorker(engine, { concurrency: 1, pollInterval: 25, healthCheckInterval: 0, maxRssMb: 0 });

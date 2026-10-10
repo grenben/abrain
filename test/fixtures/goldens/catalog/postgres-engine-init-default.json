@@ -91,6 +91,7 @@
       "codex_subscription_runs.codex_subscription_runs_attempts_check": "c CHECK ((attempts >= 0))",
       "codex_subscription_runs.codex_subscription_runs_max_attempts_check": "c CHECK (((max_attempts >= 1) AND (max_attempts <= 1000)))",
       "codex_subscription_runs.codex_subscription_runs_max_turns_check": "c CHECK (((max_turns >= 1) AND (max_turns <= 1000)))",
+      "codex_subscription_runs.codex_subscription_runs_parent_run_id_fkey": "f FOREIGN KEY (parent_run_id) REFERENCES codex_subscription_runs(run_id)",
       "codex_subscription_runs.codex_subscription_runs_pkey": "p PRIMARY KEY (run_id)",
       "codex_subscription_runs.codex_subscription_runs_repairs_check": "c CHECK (((repairs >= 0) AND (repairs <= 1)))",
       "codex_think_ab_trials.codex_think_ab_trials_check": "c CHECK (((state = 'accepted'::text) OR ((baseline IS NOT NULL) AND (calibrated IS NOT NULL))))",
@@ -531,6 +532,7 @@
       "gbrain_advance_tag_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=7807b26b4933148aa63c67fca824a60d3492396728205d04e16c48c81174cbd5",
       "gbrain_bump_trust_generation()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=4708a89d166ac0999a8922ad8ee8f69fea3213c59e0782d96220f93b0c001a62",
       "gbrain_clear_atom_page_state()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=7db0ef05d1220a579e64428b2dd7cf5183191da186fbe64b6496433a7a713d11",
+      "gbrain_codex_subscription_group_guard()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=823faf08671178b9274ac68c98c8edefd49a6909d865387d99ce13882366cac8",
       "gbrain_fact_fingerprint(claim text)": "RETURNS text kind=f lang=sql volatility=i secdef=false config=[] body_sha256=ff99709590deb4c83f0e16d30b3988ca2598018f5fd6f30d132acf31b1010174",
       "gbrain_fact_fingerprint_v1(claim text)": "RETURNS text kind=f lang=sql volatility=i secdef=false config=[] body_sha256=aa955a02d3c695f237e1771f0ffded2fa8e5c7b795c42b87f7fd239ae35e213c",
       "gbrain_fact_normalize(claim text)": "RETURNS text kind=f lang=sql volatility=i secdef=false config=[] body_sha256=595b1e012edeb66edbec72a2a8b1d046a8360a386bfce2fd903e50e3f78af37b",
@@ -1037,6 +1039,7 @@
       "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
       "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
+      "codex_subscription_parent": "CREATE INDEX codex_subscription_parent ON public.codex_subscription_runs USING btree (parent_run_id)",
       "codex_subscription_runs_pkey": "CREATE UNIQUE INDEX codex_subscription_runs_pkey ON public.codex_subscription_runs USING btree (run_id)",
       "codex_think_ab_source": "CREATE INDEX codex_think_ab_source ON public.codex_think_ab_trials USING btree (source_id, created_at DESC)",
       "codex_think_ab_trials_pkey": "CREATE UNIQUE INDEX codex_think_ab_trials_pkey ON public.codex_think_ab_trials USING btree (trial_id)",
@@ -1796,7 +1799,8 @@
           "6 accepted_turns integer/int4 NOT NULL DEFAULT 0",
           "7 repairs integer/int4 NOT NULL DEFAULT 0",
           "8 deadline timestamp with time zone/timestamptz NOT NULL",
-          "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+          "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "10 parent_run_id text/text NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
@@ -3913,6 +3917,7 @@
     },
     "triggers": {
       "access_tokens.trust_generation_update": "CREATE CONSTRAINT TRIGGER trust_generation_update AFTER UPDATE ON public.access_tokens DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((old.min_trust IS DISTINCT FROM new.min_trust)) EXECUTE FUNCTION gbrain_bump_trust_generation()",
+      "codex_subscription_runs.codex_subscription_group_guard": "CREATE TRIGGER codex_subscription_group_guard BEFORE INSERT OR UPDATE ON public.codex_subscription_runs FOR EACH ROW EXECUTE FUNCTION gbrain_codex_subscription_group_guard()",
       "config.trust_generation_delete": "CREATE CONSTRAINT TRIGGER trust_generation_delete AFTER DELETE ON public.config DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((old.key ~~ 'trust.%'::text)) EXECUTE FUNCTION gbrain_bump_trust_generation()",
       "config.trust_generation_insert": "CREATE CONSTRAINT TRIGGER trust_generation_insert AFTER INSERT ON public.config DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((new.key ~~ 'trust.%'::text)) EXECUTE FUNCTION gbrain_bump_trust_generation()",
       "config.trust_generation_update": "CREATE CONSTRAINT TRIGGER trust_generation_update AFTER UPDATE ON public.config DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((((old.key ~~ 'trust.%'::text) OR (new.key ~~ 'trust.%'::text)) AND ((old.key IS DISTINCT FROM new.key) OR (old.value IS DISTINCT FROM new.value)))) EXECUTE FUNCTION gbrain_bump_trust_generation()",

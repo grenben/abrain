@@ -523,3 +523,12 @@ host subscription allowance and reports unknown monetary cost. Standalone CLI
 admission and whole-optimizer publication remain work;
 [scope and verification](private-codex-skillopt-bootstrap.md). No deployment or
 activation was performed.
+
+## Aggregate subscription admission checkpoint
+
+Migration v240 adds parent/child subscription envelopes with one aggregate
+attempt, turn and repair budget. The database enforces counter coupling and
+immutable parent identity; the existing shared account lane retains unresolved
+attempts. This is a dependency for durable optimizer rollout jobs, whose complete
+host bindings and recovery remain work. [Scope and verification](private-codex-subscription-groups.md).
+No installed database migration or activation was performed.

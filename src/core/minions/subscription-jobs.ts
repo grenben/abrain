@@ -10,7 +10,7 @@ import { validateCodexReadJob } from './codex-action-contract.ts';
 export { CODEX_GENERATIVE_JOBS, jobMayGenerate } from './subscription-job-kinds.ts';
 
 /** Only a trusted host argument can grant this allowance. No USD conversion or quota estimate. */
-export type JobSubscriptionAuthorization = Pick<SubscriptionEnvelope, 'maxAttempts' | 'maxTurns' | 'deadline'>;
+export type JobSubscriptionAuthorization = Pick<SubscriptionEnvelope, 'maxAttempts' | 'maxTurns' | 'deadline' | 'parentRunId'>;
 export const CODEX_JOB_ACCOUNT_LANE = 'codex-subscription';
 
 /** Refuse explicit job pins before insertion or handler construction. No discovery. */
@@ -71,7 +71,7 @@ export async function bindJobSubscription(engine: BrainEngine, job: MinionJob, g
   if (!readPrivateCodexConfig() || job.submission_authority?.kind !== 'application') {
     throw new SubscriptionAdmissionError('subscription_required');
   }
-  if (Object.keys(grant).some(k => !['maxAttempts', 'maxTurns', 'deadline'].includes(k))) {
+  if (Object.keys(grant).some(k => !['maxAttempts', 'maxTurns', 'deadline', 'parentRunId'].includes(k))) {
     throw new SubscriptionAdmissionError('subscription_invalid');
   }
   const runId = await runIdentity(engine, job);

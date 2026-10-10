@@ -96,6 +96,36 @@ describe.skipIf(!url)('native PostgreSQL subscription ownership', () => {
     await expect(reserve(first, 'identity', 'identity-1')).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
   });
 
+  test('separate workers cannot multiply a parent allowance through child identities', async () => {
+    const parent = envelope('group-root', 'group-lane', 2);
+    await createSubscriptionRun(first, parent);
+    await createSubscriptionRun(first, { ...parent, runId: 'group-one', parentRunId: parent.runId });
+    await createSubscriptionRun(second, { ...parent, runId: 'group-two', parentRunId: parent.runId });
+    const results = await Promise.allSettled([reserve(first, 'group-one', 'group-first'), reserve(second, 'group-two', 'group-second')]);
+    const attempt = winner(results);
+    await settleSubscriptionAttempt(second, attempt, { state: 'succeeded', usage: null });
+    await acceptSubscriptionTurn(first, attempt);
+    const next = await reserve(second, 'group-two', 'group-next');
+    await settleSubscriptionAttempt(first, next, { state: 'failed', failureCode: 'invalid_output' });
+    await expect(reserve(first, 'group-one', 'group-over')).rejects.toMatchObject({ code: 'subscription_exhausted' });
+    expect(await second.executeRaw('SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [parent.runId])).toEqual([{ attempts: 2, accepted_turns: 1 }]);
+  });
+
+  test('concurrent child acceptance rolls back the losing child and its attempt flag', async () => {
+    const parent = envelope('group-accept', 'group-accept', 3, 1);
+    await createSubscriptionRun(first, parent);
+    for (const runId of ['group-accept-one', 'group-accept-two']) await createSubscriptionRun(first, { ...parent, runId, parentRunId: parent.runId });
+    const a = await reserve(first, 'group-accept-one', 'group-accept-a');
+    await settleSubscriptionAttempt(first, a, { state: 'succeeded', usage: null });
+    const b = await reserve(second, 'group-accept-two', 'group-accept-b');
+    await settleSubscriptionAttempt(second, b, { state: 'succeeded', usage: null });
+    const results = await Promise.allSettled([acceptSubscriptionTurn(first, a), acceptSubscriptionTurn(second, b)]);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'subscription_exhausted' } });
+    expect(await first.executeRaw('SELECT sum(accepted_turns)::int AS turns FROM codex_subscription_runs WHERE parent_run_id=$1', [parent.runId])).toEqual([{ turns: 1 }]);
+    expect(await second.executeRaw('SELECT count(*)::int AS accepted FROM codex_subscription_attempts WHERE account_lane=$1 AND accepted', [parent.accountLane])).toEqual([{ accepted: 1 }]);
+  });
+
   test('concurrent acceptance obeys turn cap and rolls back the losing acceptance', async () => {
     await createSubscriptionRun(first, envelope('acceptance', 'acceptance', 3, 1));
     const a = await reserve(first, 'acceptance', 'accept-a');
