@@ -1,15 +1,10 @@
 /**
  * v0.41.16.0 — Shared LLM base for conversation-parser polish + fallback.
  *
- * Per D6: polish and fallback share ~80% of code (provider probe,
- * content-hash cache, fail-open semantics, audit). Extract once;
- * both wrappers are thin (~30 LOC each).
- *
- * Per D15: BOTH polish AND fallback are opt-IN by default (privacy
- * posture for private chat logs). The wrappers check the relevant
- * config flag (`conversation_parser.llm_polish_enabled` /
- * `conversation_parser.llm_fallback_enabled`) before calling here.
- * This base does NOT check enabled flags; the wrappers do.
+ * The extraction orchestrator explicitly opts in to fallback after a built-in
+ * miss. No polish wrapper currently calls this module. Strict private calls
+ * use llm-codex.ts: native schemas, revalidated versioned cache, explicit errors.
+ * The compatibility transport/cache below serves non-private callers.
  *
  * Provider/key probing follows `makeJudgeClient` from
  * `src/core/cycle/synthesize.ts:734` — construction-time
@@ -23,7 +18,7 @@
  * Cache: in-process Map keyed on
  *   `${call_shape}:${model_id}:${content_sha256}`
  * with DB-persistent fallback via the `conversation_parser_llm_cache`
- * table (migration v97). DB cache is best-effort; in-process hits
+ * table (migration v099). DB cache is best-effort; in-process hits
  * dominate during a single dream cycle.
  *
  * Test seam: callers pass `opts.chatTransport` to bypass the gateway
@@ -31,6 +26,8 @@
  * `LLMClient` interface).
  */
 
+import { runPrivateParserCall } from './llm-codex.ts';
+import { assertPrivateRoute, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { createHash } from 'node:crypto';
 import { chat as gatewayChat, type ChatOpts, type ChatResult } from '../ai/gateway.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
@@ -97,6 +94,7 @@ function cacheKey(shape: CallShape, modelId: string, content: string): string {
  *   - Anthropic provider with no key (env or config).
  */
 export function probeLlmAvailability(modelStr: string): string | null {
+  assertPrivateRoute(modelStr, 'conversation-parser:model');
   const normalized = normalizeModelId(modelStr);
   let providerId: string;
   try {
@@ -134,6 +132,9 @@ export function probeLlmAvailability(modelStr: string): string | null {
  */
 export interface RunLlmCallOpts<TOutput> {
   shape: CallShape;
+  /** Native private proposal contract; never substituted with a prompt. */
+  responseSchema?: Record<string, unknown>;
+  cacheVersion?: string;
   modelStr: string;
   /**
    * The content the LLM will see. Used for cache key AND for the
@@ -163,6 +164,7 @@ export interface RunLlmCallOpts<TOutput> {
 export async function runLlmCall<TOutput>(
   opts: RunLlmCallOpts<TOutput>,
 ): Promise<TOutput | null> {
+  if (readPrivateCodexConfig()) return runPrivateParserCall(opts);
   const modelStr = probeLlmAvailability(opts.modelStr);
   if (modelStr === null) {
     // Once-per-process warn: future calls in this process won't pay
@@ -244,7 +246,7 @@ export async function runLlmCall<TOutput>(
 }
 
 // ----------------------------------------------------------------
-// DB cache (best-effort, table created in migration v97).
+// DB cache (best-effort, table created in migration v099).
 // ----------------------------------------------------------------
 
 async function readDbCache<T>(engine: BrainEngine, key: string): Promise<T | null> {

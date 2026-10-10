@@ -104,7 +104,40 @@ unrecognized provider stop, is rejected before parsing and caching. A
 syntactically valid partial JSON array therefore cannot advance a checkpoint.
 
 The utility model is resolved once per source run through the normal model
-configuration chain. The default fallback is the utility-tier Anthropic model.
+configuration chain. In strict private mode it must resolve to the configured Codex CLI model. Non-private defaults retain their existing key-aware provider selection.
+
+## Strict private Codex mode
+
+Explicit private configuration and the parser's separate opt-in are both required.
+Calls use native `--output-schema` with a host-bound evidence hash and a bounded
+`messages` array. Every row must pass schema, calendar, source-text, speaker,
+and clock/date checks before the subscription turn is accepted. Invalid rows
+fail the whole chunk. Refusal, malformed output, timeout, cancellation and
+admission exhaustion remain errors; they never become an empty parse.
+
+Private requests allow at most 256 KiB of input, 16 chunks, 64 KiB per chunk,
+200 messages per response and 512 KiB of application JSON. The optional line
+count is an integer from 1 through 1,000 (default 100). The whole request is
+checked before any call. Existing subscription attempt/turn/deadline/account
+limits also apply; a USD-only cap does not authorize inference.
+
+Private cache identity includes the protocol version, model, full prompt,
+date-bearing content, output schema and token bound. The brain's existing cache
+table stores raw responses, which are schema- and semantically revalidated on
+read. Legacy parsed-value caches and the global in-process cache are not used.
+A cache failure propagates without an automatic provider retry. Successful
+chunks survive a later failure, so a retry can reuse them. No new migration is
+needed for this cache format.
+
+Private text must be a verbatim contiguous excerpt of the chunk. Timestamp
+validation supports visible numeric clock times (including AM/PM), ISO dates,
+and the host's fallback date. Other date spellings are not independently
+interpreted by this validation; an unsupported generated date fails explicitly.
+These checks constrain proposals but do not prove perfect speaker attribution.
+No separate polish caller exists; deterministic parses remain model-free.
+
+See [private parser verification](../development/private-codex-parser.md) for
+source checks and the runtime qualification/deployment limitations.
 
 ## Date and timestamp behavior
 
@@ -203,9 +236,9 @@ Keep these boundaries intact when changing the fallback:
 - Stable-sort accepted messages before segmenting or checkpointing them.
 - Keep the exact config key in `KNOWN_CONFIG_KEYS`. Do not register the whole
   `conversation_parser.*` namespace while other scaffolded keys remain unwired.
-- Preserve `[]` and `null` as skip-page outcomes.
+- Preserve a valid empty parse separately from failure. Non-private compatibility may return `null`; strict private failures throw.
 - Propagate cancellation and budget-stop errors selected by the extraction
-  caller; fail open only for ordinary provider and parse failures.
+  caller; strict private errors always propagate. Non-private compatibility retains its ordinary provider/parse failure behavior.
 - Never persist inferred regexes or promote model guesses into the built-in
   registry.
 

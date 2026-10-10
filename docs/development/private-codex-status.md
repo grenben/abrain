@@ -384,3 +384,11 @@ Profile/evidence drift, failures and partial trials do not become votes. Local
 CLI generation uses explicit subscription allowances; inspection and rating are
 model-free. Runtime isolation, full crash acceptance, operator recovery and the
 remaining generation inventory remain incomplete; nothing is installed or activated.
+
+## Conversation-parser follow-up
+
+[Private parser fallback](private-codex-parser.md) uses native bounded schemas,
+whole-response source validation and versioned raw cache revalidation. Failed
+parses stay failures in the real extraction dispatcher. Optional fallback still
+requires its explicit opt-in; no separate polish caller exists. Source work does
+not qualify a production Codex executable or activate the installed brain.

@@ -1,3 +1,4 @@
+import { codexParserContract } from './codex-parser-contract.ts';
 import { codexThinkAbContract } from './codex-think-ab-contract.ts';
 import { codexThinkAutomationContract } from './codex-think-automation-contract.ts';
 import { beforeAll, beforeEach, afterAll, test, expect } from 'bun:test';
@@ -35,7 +36,7 @@ export function codexThinkContract(createEngine: () => Promise<{ engine: BrainEn
   beforeAll(async()=>{
     for(const key of keys)process.env[key]=root;
     globalThis.fetch=(()=>{throw new Error('forbidden network');}) as unknown as typeof fetch;
-    mkdirSync(join(root,'.gbrain'));writeFileSync(join(root,'.gbrain','config.json'),JSON.stringify({embedding_disabled:true,private_codex:{mode:'strict',model:'codex-cli:gpt-test',bin}}));
+    mkdirSync(join(root,'.gbrain'));writeFileSync(join(root,'.gbrain','config.json'),JSON.stringify({embedding_disabled:true,embedding_dimensions:1536,private_codex:{mode:'strict',model:'codex-cli:gpt-test',bin}}));
     writeFileSync(capture,'');
     const script=`#!${Bun.which('node')}
 import {readFileSync,writeFileSync,appendFileSync,statSync} from 'node:fs';
@@ -43,14 +44,14 @@ const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1],schema=JSON.pars
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt:readFileSync(0,'utf8'),mode:statSync(arg('--output-schema')).mode&511,envKeys:Object.keys(process.env)})+'\\n');
 const value=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
 if(value.wait) await new Promise(()=>setInterval(()=>{},1000));
-const text=value.raw??JSON.stringify({evidence_hash:schema.properties.evidence_hash.enum[0],...value});
+const text=value.raw??JSON.stringify({...(schema.properties.evidence_hash?{evidence_hash:schema.properties.evidence_hash.enum[0]}:{}),...value});
 writeFileSync(arg('--output-last-message'),text);
 for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},
 {type:'item.completed',item:{type:value.refusal?'refusal':'agent_message',text}},
 ...(value.missingCompletion?[]:[{type:'turn.completed',usage:{input_tokens:21,cached_input_tokens:0,output_tokens:9}}])]) console.log(JSON.stringify(event));
 `;
     writeFileSync(bin,script,{mode:0o700});unregister=__registerCodexFixtureForTests(bin,createHash('sha256').update(script).digest('hex'));
-    ({engine,cleanup}=await createEngine());await engine.initSchema();configureGateway({env:{}});
+    ({engine,cleanup}=await createEngine());await engine.initSchema();configureGateway({env:{},embedding_dimensions:1536});
     await engine.executeRaw('INSERT INTO sources(id,name) VALUES($1,$2)',[sourceId,'Synthetic think source']);
     const page=await engine.putPage(slug,{type:'note',title:'Orbit',compiled_truth:'Orbit launched in March. The launch was successful.'},{sourceId});
     await engine.addTakesBatch([{page_id:page.id,row_num:1,claim:'Orbit launched in March',kind:'fact',holder:'world',weight:1}]);
@@ -288,6 +289,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     reply({...valid,answer:'"Fictional orbital certainty" [notes/orbit]',citations:[{page_slug:slug,row_num:null,citation_index:1}]});
     await run(async()=>{const result=await think({question:'Orbit: "Fictional orbital certainty"'});expect(result.quote_check?.unverified).toBe(1);expect(result.answer).toContain('[unverified]');});
   });
+  codexParserContract({engine:()=>engine,sourceId,run,reply,calls});
   codexThinkAbContract({engine:()=>engine,sourceId,run,reply,valid,calls});
   codexThinkAutomationContract({engine:()=>engine,sourceId,root,run,reply,valid,calls});
 

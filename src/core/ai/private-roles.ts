@@ -23,6 +23,7 @@ export const PRIVATE_GENERATION_ROLES = [
   ['brainstorm',undefined,'deep','brainstorm/'],
   ['judges',undefined,'utility','skillopt/'],
   ['generated-reports',undefined,'reasoning',undefined],
+  ['parser-fallback',undefined,'utility','conversation-parser/llm-codex-fallback.ts'],
   ['parser-polish',undefined,'utility','conversation-parser/llm-base.ts'],
   ['ocr',undefined,'utility','ai/gateway.ts'],
   ['nightly-probes','models.eval.longmemeval','reasoning','cycle/nightly-probe-routes.ts'],

@@ -20,6 +20,9 @@
  * probe.
  */
 
+import { canonicalTimestamp } from './llm-timestamp.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privateFallbackContract, validatePrivateParserBounds } from './llm-codex-fallback.ts';
 import { runLlmCall, parseLlmJson, type ChatTransport } from './llm-base.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { MatchedMessage } from './types.ts';
@@ -77,56 +80,20 @@ export interface RunLlmFallbackOpts {
   fallbackDate?: string;
 }
 
-const MAX_FUTURE_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CHUNK_LINES = 100;
 const MAX_CHUNK_OVERLAP_LINES = 20;
 const FALLBACK_PROTOCOL = 'fallback-v2-overlap';
-const STRICT_RFC3339 =
-  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d{1,3})?(Z|[+-](?:0\d|1[0-3]):[0-5]\d|[+-]14:00)$/;
-
-function canonicalTimestamp(value: string): { iso: string; epochMs: number } | null {
-  const match = value.match(STRICT_RFC3339);
-  if (!match) return null;
-  const [, y, mo, d, h, mi, s] = match;
-  const year = Number(y);
-  const month = Number(mo);
-  const day = Number(d);
-  const hour = Number(h);
-  const minute = Number(mi);
-  const second = Number(s);
-
-  // Validate the source calendar fields independently of its timezone offset.
-  // Date.parse otherwise rolls impossible values such as February 30 forward.
-  const calendar = new Date(0);
-  calendar.setUTCFullYear(year, month - 1, day);
-  calendar.setUTCHours(hour, minute, second, 0);
-  if (
-    calendar.getUTCFullYear() !== year ||
-    calendar.getUTCMonth() !== month - 1 ||
-    calendar.getUTCDate() !== day ||
-    calendar.getUTCHours() !== hour ||
-    calendar.getUTCMinutes() !== minute ||
-    calendar.getUTCSeconds() !== second
-  ) {
-    return null;
-  }
-
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) return null;
-  if (ms > Date.now() + MAX_FUTURE_TIMESTAMP_SKEW_MS) return null;
-  // Conversation segmentation and checkpoint comparisons expect one stable
-  // UTC representation. Millisecond precision is not meaningful here.
-  return { iso: new Date(ms).toISOString().slice(0, 19) + 'Z', epochMs: ms };
-}
 
 /**
- * Returns parsed messages or null on an ordinary provider/parse failure.
+ * Strict private failures throw; non-private compatibility returns null on ordinary failures.
  * Returns `[]` when LLM explicitly signals "this isn't a chat log."
  * A caller-selected control-flow error may propagate.
  */
 export async function runLlmFallback(
   opts: RunLlmFallbackOpts,
 ): Promise<MatchedMessage[] | null> {
+  const privateMode = Boolean(readPrivateCodexConfig());
+  if (privateMode) validatePrivateParserBounds(opts.body, opts.sampleLines, opts.fallbackDate);
   const lines = opts.body.split(/\r?\n/).filter((line) => line.trim().length > 0);
   if (lines.length === 0) return [];
   const configuredChunkSize = opts.sampleLines ?? DEFAULT_CHUNK_LINES;
@@ -161,20 +128,24 @@ export async function runLlmFallback(
   let order = 0;
   let window = 0;
   for (let start = 0; start < lines.length; start += stride, window++) {
+    const chunkBody = lines.slice(start, start + chunkSize).join('\n');
     const content = [
       `<parser-protocol>${FALLBACK_PROTOCOL}</parser-protocol>`,
       `<conversation-date>${date ?? 'unknown'}</conversation-date>`,
       '<chat-log>',
-      lines.slice(start, start + chunkSize).join('\n'),
+      chunkBody,
       '</chat-log>',
     ].join('\n');
+    const contract = privateMode ? privateFallbackContract(chunkBody, content, system, date ?? undefined) : undefined;
     const chunk = await runLlmCall<
       Array<{ message: MatchedMessage; epochMs: number }>
     >({
       shape: 'fallback',
       modelStr: opts.modelStr,
       content,
-      system,
+      system: contract?.system ?? system,
+      responseSchema: contract?.schema,
+      cacheVersion: contract?.version,
       signal: opts.signal,
       engine: opts.engine,
       chatTransport: opts.chatTransport,
@@ -182,7 +153,7 @@ export async function runLlmFallback(
       // One hundred dense message objects can exceed the generic 4K default.
       // A non-terminal `length` stop is rejected by runLlmCall, never cached.
       maxTokens: 8000,
-      parse: (text) => {
+      parse: contract?.parse ?? ((text) => {
         const parsed = parseLlmJson<unknown[]>(text, { array: true });
         if (parsed === null) return null;
         const out: Array<{ message: MatchedMessage; epochMs: number }> = [];
@@ -206,7 +177,7 @@ export async function runLlmFallback(
           }
         }
         return out;
-      },
+      }),
     });
     // Never checkpoint a partial page after an ordinary provider or parse
     // failure. Successful earlier chunks remain cached for the retry.
