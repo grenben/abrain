@@ -142,7 +142,7 @@ export interface GeneratePerChunkSynopsisArgs {
  *   - failure variants → see D27 P1-2 dispatch in the service layer
  */
 export type GeneratePerChunkSynopsisResult =
-  | { kind: 'success'; synopsis: string; usage?: ChatResult['usage'] }
+  | { kind: 'success'; synopsis: string; usage?: ChatResult['usage']; cacheHit?: boolean }
   | { kind: SynopsisFailureKind; detail?: string; usage?: ChatResult['usage'] };
 
 /**

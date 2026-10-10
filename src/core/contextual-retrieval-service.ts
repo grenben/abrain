@@ -35,7 +35,7 @@ import { CODEX_SYNOPSIS_VERSION } from './ai/codex-versions.ts';
  * independently durable even if a rate lease expires.
  */
 
-import { privateContextualModel, withPrivateContextualPreparation, fencePrivateContextualPublication, contextualSignal } from './contextual-retrieval-private.ts';
+import { privateContextualModel, withPrivateContextualPreparation, fencePrivateContextualPublication, contextualSignal, contextualPublicationTransaction, assertPrivateEmptyProjection } from './contextual-retrieval-private.ts';
 import { createHash } from 'crypto';
 import * as fs from 'node:fs';
 import { embedBatch } from './embedding.ts';
@@ -288,6 +288,8 @@ export interface ReembedPageArgs {
   chunkConcurrency?: number;
   /** @internal Synopsis generator seam (benchmark caching/metering); production callers omit this. */
   generateSynopsis?: typeof generatePerChunkSynopsis;
+  /** Host telemetry receives only immutable accounting metadata, never writable content. */
+  onSynopsisResult?: (event: Readonly<{ cacheHit: boolean; usage?: Readonly<NonNullable<GeneratePerChunkSynopsisResult['usage']>> }>) => void;
 }
 
 /**
@@ -317,7 +319,7 @@ export async function reembedPageWithContextualRetrieval(
   // intentionally unsealed pages; those chunks never reach a provider.
   const publish = async (mode: CRMode, generation: string | null, embedded?: ChunkInput[]): Promise<ReembedPageResult | null> => {
     try {
-      const installed = await args.engine.transaction(async tx => {
+      const installed = await contextualPublicationTransaction(args.engine, async tx => {
         await fencePrivateContextualPublication(tx, page.source_id, prepared.snapshot.sourceIncarnation, args.abortSignal);
         await tx.lockPageKeys([{ sourceId: page.source_id, slug: page.slug }]);
         if (digest(sourcePolicy(await loadSourceRow(tx, page.source_id))) !== digest(sourcePolicy(source))) return false;
@@ -364,6 +366,7 @@ export async function reembedPageWithContextualRetrieval(
 
   const chunks = prepared.chunks;
   if (chunks.length === 0) {
+    assertPrivateEmptyProjection(page);
     // No chunks but page exists (frontmatter-only or empty). Stamp the
     // column anyway so subsequent reindex sweeps don't keep visiting.
     const failure = await publish(resolution.mode,
@@ -656,6 +659,8 @@ async function buildWrappedChunkText(opts: {
   }
 
   if (synopsisResult.kind === 'success') {
+    args.onSynopsisResult?.(Object.freeze({ cacheHit: synopsisResult.cacheHit === true,
+      usage: synopsisResult.usage ? Object.freeze({ ...synopsisResult.usage }) : undefined }));
     const prefix = buildContextualPrefix(title, synopsisResult.synopsis);
     return wrapChunkForEmbedding(c.chunk_text, prefix, c.chunk_source);
   }

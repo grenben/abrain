@@ -109,8 +109,7 @@ Both disposable PostgreSQL lifecycle and provider tripwire checks completed;
 the test cluster was stopped.
 
 The full benchmark still needs explicit CLI grant creation in its durable host
-database, safe registration of reset/recycled temporary brains, contextual
-synopsis and fact-key integration, independent paid retrieval admission, and
+database, fact-key integration, complete paid retrieval admission, and
 retained run/result recovery. Existing admission/foreign-brain safeguards stay
 enforced while that work proceeds. Full A–G acceptance remains incomplete.
 
@@ -143,5 +142,45 @@ A native proposal retained in the host v256 cache can be revalidated and inserte
 into a rebuilt corpus without a second inference charge. The real keyword CLI
 fixture now runs extraction, reader and judge for two questions, preserving six
 attempts/accepted turns in the external host database. Injected expansion,
-embedding and readiness transports are refused under private mode. The optional
-synopsis/fact-key arms and paid hybrid retrieval still need their own integration.
+embedding and readiness transports are refused under private mode. The native synopsis follow-up below adds its arm and tests independently paid hybrid retrieval. Fact keys and the complete CLI allowance lifecycle still need integration.
+
+## Native synopsis and mixed retrieval follow-up
+
+The private `--mode tokenmax` path now invokes the real contextual-retrieval
+service with native Codex synopses and a distinct paid embedding allowance.
+Pages and chunks run sequentially. An explicit concurrency above one, legacy
+`--synopsis-cache`, `--synopsis-max-usd` or injected generator is refused. The
+unset legacy dollar default cannot authorize subscription inference. Non-private
+runs retain their prior cache, concurrency and dollar cap behavior.
+
+Raw proposals live in the host's v256 cache. The host request ID and native
+synopsis protocol bind the namespace; each request also binds its full prompt,
+source evidence, schema and model. Rebuilding a temporary corpus can reuse a
+validated proposal without repeating its inference charge or copying its tokens
+into current usage. Paid embeddings are still admitted and charged independently
+on every rebuild. Unknown embedding usage retains its durable reservation.
+
+The owner and target database model pins are both checked. Publication holds the
+owner fence while validating and installing the temporary page projection. A
+lost owner, changed source, superseded page or cancellation fails the question.
+No title fallback or automatic transient retry occurs in the private benchmark.
+A fenced empty page is reported as `pages_empty`; a missing page is a failure.
+A nonempty page whose chunk projection is missing fails before a completion
+stamp or model call, so indexing debt cannot masquerade as clean zero.
+The service exposes immutable accounting metadata to the host meter, never
+mutable proposal content.
+
+Synopsis results have `billing: subscription`, `usd: null`, measured token
+subtotals and a usage-completeness marker. Run-end diagnostics explicitly count
+accepted responses and cache hits; the durable attempt ledger remains the
+source for failed/ambiguous attempts. Neither remaining subscription quota nor
+a dollar price is fabricated. Native synopsis protocol identity enters retrieval
+hashes and the no-call route inventory.
+
+The real tokenmax CLI fixture runs import, native summary generation, paid
+re-embedding and hybrid vector search. It uses fake Codex and synthetic embedding
+transport, with a network tripwire; embedding opt-in changes only the disposable
+fixture configuration and is restored afterward. This does not qualify real
+Codex isolation or activate the installed brain.
+
+Full benchmark CLI grant creation, dataset/request binding, fact-key publication and durable result recovery remain incomplete. An authorized future installation still needs migrations through v256 and runtime qualification.

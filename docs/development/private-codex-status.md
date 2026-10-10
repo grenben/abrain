@@ -418,7 +418,7 @@ extractor and judge dispatch, validated source evidence, explicit abstention and
 failure, atomic fenced fact batches, versioned receipts and honest aggregate
 costs. The real keyword reader/judge benchmark retains externally supplied
 admission across temporary-brain resets and fails on partial exhaustion. Full
-CLI grants, synopsis/fact-key preprocessing, mixed retrieval and run recovery remain
+CLI grants, fact-key preprocessing, full mixed-retrieval lifecycle and run recovery remain
 incomplete; this does not change the installed artifact or activate private mode.
 
 ## Disposable benchmark target follow-up
@@ -430,3 +430,14 @@ native proposals surviving corpus replacement. Cancellation and uncertain owner
 commits fail the question; this is not cross-database atomic publication or full
 run/result recovery. The real keyword extraction/reader/judge path is covered by
 synthetic fake-Codex fixtures. Installed GBrain remains unchanged.
+
+## Native benchmark synopsis follow-up
+
+Private tokenmax benchmarks now use sequential native synopses, host-retained
+validated proposals, null monetary cost and independent paid embedding
+admission. The real synthetic CLI fixture exercises import, synopsis publication
+and hybrid vector search. Empty pages differ from missing/stale pages and
+provider failures; cancellation and source/owner drift cannot complete a page.
+The legacy JSONL cache and USD-only cap do not authorize native calls. Full CLI
+grants, fact keys and durable run recovery remain open; installation and live
+runtime qualification are unchanged.

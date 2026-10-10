@@ -1,3 +1,4 @@
+import { assertSubscriptionTarget, subscriptionTargetTransaction } from './ai/subscription-target.ts';
 import type { BrainEngine } from './engine.ts';
 import type { ReembedPageArgs } from './contextual-retrieval-service.ts';
 import { readPrivateCodexConfig, assertPrivateRoute } from './ai/private-policy.ts';
@@ -13,9 +14,12 @@ export async function privateContextualModel(args: ReembedPageArgs, fallback: st
   for (const [key, value] of [['synopsisModel', args.synopsisModel], ['haikuModel', args.haikuModel]] as const)
     if (value !== undefined) assertPrivateRoute(value, `contextual:${key}`);
   if (args.generateSynopsis) throw new CodexProposalError('invalid_input');
-  return resolveModel(args.engine, { cliFlag: args.synopsisModel ?? args.haikuModel,
+  const selection = { cliFlag: args.synopsisModel ?? args.haikuModel,
     configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model',
-    envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility', fallback });
+    envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility' as const, fallback };
+  const owner = codexSubscriptionContext()?.engine;
+  if (owner && owner !== args.engine) await resolveModel(owner, selection);
+  return resolveModel(args.engine, selection);
 }
 
 /** A subscription grant authorizes summaries, never unpriced/unbounded paid embeddings. */
@@ -25,9 +29,7 @@ export async function withPrivateContextualPreparation<T>(args: ReembedPageArgs,
   if (synopsis && !context) throw new SubscriptionAdmissionError('subscription_required');
   if (!context) return run(); // Standalone embedding-only workflows retain their own admission.
   if (chunks > 256 || args.synopsisMaxTokens !== undefined && (!Number.isSafeInteger(args.synopsisMaxTokens) || args.synopsisMaxTokens < 16 || args.synopsisMaxTokens > 8192)) throw new CodexProposalError('invalid_input');
-  const [target] = await args.engine.executeRaw<{brain_id:string}>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
-  const [owner] = await context.engine.executeRaw<{brain_id:string}>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
-  if (!target || target.brain_id !== owner?.brain_id) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  await assertSubscriptionTarget(args.engine);
   if (!hasAIInvocationGuard()) throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
   if (context.signal?.aborted || args.abortSignal?.aborted) throw new CodexProposalError('aborted');
   await context.checkAuthority?.();
@@ -42,7 +44,6 @@ export async function fencePrivateContextualPublication(tx: BrainEngine, sourceI
   if (!readPrivateCodexConfig()) return;
   const context = codexSubscriptionContext();
   if (context?.signal?.aborted || signal?.aborted) throw new CodexProposalError('aborted');
-  await context?.checkAuthorityInTransaction?.(tx);
   const [source] = await tx.executeRaw<{incarnation:string;archived:boolean}>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [sourceId]);
   if (!source || source.archived || source.incarnation !== incarnation) throw new SubscriptionAdmissionError('subscription_identity_conflict');
 }
@@ -50,4 +51,16 @@ export async function fencePrivateContextualPublication(tx: BrainEngine, sourceI
 export function contextualSignal(signal?: AbortSignal): AbortSignal | undefined {
   const inherited = readPrivateCodexConfig() ? codexSubscriptionContext()?.signal : undefined;
   return inherited && signal ? AbortSignal.any([inherited, signal]) : inherited ?? signal;
+}
+
+/** The host fence stays in its own database, including for disposable benchmark targets. */
+export function contextualPublicationTransaction<T>(engine: BrainEngine, run: (tx: BrainEngine) => Promise<T>): Promise<T> {
+  return readPrivateCodexConfig() && codexSubscriptionContext()
+    ? subscriptionTargetTransaction(engine, run) : engine.transaction(run);
+}
+
+/** Empty inventory is not proof that a nonempty page was successfully indexed. */
+export function assertPrivateEmptyProjection(page: { compiled_truth: string; timeline: string }): void {
+  if (readPrivateCodexConfig() && (page.compiled_truth.trim() || page.timeline.trim()))
+    throw new Error('private_contextual_projection_incomplete');
 }
