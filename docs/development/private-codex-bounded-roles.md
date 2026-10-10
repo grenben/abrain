@@ -6,6 +6,11 @@ qualification registry. Tests register only synthetic executable hashes.
 
 ## Implemented paths
 
+- **Take proposals:** bounded native schemas and whole-batch quote validation,
+  a distinct cache identity, source/revision/permission checks and atomic private
+  proposal insertion. Valid empty output remains distinct from failure. See the
+  [take-proposal checkpoint](private-codex-take-proposals.md).
+
 - **Drift:** native, source-scoped advisory judgments require host take identity
   and exact evidence quotations. Invalid output cannot become a stable finding;
   private reports preserve source identity and failed-judgment counts. See the

@@ -207,13 +207,16 @@ function buildReceiptFrontmatter(input: ExtractReceiptInput): Record<string, unk
 export async function writeReceipt(
   engine: BrainEngine,
   input: ExtractReceiptInput,
+  beforeWrite?: (tx: BrainEngine, slug: string) => Promise<void>,
 ): Promise<{ slug: string; page: Page }> {
   const slug = receiptSlug(input);
   const title = `${input.kind} — ${input.round} — ${input.source_id}`;
   const frontmatter = buildReceiptFrontmatter(input);
   const compiled_truth = buildReceiptBody(input);
 
-  const page = await maintenanceTransaction(engine, tx => tx.putPage(
+  const page = await maintenanceTransaction(engine, async tx => {
+    await beforeWrite?.(tx, slug);
+    return tx.putPage(
     slug,
     {
       type: 'extract_receipt',
@@ -222,7 +225,8 @@ export async function writeReceipt(
       frontmatter,
     },
     { sourceId: input.source_id },
-  ));
+    );
+  });
 
   // #4009: receipts are audit artifacts — deliberately never run through
   // the contextual-retrieval ladder. Born with a NULL

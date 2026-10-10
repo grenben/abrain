@@ -1,4 +1,12 @@
 import { formatCycleCost } from './budget-meter.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { resolveModel } from '../model-config.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { OperationError } from '../ops/contract.ts';
+import { codexTakeExtractor, codexTakeCacheVersion } from './propose-takes-codex.ts';
+import { bindTakeProposalPage, persistTakeProposalBatch } from './propose-takes-persistence.ts';
+import { PrivateTakeReporting } from './propose-takes-report.ts';
 /**
  * v0.36.1.0 (T3) — propose_takes cycle phase.
  *
@@ -150,6 +158,8 @@ PAGE PROSE:
 
 /** One proposed take, as the extractor produces it. */
 export interface ProposedTake {
+  /** Exact quotation validated against the private proposal input. */
+  source_quote?: string;
   claim_text: string;
   kind: 'fact' | 'take' | 'bet' | 'hunch';
   holder: string;
@@ -242,6 +252,7 @@ export interface ProposeTakesOpts extends BasePhaseOpts {
 }
 
 export interface ProposeTakesResult {
+  publication_failures?: number;
   pages_scanned: number;
   cache_hits: number;
   cache_misses: number;
@@ -488,6 +499,7 @@ async function takesPromptFlags(engine: BrainEngine): Promise<{ attributionRules
 export async function defaultExtractor(
   input: Parameters<ProposeTakesExtractor>[0],
 ): Promise<ProposedTake[]> {
+  if (readPrivateCodexConfig()) return codexTakeExtractor(input);
   const prompt = (input.attributionRules
     ? EXTRACT_TAKES_PROMPT.replace('For each gradeable claim,', `${EXTRACT_TAKES_ATTRIBUTION_RULES}For each gradeable claim,`)
     : EXTRACT_TAKES_PROMPT)
@@ -790,10 +802,13 @@ class ProposeTakesPhase extends BaseCyclePhase {
       }
     }
 
-    const extractor = opts.extractor ?? defaultExtractor;
+    const privateMode = !!readPrivateCodexConfig();
+    const privateReporting = new PrivateTakeReporting();
+    if (privateMode && _ctx.remote !== false) throw new OperationError('permission_denied', 'Private take proposals require local authority.', 'Use a trusted local cycle.');
+    const extractor = privateMode ? defaultExtractor : opts.extractor ?? defaultExtractor;
     const [{ attributionRules, dateGrounding }, attributionChecks] = await Promise.all([takesPromptFlags(engine), attributionChecksEnabled(engine)]);
-    const promptVersion = opts.promptVersion ?? `${PROPOSE_TAKES_PROMPT_VERSION}${attributionRules ? PROPOSE_TAKES_ATTRIBUTION_PROMPT_SUFFIX : ''}`;
-    const pageLimit = opts.pageLimit ?? 100;
+    let promptVersion = opts.promptVersion ?? `${PROPOSE_TAKES_PROMPT_VERSION}${attributionRules ? PROPOSE_TAKES_ATTRIBUTION_PROMPT_SUFFIX : ''}`;
+    const pageLimit = privateMode ? Math.max(1, Math.min(100, Math.floor(opts.pageLimit ?? 100))) : opts.pageLimit ?? 100;
     const skipPagesWithFence = opts.skipPagesWithFence ?? false;
     // gbrain#4168: explicit test override wins; otherwise the REAL remaining
     // job budget (when the cycle threads deadlineAtMs) clamped to the derived
@@ -806,9 +821,10 @@ class ProposeTakesPhase extends BaseCyclePhase {
     const resolvedDeadlineMs =
       opts.deadlineMs ?? resolveProposeTakesDeadlineMs(opts.deadlineAtMs, Date.now());
     const phaseStartMs = Date.now();
-    const proposalRunId = `propose-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}-${randomUUID().slice(0, 8)}`;
+    const proposalRunId = privateMode ? randomUUID() : `propose-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}-${randomUUID().slice(0, 8)}`;
 
-    const modelId = opts.model ?? getChatModel();
+    const modelId = privateMode ? await resolveModel(engine, { cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'sonnet' }) : opts.model ?? getChatModel();
+    if (privateMode) promptVersion = codexTakeCacheVersion(modelId, attributionRules, dateGrounding, promptVersion);
 
     // #4494: configurable extractor output caps (dream.triage.max_tokens
     // precedent — floor 256, retry clamped >= base, fail-open to the #3763
@@ -838,7 +854,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
     // other providers' auth surfaces lazily at chat() time. An injected
     // extractor bypasses the gateway, so it is never gated. (Takeover of
     // PR #1979's intent by @shawnduggan.)
-    if (!opts.extractor) {
+    if (!privateMode && !opts.extractor) {
       const probe = probeChatModel(normalizeModelId(modelId));
       if (!probe.ok) {
         return {
@@ -956,11 +972,14 @@ class ProposeTakesPhase extends BaseCyclePhase {
       // Idempotency check. If a row exists for (source_id, page_slug, content_hash,
       // prompt_version), this page was already processed — skip and count as cache hit.
       const sourceId = page.source_id ?? scope.sourceId ?? 'default';
+      const binding = privateMode ? await bindTakeProposalPage(engine, sourceId, page.slug, body, _ctx) : undefined;
+      if (binding) privateReporting.observe(binding);
       const cached = await engine.executeRaw<{ id: number }>(
         `SELECT id FROM take_proposals
          WHERE source_id = $1 AND page_slug = $2 AND content_hash = $3 AND prompt_version = $4
+           AND ($5::text IS NULL OR codex_evidence->>'source_incarnation'=$5)
          LIMIT 1`,
-        [sourceId, page.slug, ch, promptVersion],
+        [sourceId, page.slug, ch, promptVersion, binding?.incarnation ?? null],
       );
       if (cached.length > 0) {
         result.cache_hits += 1;
@@ -994,17 +1013,23 @@ class ProposeTakesPhase extends BaseCyclePhase {
           pagePath: page.slug,
           pageBody: body,
           existingTakes,
-          modelHint: opts.model,
+          modelHint: privateMode ? modelId : opts.model,
           // #4494: configurable output caps (see resolution above).
           maxTokens: extractorMaxTokens,
           retryMaxTokens: extractorRetryMaxTokens,
-          ...phaseBoundedCallTimeout(callTimeout.value, deadlineMs - (Date.now() - phaseStartMs)),
+          ...(privateMode ? { callBoundMs: Math.max(1, Math.min(callTimeout.value ?? 120000, deadlineMs - (Date.now() - phaseStartMs))) }
+            : phaseBoundedCallTimeout(callTimeout.value, deadlineMs - (Date.now() - phaseStartMs))),
           attributionRules, dateGrounding,
         });
       } catch (err) {
         result.llm_calls_failed += 1;
-        const msg = err instanceof Error ? err.message : String(err);
+        if (binding) privateReporting.observe(binding, 0, true, true);
+        const msg = privateMode ? (err instanceof CodexProposalError ? err.reason : err instanceof SubscriptionAdmissionError ? err.code : 'proposal_failed') : err instanceof Error ? err.message : String(err);
         const detail = `extractor failed on ${page.slug}: ${msg}`;
+        if (privateMode && (err instanceof SubscriptionAdmissionError || err instanceof CodexProposalError && ['aborted','timeout','termination_unconfirmed','missing_completion','refusal','provider_failure','runtime_unqualified'].includes(err.reason))) {
+          result.warnings.push(detail); result.aborted_failure_streak = result.llm_calls_succeeded === 0;
+          result.budget_exhausted = err instanceof SubscriptionAdmissionError; break;
+        }
         const decision = llmHalt.observe(err);
         if (decision !== 'continue') {
           result.aborted_global_error = haltedClassOf(decision)!;
@@ -1037,72 +1062,17 @@ class ProposeTakesPhase extends BaseCyclePhase {
       llmHalt.reset();
       if (attributionChecks) proposals = downgradeAssistantOnlyHolders(proposals, body);
 
-      // Write proposals to take_proposals. #2138: the idempotency key is
-      // per-CLAIM — take_proposals_idempotency_idx folds md5(claim_text) into
-      // the per-page tuple (migration v125), so a multi-claim page keeps every
-      // claim. RETURNING id prevents a repeated claim from inflating the count.
-      for (const p of proposals) {
-        const inserted = await engine.executeRaw<{ id: number }>(
-          `INSERT INTO take_proposals
-             (source_id, page_slug, content_hash, prompt_version, proposal_run_id,
-              claim_text, kind, holder, weight, domain, dedup_against_fence_rows, model_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::text::jsonb, $12)
-           ON CONFLICT (source_id, page_slug, content_hash, prompt_version, md5(claim_text)) DO NOTHING
-           RETURNING id`,
-          [
-            sourceId,
-            page.slug,
-            ch,
-            promptVersion,
-            proposalRunId,
-            p.claim_text,
-            p.kind,
-            p.holder,
-            p.weight,
-            p.domain ?? null,
-            JSON.stringify(existingTakes),
-            // #4737: prefer the response-derived model (what actually
-            // answered) over the requested one for provenance.
-            p.served_model ?? modelId,
-          ],
-        );
-        result.proposals_inserted += inserted.length;
-      }
-
-      // Memoize the empty case too. A page that extracted zero claims gets
-      // NO row from the loop above, so without this its idempotency tuple is
-      // never recorded and the next cycle re-spends an LLM call on unchanged
-      // prose (the idle-cost bug). Write one tombstone row keyed by the same
-      // per-page tuple (the cache-hit lookup above matches ANY row for the
-      // 4-tuple; the unique index — take_proposals_idempotency_idx, migration
-      // v125 — folds md5(claim_text) in, so the conflict target must too).
-      // status='rejected' keeps it out of any pending-review query; its sole
-      // purpose is to make the next cycle a cache hit. Only reached on a
-      // SUCCESSFUL empty extract — the extractor-throw path `continue`s above,
-      // so failed pages are retried rather than tombstoned.
-      if (proposals.length === 0) {
-        await engine.executeRaw(
-          `INSERT INTO take_proposals
-             (source_id, page_slug, content_hash, prompt_version, proposal_run_id,
-              claim_text, kind, holder, weight, domain, dedup_against_fence_rows, model_id, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::text::jsonb, $12, 'rejected')
-           ON CONFLICT (source_id, page_slug, content_hash, prompt_version, md5(claim_text)) DO NOTHING`,
-          [
-            sourceId,
-            page.slug,
-            ch,
-            promptVersion,
-            proposalRunId,
-            EMPTY_EXTRACTION_TOMBSTONE_TEXT,
-            'fact',
-            'brain',
-            0,
-            null,
-            JSON.stringify(existingTakes),
-            modelId,
-          ],
-        );
-        result.tombstones_written += 1;
+      try {
+        const stored = await persistTakeProposalBatch(engine, { sourceId, slug: page.slug, hash: ch, version: promptVersion,
+          runId: proposalRunId, model: modelId, existing: existingTakes, proposals, emptyText: EMPTY_EXTRACTION_TOMBSTONE_TEXT, binding });
+        result.proposals_inserted += stored.inserted; result.tombstones_written += stored.tombstones;
+        if (binding) privateReporting.observe(binding, stored.inserted, false, true);
+      } catch (error) {
+        if (!binding) throw error;
+        result.publication_failures = (result.publication_failures ?? 0) + 1;
+        result.warnings.push(`proposal_persistence_failed: ${error instanceof OperationError ? error.code : 'storage_error'}`);
+        privateReporting.observe(binding, 0, true, true);
+        break;
       }
     }
 
@@ -1113,7 +1083,8 @@ class ProposeTakesPhase extends BaseCyclePhase {
     const sourceIdForReceipt = scope.sourceId ?? 'default';
     // Managed brains skip the receipt page (a legacy putPage the coordinator
     // refuses), like extract_atoms and synthesize_concepts; the rollup stays.
-    if (result.proposals_inserted > 0 && !await managedPersistenceEnabled(engine)) {
+    if (privateMode) await privateReporting.finish(engine, result, proposalRunId, modelId);
+    if (!privateMode && result.proposals_inserted > 0 && !await managedPersistenceEnabled(engine)) {
       try {
         await writeReceipt(engine, {
           kind: 'takes.proposed',
@@ -1122,13 +1093,13 @@ class ProposeTakesPhase extends BaseCyclePhase {
           round: 'single',
           extracted_at: new Date().toISOString(),
           total_rows: result.proposals_inserted,
-          cost_usd: 0, // tracker isn't exposed at this layer; cost tracked centrally
+          cost_usd: 0, // legacy metered cost is recorded centrally
           summary:
             `Proposed ${result.proposals_inserted} new takes from ${result.pages_scanned} pages ` +
             `(${result.cache_hits} cached).`,
         });
       } catch (err) {
-        console.error(`[propose_takes] receipt write failed: ${(err as Error).message}`);
+        console.error(`[propose_takes] receipt write failed: ${privateMode ? 'receipt_failed' : (err as Error).message}`);
       }
     }
     // #4482: three-way stop classification. A budget/deadline cap is the
@@ -1140,11 +1111,13 @@ class ProposeTakesPhase extends BaseCyclePhase {
     // `halted` (any incomplete round, caps included) is kept for the phase
     // result's status/details below — the diagnostic split is rollup-only.
     const halted =
+      (result.publication_failures ?? 0) > 0 ||
+      (privateMode && result.llm_calls_failed > 0) ||
       result.budget_exhausted ||
       result.deadline_hit === true ||
       result.aborted_global_error !== undefined ||
       result.aborted_failure_streak === true;
-    await upsertExtractRollup(engine, {
+    if (!privateMode) await upsertExtractRollup(engine, {
       kind: 'takes.proposed',
       source_id: sourceIdForReceipt,
       ...classifyRunStop({
@@ -1167,6 +1140,8 @@ class ProposeTakesPhase extends BaseCyclePhase {
     // #3763: an all-failures streak halt is the same severity as a
     // zero-success global halt — the whole extractor lane is down.
     const phaseFailed =
+      ((result.publication_failures ?? 0) > 0 && result.proposals_inserted === 0 && result.tombstones_written === 0) ||
+      (privateMode && result.llm_calls_failed > 0 && result.llm_calls_succeeded === 0) ||
       (result.aborted_global_error !== undefined && result.llm_calls_succeeded === 0) ||
       result.aborted_failure_streak === true;
     return {
@@ -1179,7 +1154,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
           ? `; aborted after ${result.llm_calls_failed} consecutive extractor failures (zero successes)`
           : '') +
         (warningCount > 0 ? ` (${warningCount} warning(s))` : ''),
-      details: { ...result, halted, proposal_run_id: proposalRunId, prompt_version: promptVersion },
+      details: { ...result, halted, proposal_run_id: proposalRunId, prompt_version: promptVersion, ...(privateMode ? { cost_usd: null, billing: 'subscription' } : {}) },
       status: phaseFailed ? 'fail' : halted || warningCount > 0 ? 'warn' : 'ok',
     };
   }

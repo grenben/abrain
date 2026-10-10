@@ -756,7 +756,7 @@ describe('runPhaseProposeTakes — empty extraction memoization', () => {
     expect(inserts).toHaveLength(1);
     // Tombstone carries the sentinel claim_text and an out-of-queue status.
     expect(inserts[0]!.params[5]).toBe(EMPTY_EXTRACTION_TOMBSTONE_TEXT); // claim_text
-    expect(inserts[0]!.sql).toContain("'rejected'");
+    expect(inserts[0]!.params[12]).toBe('rejected'); // bound status keeps tombstones out of the review queue
   });
 
   test('unchanged zero-claim page is a cache hit next cycle (no repeat LLM call)', async () => {

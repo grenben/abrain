@@ -1649,7 +1649,8 @@ CREATE TABLE IF NOT EXISTS take_proposals (
   acted_by                    TEXT,
   promoted_row_num            INTEGER,
   predicted_brier             REAL,
-  predicted_brier_bucket_n    INTEGER
+  predicted_brier_bucket_n    INTEGER,
+  codex_evidence              JSONB
 );
 CREATE UNIQUE INDEX IF NOT EXISTS take_proposals_idempotency_idx
   ON take_proposals (source_id, page_slug, content_hash, prompt_version, md5(claim_text));
