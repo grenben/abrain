@@ -1,12 +1,13 @@
+import { codexSubscriptionTreeContract } from './codex-subscription-tree-contract.ts';
 import { describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { createSubscriptionRun, reserveSubscriptionAttempt, settleSubscriptionAttempt, acceptSubscriptionTurn, type SubscriptionEnvelope } from '../../src/core/ai/subscription-admission.ts';
 import { codexSubscriptionContext, withCodexSubscription, type CodexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { runReflect } from '../../src/core/skillopt/reflect.ts';
-interface Fixture {engine():BrainEngine;reply(value:unknown):void;calls():Array<any>;
+export interface SubscriptionGroupFixture {engine():BrainEngine;reply(value:unknown):void;calls():Array<any>;
   run<T>(fn:(id:string)=>Promise<T>,hooks?:Partial<CodexSubscriptionContext>,maxAttempts?:number):Promise<T>}
-export function codexSubscriptionGroupContract(f:Fixture){describe('aggregate Codex subscription admission',()=>{
+export function codexSubscriptionGroupContract(f:SubscriptionGroupFixture){describe('aggregate Codex subscription admission',()=>{
   async function envelope(parentRunId:string,extra:Partial<SubscriptionEnvelope>={}):Promise<SubscriptionEnvelope>{
     const [row]=await f.engine().executeRaw<{account_lane:string;max_attempts:number;max_turns:number;deadline:string|Date}>('SELECT * FROM codex_subscription_runs WHERE run_id=$1',[parentRunId]);
     return {runId:randomUUID(),parentRunId,accountLane:row!.account_lane,maxAttempts:row!.max_attempts,maxTurns:row!.max_turns,deadline:new Date(row!.deadline),...extra};
@@ -69,12 +70,13 @@ export function codexSubscriptionGroupContract(f:Fixture){describe('aggregate Co
       await expect(reserve(two.runId)).rejects.toMatchObject({code:'subscription_exhausted'});expect(await counts(root)).toEqual([{attempts:1,accepted_turns:1,repairs:0}]);
     });
   });
-  test('envelope identity, lane, deadline and one-level ownership are immutable',async()=>{
+  test('envelope identity, lane and deadline are immutable; ownership has at most two edges',async()=>{
     await f.run(async root=>{
       const child=await envelope(root);await createSubscriptionRun(f.engine(),child);await createSubscriptionRun(f.engine(),child);
       for(const change of [{accountLane:'other-lane'},{maxAttempts:child.maxAttempts+1},{deadline:new Date(child.deadline.getTime()+1)},{parentRunId:undefined}])
         await expect(createSubscriptionRun(f.engine(),{...child,...change})).rejects.toMatchObject({code:'subscription_identity_conflict'});
-      await expect(createSubscriptionRun(f.engine(),await envelope(child.runId))).rejects.toMatchObject({code:'subscription_identity_conflict'});
+      const leaf=await envelope(child.runId);await createSubscriptionRun(f.engine(),leaf);
+      await expect(createSubscriptionRun(f.engine(),await envelope(leaf.runId))).rejects.toMatchObject({code:'subscription_identity_conflict'});
       await expect(createSubscriptionRun(f.engine(),{...child,runId:root})).rejects.toMatchObject({code:'subscription_invalid'});
       await expect(createSubscriptionRun(f.engine(),{...child,runId:randomUUID(),parentRunId:'missing-root'})).rejects.toMatchObject({code:'subscription_identity_conflict'});
       await expect(f.engine().executeRaw('UPDATE codex_subscription_runs SET parent_run_id=$2 WHERE run_id=$1',[child.runId,'missing-root'])).rejects.toThrow('subscription_identity_conflict');
@@ -90,4 +92,4 @@ export function codexSubscriptionGroupContract(f:Fixture){describe('aggregate Co
       expect(await counts(two.runId)).toEqual([{attempts:0,accepted_turns:0,repairs:0}]);
     },{},1);
   });
-});}
+});codexSubscriptionTreeContract(f);}

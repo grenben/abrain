@@ -9,7 +9,7 @@ export class SubscriptionAdmissionError extends Error {
 }
 export interface SubscriptionEnvelope {
   runId: string; accountLane: string; maxAttempts: number; maxTurns: number; deadline: Date;
-  /** Trusted host-only child binding. The root enforces aggregate admission; no nested groups. */
+  /** Trusted host-only child binding. Every ancestor enforces aggregate admission; at most two parent edges. */
   parentRunId?: string;
 }
 export interface SubscriptionAttempt { attemptId: string; runId: string; accountLane: string; ownerId: string }
@@ -41,9 +41,8 @@ function subscriptionDatabaseError(error: unknown): never {
     if (message === code) throw new SubscriptionAdmissionError(code);
   throw error;
 }
-async function lockSubscriptionParent(tx: BrainEngine, runId: string): Promise<void> {
-  await tx.executeRaw(`SELECT run_id FROM codex_subscription_runs
-    WHERE run_id=(SELECT parent_run_id FROM codex_subscription_runs WHERE run_id=$1) FOR UPDATE`, [runId]);
+async function lockSubscriptionPath(tx: BrainEngine, runId: string): Promise<void> {
+  await tx.executeRaw('SELECT gbrain_codex_subscription_lock_path($1)', [runId]);
 }
 
 /** No TTL reclamation: a crashed or ambiguous call continues occupying the shared account lane. */
@@ -53,7 +52,7 @@ export async function reserveSubscriptionAttempt(engine: BrainEngine, input: {
   if (!idValid(input.runId) || !idValid(input.attemptId) || !/^[a-f0-9]{64}$/.test(input.requestHash) ||
     !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1 || input.timeoutMs > 600_000) throw new SubscriptionAdmissionError('subscription_invalid');
   return engine.transaction(async tx => {
-    await lockSubscriptionParent(tx, input.runId);
+    await lockSubscriptionPath(tx, input.runId);
     // Lock order is stable across workers; account uniqueness below also protects separate runs.
     const runs = await tx.executeRaw<{ account_lane: string; available: boolean }>(`
       SELECT account_lane, (attempts < max_attempts AND accepted_turns < max_turns
@@ -96,7 +95,7 @@ export async function settleSubscriptionAttempt(engine: BrainEngine, attempt: Su
 /** Semantic acceptance is explicit and idempotent; schema success alone is not acceptance. */
 export async function acceptSubscriptionTurn(engine: BrainEngine, attempt: SubscriptionAttempt): Promise<void> {
   await engine.transaction(async tx => {
-    await lockSubscriptionParent(tx, attempt.runId);
+    await lockSubscriptionPath(tx, attempt.runId);
     const rows = await tx.executeRaw<{ run_id: string }>(`
       UPDATE codex_subscription_attempts SET accepted=true WHERE attempt_id=$1 AND run_id=$2
       AND owner_id=$3 AND state='succeeded' AND NOT accepted RETURNING run_id`, [attempt.attemptId,attempt.runId,attempt.ownerId]);

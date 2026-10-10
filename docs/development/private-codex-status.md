@@ -3,12 +3,13 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [optimizer discovery producers](private-codex-optimizer-discovery.md)
-connects explicitly selected listing/keyword tools to CLI, evaluation phases,
-queued optimizers and shared canonical publication. Tool scope is immutable across
-request/child recovery; older workers reject discovery jobs before launch. Schema
-head remains 265. Hybrid query/graph tools, cycle/batch/remote producers, full
-dispatch coverage and production runtime qualification remain incomplete.
+Latest source checkpoint: [bounded subscription trees](private-codex-subscription-groups.md)
+adds atomic root → optimizer → rollout accounting with a maximum of three levels,
+consistent lock order, migration preservation and independent worker tests.
+Schema head is 266. This is the accounting prerequisite for batch/cycle producers;
+their durable orchestration remains incomplete. Optimizer authority checks still
+require root grants. Hybrid query/graph tools, remote producers, full dispatch
+coverage and production runtime qualification remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 
@@ -533,9 +534,46 @@ activation was performed.
 
 ## Aggregate subscription admission checkpoint
 
-Migration v240 adds parent/child subscription envelopes with one aggregate
+Migration v260 adds parent/child subscription envelopes with one aggregate
 attempt, turn and repair budget. The database enforces counter coupling and
 immutable parent identity; the existing shared account lane retains unresolved
 attempts. This is a dependency for durable optimizer rollout jobs, whose complete
 host bindings and recovery remain work. [Scope and verification](private-codex-subscription-groups.md).
 No installed database migration or activation was performed.
+
+## Bounded subscription tree checkpoint
+
+Migration v266 and `subscription-tree-schema.ts` add a maximum three-level
+host allowance tree. `subscription-admission.ts` reserves and accepts under
+root-first row locks. Counter deltas charge every ancestor atomically; failed
+attempts stay charged, counter refunds are rejected, and unresolved calls retain
+the lane. Historical v260 remains unchanged. No optimizer producer was granted
+new authority; batch/cycle coordination is the next integration task.
+
+Verification used fresh credential-free homes, model discovery disabled, fake
+Codex executables, and disposable PGLite/PostgreSQL databases. PostgreSQL wrappers
+start an isolated loopback cluster and stop it in `finally`.
+
+| Command | Result |
+| --- | --- |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-think.serial.test.ts -t 'aggregate Codex subscription admission\|bounded Codex subscription tree'` | 15 passed, 81 assertions; subsequent migration-preservation case checked separately |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-think.serial.test.ts -t 'migration preserves spent legacy'` | 1 passed, 5 assertions |
+| `python3 /tmp/maxbrain-test-postgres-tree.py` | Same 15 cases plus 9 independent-connection admission cases: 24 passed, 125 assertions |
+| `python3 /tmp/maxbrain-test-postgres-tree-upgrade.py` | Migration preservation and replay: 1 passed, 5 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-gateway.serial.test.ts` | 7 passed, 23 assertions |
+| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | Catalog/replay/parity: 12 passed, 31 assertions; PgBouncer case skipped (not provisioned) |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-actions.serial.test.ts -t 'durable Codex optimizer rollouts\|local CLI runs the real optimizer\|real worker completes a permanently\|actual worker publishes the bound shared'` | 22 passed, 117 assertions |
+| `python3 /tmp/maxbrain-test-postgres-read-regression.py` | Same optimizer/worker regression paths on PostgreSQL: 22 passed, 117 assertions |
+| `python3 /tmp/maxbrain-stream-check.py bun run build` | Passed; 3,734 modules compiled |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 75 passed, 0 failed; admin build explicitly skipped; typecheck included |
+| `git diff --check` | Passed |
+
+The initial native-proposal fixture had no scored input and correctly skipped
+inference; supplying synthetic scored input verified actual calls. The upgrade
+fixture initially used the single-statement query API for migration SQL; it now
+uses the engine's real migration API. Both corrected fixtures passed. Existing
+standalone admission tests also passed (8 cases).
+
+This checkpoint does not deploy GBrain, apply production migrations, activate
+private mode, prove live subscription behavior, or qualify a production Codex
+runtime. Full container CI, admin UI and PgBouncer remain unverified here.

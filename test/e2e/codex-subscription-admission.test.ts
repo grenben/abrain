@@ -142,4 +142,45 @@ describe.skipIf(!url)('native PostgreSQL subscription ownership', () => {
     const accepted = results[0]?.status === 'fulfilled' ? a : b;
     await acceptSubscriptionTurn(second, accepted);
   });
+
+  test('independent workers lock root before grandchildren across branches', async () => {
+    const root = envelope('tree-race', 'tree-race', 4);
+    await createSubscriptionRun(first, root);
+    for (const suffix of ['a', 'b']) {
+      await createSubscriptionRun(first, { ...root, runId: `tree-race-${suffix}`, parentRunId: root.runId });
+      await createSubscriptionRun(first, { ...root, runId: `tree-race-${suffix}-leaf`, parentRunId: `tree-race-${suffix}` });
+    }
+    const a = 'tree-race-a-leaf', b = 'tree-race-b-leaf';
+    for (const [one, two] of [[a, b], [root.runId, a], ['tree-race-a', a]]) {
+      const results = await Promise.allSettled([reserve(first, one!, randomUUID()), reserve(second, two!, randomUUID())]);
+      const attempt = winner(results);
+      expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'subscription_lane_busy' } });
+      await settleSubscriptionAttempt(first, attempt, { state: 'failed', failureCode: 'invalid_output' });
+    }
+    await settleSubscriptionAttempt(first, await reserve(first, root.runId, 'tree-race-final'), { state: 'failed', failureCode: 'invalid_output' });
+    await expect(reserve(second, b, 'tree-race-over')).rejects.toMatchObject({ code: 'subscription_exhausted' });
+    expect(await first.executeRaw('SELECT attempts FROM codex_subscription_runs WHERE run_id=$1', [root.runId])).toEqual([{ attempts: 4 }]);
+    expect(await second.executeRaw('SELECT count(*)::int AS calls FROM codex_subscription_attempts WHERE account_lane=$1', [root.accountLane])).toEqual([{ calls: 4 }]);
+  });
+
+  test('grandchild acceptance races roll back both losing ancestors and the durable flag', async () => {
+    const root = envelope('tree-accept', 'tree-accept', 3, 1);
+    await createSubscriptionRun(first, root);
+    const attempts: SubscriptionAttempt[] = [];
+    for (const suffix of ['a', 'b']) {
+      const middle = `tree-accept-${suffix}`, leaf = `${middle}-leaf`;
+      await createSubscriptionRun(first, { ...root, runId: middle, parentRunId: root.runId });
+      await createSubscriptionRun(second, { ...root, runId: leaf, parentRunId: middle });
+      const attempt = await reserve(first, leaf, randomUUID());
+      await settleSubscriptionAttempt(second, attempt, { state: 'succeeded', usage: null }); attempts.push(attempt);
+    }
+    const results = await Promise.allSettled([acceptSubscriptionTurn(first, attempts[0]!), acceptSubscriptionTurn(second, attempts[1]!)]);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'subscription_exhausted' } });
+    const loser = attempts[results[0]!.status === 'rejected' ? 0 : 1]!;
+    expect(await first.executeRaw('SELECT accepted FROM codex_subscription_attempts WHERE attempt_id=$1', [loser.attemptId])).toEqual([{ accepted: false }]);
+    expect(await second.executeRaw(`SELECT accepted_turns FROM codex_subscription_runs
+      WHERE run_id=$1 OR run_id=(SELECT parent_run_id FROM codex_subscription_runs WHERE run_id=$1)`, [loser.runId])).toEqual([{ accepted_turns: 0 }, { accepted_turns: 0 }]);
+    expect(await first.executeRaw('SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [root.runId])).toEqual([{ attempts: 2, accepted_turns: 1 }]);
+  });
 });

@@ -266,6 +266,7 @@ import { v262 } from './v262-codex-skillopt-runs.ts';
 import { v263 } from './v263-codex-skillopt-submissions.ts';
 import { v264 } from './v264-codex-shared-skill-optimization.ts';
 import { v265 } from './v265-codex-bootstrap-runs.ts';
+import { v266 } from './v266-codex-subscription-tree.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -530,4 +531,5 @@ export const MIGRATIONS: Migration[] = [
   v263,
   v264,
   v265,
+  v266,
 ];

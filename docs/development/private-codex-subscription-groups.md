@@ -5,95 +5,88 @@ while enforcing one aggregate subscription allowance.”*
 
 ## Implemented admission foundation
 
-The later [optimizer rollout checkpoint](private-codex-skillopt-rollouts.md)
-connects this foundation to real child jobs and retained trajectories. Whole-run
-optimizer integration remains incomplete.
+The [optimizer workflow](private-codex-skillopt-workflow.md) uses distinct
+rollout grants under its root allowance. The ledger also supports the bounded
+hierarchy needed by a future batch coordinator:
+
+```text
+batch allowance
+  └─ skill optimizer allowance
+       └─ rollout allowance
+```
 
 Trusted host callers can create a child subscription run with `parentRunId`.
-The parent must already exist and be a root run. Children cannot introduce a
-different account lane, extend the deadline, exceed the parent's attempt/turn
-bounds, change parents, become roots, or form nested groups. Their envelopes
-remain immutable. A child can have smaller limits than its parent.
+The parent must already exist. There may be at most two parent edges (three
+levels); a fourth level is rejected. This is host workflow accounting, not
+model delegation. Children cannot introduce a different account lane, extend the
+deadline, exceed the parent's attempt/turn bounds, change parents or become
+roots. Their envelopes remain immutable. A child can have smaller limits than
+its parent.
 
-Calls on the parent and every child consume the parent's aggregate attempts,
-accepted turns and single content-repair allowance. They also consume the
-child's own limits where applicable. Creating more children does not add total
-capacity. Both limits must permit admission before inference. A failed call
-consumes an attempt; a semantically accepted result consumes a turn exactly once.
-No USD conversion or remaining subscription quota is inferred.
+Each call consumes its own run's attempts and every ancestor's aggregate
+attempts. Semantic acceptance charges accepted turns at all those levels exactly
+once. One content-repair allowance spans the entire tree. Creating more children
+does not add capacity. A failed call consumes an attempt; unresolved calls retain
+the account lane. No USD conversion or remaining subscription quota is inferred.
 
-Migration v260 adds the self-reference, parent index and database guard. Counter
-updates charge the parent in the same transaction. This also enforces aggregate
-caps for writers using the earlier counter-update SQL. The current admission
-code locks parent before child to keep concurrent workers' ordering consistent.
-A losing acceptance rolls back both its child's counter and its attempt's
-accepted flag. Decreasing child counters is refused; ambiguous attempts are
-never refunded.
+Migration v260 adds the parent reference and original group guard. Migration
+v266 replaces that guard with bounded tree accounting and adds
+`gbrain_codex_subscription_lock_path`. Existing counters and attempt records are
+preserved without recalculation. Admission and acceptance lock root, intermediate
+and leaf rows in that order. The database guard propagates deltas recursively
+within the same transaction, including earlier counter-update SQL. Exhaustion
+rolls back the attempt insertion or accepted flag and all descendant counters.
+Decreasing counters at any level is refused. An older direct SQL writer with a
+different lock order may receive a transaction deadlock abort; it cannot commit
+partial charges. Workers should be drained during a separately authorized upgrade.
 
-Parent and child calls share the existing unique active account lane. An active
-or unresolved child attempt blocks calls from siblings and the parent, including
-after a process crash. There is no TTL release or new fallback provider. The
-existing owner identity still controls settlement. Root envelopes without
-children retain their existing behavior.
+An active or unresolved attempt blocks siblings, ancestors and other branches
+using the same account lane, including after a process crash. There is no TTL
+release, refund or fallback provider. The existing owner identity controls
+settlement. Limits are GBrain's local admission controls; they do not estimate
+OpenAI's remaining subscription quota or reset it.
 
-Root counters include child consumption: do not sum root and child counters
-when reporting totals. Token measurements remain on the actual attempt rows,
-one record per call. A group token report must include root and immediate-child
-attempts once, preserve missing measurements, and continue reporting unknown
-monetary cost and remaining quota.
+Root counters already include descendant consumption: do not sum the counters
+across levels. Token measurements remain on actual attempt rows, one record per
+call. A future batch report must include all descendant attempts once and
+preserve missing measurements. Existing optimizer reports still cover their
+root and direct rollout children. Monetary cost and remaining quota remain null.
 
 ## Integration and activation limits
 
-This is the admission dependency for durable optimizer rollouts, not a completed
-optimizer worker integration. Trusted queue submissions can bind a distinct job
-allowance to the parent; real worker handlers then charge the shared total while
-retaining separate canonical action ledgers. Invalid parent binding rolls back
-job insertion. A parent ID in model-authored job data is refused. Child budgets
-do not themselves authorize a job,
-allocate its ledger, grant tools, fence parent worker ownership, publish a skill,
-or reconcile unsettled actions. The optimizer still needs those host-owned
-bindings and its full-run recovery/report lifecycle. Existing job submission
-does not accept a model-supplied parent budget or silently reinterpret legacy
-queued jobs. The parent field is accepted only in the queue's separate trusted
-subscription argument. Account lanes remain shared within their owner database; independent
-brain databases do not coordinate a common subscription account yet.
+The tree is the admission prerequisite for native batch/cycle optimization.
+Those producers are not integrated by this change. Existing optimizer grants
+remain restricted to roots until a durable batch manifest binds each skill's
+identity, source, scope and recovery state. No root-only optimizer authority
+check was relaxed.
 
-The migration is registered and tested only against isolated state. It has not
-been applied to the installed database. Installed GBrain, live inference,
-runtime qualification and activation remain unchanged/unverified.
+Trusted queue submissions can bind a distinct job allowance to a parent; real
+worker handlers charge the shared total while retaining separate action ledgers.
+Invalid parent binding rolls back job insertion. A parent ID in model-authored
+job data is refused. An allowance does not authorize a job, grant tools, fence
+worker ownership, publish a skill or reconcile an unsettled action. The queue
+accepts parent binding only in its separate trusted subscription argument and
+does not reinterpret legacy queued jobs.
+
+Account lanes remain shared within one database; independent brain databases do
+not coordinate a common subscription account yet. The registered migrations
+have been exercised only against isolated state. They have not been applied to
+the installed database. Installed GBrain, runtime qualification and activation
+remain unchanged/unverified.
 
 ## Deterministic coverage
 
-Shared PGLite/PostgreSQL fixtures exercise real native gateway calls under a
-root and distinct child identities, aggregate exhaustion, independent child
-caps, single repair admission, failed-call accounting, idempotent acceptance,
-concurrent siblings, unresolved ownership, changed envelopes and direct database
-counter updates. Separate PostgreSQL connections race child reservations and
-acceptances. The fake executable and network tripwires prevent live inference.
-Schema catalog and migration replay checks verify the registered storage change.
+Shared PGLite/PostgreSQL fixtures exercise real gateway calls through a fake
+Codex executable, root/child/grandchild accounting, per-level exhaustion, repair
+bounds, failed-call charging, idempotent acceptance, atomic rollback, unresolved
+ownership and rejection of deeper trees. A migration fixture starts with spent
+legacy child allowances, applies the registered upgrade twice, and verifies
+preserved charges and new grandchild admission. Separate PostgreSQL connections
+race different branches, root/leaf and intermediate/leaf reservations, and
+accepted-turn settlement.
 
-| Command | Result |
-| --- | --- |
-| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=30000 test/ai/codex-think.serial.test.ts` | 399 passed; one standalone-identity compatibility failure found and fixed |
-| `python3 /tmp/maxbrain-test-postgres-groups.py` | Same full-contract compatibility failure found on PostgreSQL; cluster stopped |
-| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=30000 test/ai/codex-think.serial.test.ts -t 'aggregate Codex subscription admission\|archived source and old contextual identity'` | Corrected affected PGLite contract: 9 passed; 40 assertions |
-| `python3 /tmp/maxbrain-test-postgres-groups-final.py` | Corrected contract 9/40; independent-worker admission 7/27; job/schedule regressions 23/96; action assertions exposed a bigint/number test mismatch |
-| `python3 /tmp/maxbrain-test-postgres-group-actions.py` | Final PostgreSQL action contract: 43 passed; 174 assertions; includes the two child-job cases |
-| `python3 /tmp/maxbrain-subscription-groups-regressions.py` | Existing PGLite admission/action checks: 49 passed; 177 assertions |
-| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=30000 test/ai/codex-actions.serial.test.ts` | Expanded PGLite action contract: 43 passed; 174 assertions |
-| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | Final migration/catalog/parity checks: 12 passed; 31 assertions; PgBouncer case skipped; cluster stopped |
-| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 74 passed; admin build skipped; SQL search-path guard caught one issue |
-| `python3 /tmp/maxbrain-stream-check.py bun run check:search-path` | Passed after pinning the new function's search path |
-| `python3 /tmp/maxbrain-stream-check.py bun run typecheck` | Passed on final admission/queue source |
-| `python3 /tmp/maxbrain-stream-check.py bun run build` | Compiled 3,700 modules |
-| `git diff --check` | Passed |
-
-Focused reruns address the identified failures; the full 400-case contract was
-not redundantly rerun after the standalone-identity fix. The final PostgreSQL
-subset and regression runs collectively cover 82 cases and 337 assertions.
-All PostgreSQL targets were disposable local clusters, stopped afterward.
-Full container CI, native Windows, PgBouncer, admin UI and live subscription
-checks were not run. Logs use `/tmp/maxbrain-subscription-groups-`, including
-`contract.log`, `postgres.log`, `final-focused.log`, `final-postgres.log`,
-`postgres-actions.log`, `regressions.log`, `final-actions.log`, `schema.log`,
-`verify.log`, `search-path.log`, `final-typecheck.log` and `build.log`.
+Current checkpoint verification commands and results are recorded in
+[development status](private-codex-status.md#bounded-subscription-tree-checkpoint).
+All inference in these tests uses fixture executables with network tripwires.
+Schema catalog and migration replay checks cover both storage engines. These
+checks prove the checkout, not an upgraded installation or live subscription.
