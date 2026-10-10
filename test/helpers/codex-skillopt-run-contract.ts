@@ -83,7 +83,7 @@ export function codexSkilloptRunContract(f: Fixture) {
     test('local USD-only, missing scope, malformed grant and unsupported producers fail before invocation', async () => {
       let invoked = false;
       for (const args of [[], ['--max-usd', '5'], localArgs().filter(v => v !== '--read-prefix' && v !== 'notes/*'),
-        [...localArgs(), '--read-prefix', 'notes/*'], [...localArgs(), '--codex-max-attempts', '10'], [...localArgs(), '--background'], [...localArgs(), '--all']]) {
+        [...localArgs(), '--read-prefix', 'notes/*'], [...localArgs(), '--codex-max-attempts', '10'], [...localArgs(), '--follow'], [...localArgs(), '--all']]) {
         await expect(withSkillOptAllowance(f.engine(), args, async () => { invoked = true; })).rejects.toThrow();
       }
       expect(invoked).toBe(false); expect(f.calls()).toHaveLength(0);

@@ -8,7 +8,7 @@
 import * as path from 'node:path';
 import { autoDetectSkillsDirReadOnly } from '../core/repo-root.ts';
 import { runGuardedBootstrap } from '../core/skillopt/bootstrap-run.ts';
-import { buildSkillOptJobData } from '../core/skillopt/job.ts';
+import { buildSkillOptJobData, type SkillOptJobInput } from '../core/skillopt/job.ts';
 import {
   buildModelsPlan,
   describeStrictVerdict,
@@ -265,14 +265,14 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
   // maybeBackground helper (which doesn't pass allowProtectedSubmit). Inline
   // a small submit that does. Behavior mirrors maybeBackground: writes
   // `job_id=N` to stdout, exits 0; `--follow` execs `gbrain jobs follow`.
-  if (args.includes('--background')) {
+  if (args.includes('--background') && !parsed.dryRun) {
     if (engine.kind === 'pglite') {
       process.stderr.write('[--background] PGLite has no worker daemon; running inline.\n');
     } else {
       try {
         const { MinionQueue } = await import('../core/minions/queue.ts');
         const queue = new MinionQueue(engine);
-        const jobData = buildSkillOptJobData({
+        const jobInput: SkillOptJobInput = {
           skillsDir,
           skillName: parsed.skillName,
           benchmarkPath,
@@ -295,12 +295,14 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
           maxCostSource: parsed.maxCostSource,
           maxRuntimeMin: parsed.maxRuntimeMin,
           force: parsed.force,
-        });
-        const job = await queue.add('skillopt', jobData, {
+        };
+        const job = scope.backgroundAllowance ? await (await import('../core/skillopt/codex-job.ts')).submitCodexSkillOpt(engine, jobInput, scope, scope.backgroundAllowance)
+          : await queue.add('skillopt', buildSkillOptJobData(jobInput), {
           queue: 'default',
           idempotency_key: `cli:skillopt:${parsed.skillName}`,
           max_attempts: 1,
         }, { allowProtectedSubmit: true });
+        if (scope.backgroundAllowance) process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
         process.stdout.write(`job_id=${job.id}\n`);
         if (args.includes('--follow')) {
           const { spawn } = await import('child_process');
@@ -310,6 +312,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
           await new Promise<void>((resolve) => child.on('exit', () => resolve()));
         }
         process.exit(0);
+        return;
       } catch (err) {
         handleErrorAndExit(err, parsed.json, 2);
       }
@@ -477,6 +480,7 @@ export function parseFlags(args: string[]): ParsedFlags {
   while (i < args.length) {
     const a = args[i]!;
     if (a === '--help' || a === '-h') { help = true; i += 1; continue; }
+    if (a === '--background' || a === '--follow') { i += 1; continue; }
     if (a === '--benchmark') { benchmarkPath = args[++i]; i += 1; continue; }
     if (a === '--bootstrap-from-routing') { bootstrapFromRouting = true; i += 1; continue; }
     if (a === '--bootstrap-from-skill') { bootstrapFromSkill = true; i += 1; continue; }
@@ -554,9 +558,9 @@ export function parseFlags(args: string[]): ParsedFlags {
     throw new Error(`--all and --bootstrap-from-routing are mutually exclusive (run bootstrap per skill)`);
   }
   // --bootstrap-from-skill is a standalone short-circuit: it cannot combine with
-  // the other-source / multi-run flags. (--background / --follow are already
-  // rejected by the unknown-flag guard since parseFlags doesn't parse them.)
+  // the other-source / multi-run flags or background optimizer execution.
   if (bootstrapFromSkill) {
+    if (args.includes('--background') || args.includes('--follow')) throw new Error('Bootstrap generation runs in the foreground.');
     if (bootstrapFromRouting) throw new Error(`--bootstrap-from-skill and --bootstrap-from-routing are mutually exclusive`);
     if (benchmarkPath) throw new Error(`--bootstrap-from-skill and --benchmark are mutually exclusive`);
     if (all) throw new Error(`--bootstrap-from-skill and --all are mutually exclusive (run bootstrap per skill)`);

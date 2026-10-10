@@ -23,6 +23,8 @@ import {
 import { runSkillOpt } from './orchestrator.ts';
 import { clampRemoteReflectMaxTokens } from './output-cap.ts';
 import type { SkillOptOpts } from './types.ts';
+import type { MinionJobContext } from '../minions/types.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 
 export type SkillOptJobInput = Pick<SkillOptOpts,
   | 'skillsDir' | 'skillName' | 'benchmarkPath' | 'epochs' | 'batchSize' | 'lr' | 'lrSchedule' | 'split'
@@ -89,7 +91,7 @@ export async function resolveJobModels(engine: BrainEngine, data: Record<string,
   }, 'legacy job data');
 }
 
-export async function runSkillOptJob(engine: BrainEngine, rawData: unknown): Promise<Record<string, unknown>> {
+export async function skillOptJobOptions(engine: BrainEngine, rawData: unknown): Promise<SkillOptOpts> {
   const data = (rawData ?? {}) as Record<string, unknown>;
   const skillsDir = String(data.skills_dir ?? '');
   const skillName = String(data.skill_name ?? '');
@@ -98,7 +100,7 @@ export async function runSkillOptJob(engine: BrainEngine, rawData: unknown): Pro
     throw new Error(`skillopt handler: missing required job.data fields (skills_dir, skill_name, benchmark_path)`);
   }
   const models = await resolveJobModels(engine, data);
-  const result = await runSkillOpt({
+  return {
     engine,
     skillName,
     skillsDir,
@@ -122,8 +124,16 @@ export async function runSkillOptJob(engine: BrainEngine, rawData: unknown): Pro
     maxCostSource: data.max_cost_source === 'default' ? 'default' : 'user',
     maxRuntimeMin: Number(data.max_runtime_min ?? 30),
     force: Boolean(data.force),
-  });
+  };
+}
+
+export async function runSkillOptJob(engine: BrainEngine, rawData: unknown, context?: MinionJobContext): Promise<Record<string, unknown>> {
+  const data = structuredClone((rawData ?? {}) as Record<string, unknown>);
+  const native = !!readPrivateCodexConfig() || data.optimizer_protocol !== undefined;
+  const scope = native ? await (await import('./codex-job.ts')).codexOptimizerJobScope(engine, data, context) : {};
+  const result = await runSkillOpt({ ...await skillOptJobOptions(engine, data), ...scope });
   return {
+    ...(native ? { cost_usd: null } : {}),
     outcome: result.outcome,
     receipt: result.receipt,
     mutated_skill_file: result.mutatedSkillFile,

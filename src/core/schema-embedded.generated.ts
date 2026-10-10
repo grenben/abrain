@@ -3498,4 +3498,16 @@ CREATE TABLE IF NOT EXISTS codex_skillopt_runs (
 );
 ALTER TABLE codex_skillopt_runs ENABLE ROW LEVEL SECURITY;
 -- END GENERATED from src/core/skillopt/codex-run-schema.ts (CODEX_SKILLOPT_RUN_SCHEMA_SQL)
+
+-- BEGIN GENERATED from src/core/skillopt/codex-job-schema.ts (CODEX_SKILLOPT_JOB_SCHEMA_SQL). Edit that file, then run: bun run build:schema
+CREATE TABLE IF NOT EXISTS codex_skillopt_submissions (
+  request_id UUID PRIMARY KEY,
+  protocol INTEGER NOT NULL CHECK (protocol=1),
+  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
+  data_hash TEXT NOT NULL CHECK (data_hash ~ '^[a-f0-9]{64}\$'),
+  job_id BIGINT NOT NULL UNIQUE REFERENCES minion_jobs(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE codex_skillopt_submissions ENABLE ROW LEVEL SECURITY;
+-- END GENERATED from src/core/skillopt/codex-job-schema.ts (CODEX_SKILLOPT_JOB_SCHEMA_SQL)
 `;

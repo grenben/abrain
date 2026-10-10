@@ -23,6 +23,7 @@ import { disposePersistenceConsumer } from '../../src/core/persistence/service.t
 import { codexActionWritesContract } from './codex-action-writes-contract.ts';
 import { codexSkilloptRolloutContract } from './codex-skillopt-rollout-contract.ts';
 import { codexSkilloptRunContract } from './codex-skillopt-run-contract.ts';
+import { codexSkilloptJobContract } from './codex-skillopt-job-contract.ts';
 
 export function codexActionsContract(factory: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
   const root = mkdtempSync(join(tmpdir(), 'codex-actions-')), bin = join(root, 'fake.mjs'), control = join(root, 'replies.json'), capture = join(root, 'calls.jsonl');
@@ -71,6 +72,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     await disposePersistenceConsumer(engine);
     await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
     await engine.executeRaw('DELETE FROM codex_skillopt_runs');
+    await engine.executeRaw('DELETE FROM codex_skillopt_submissions');
     await engine.executeRaw('DELETE FROM codex_proposal_cache');
     await engine.executeRaw('DELETE FROM codex_skillopt_rollouts');
     await engine.executeRaw('DELETE FROM codex_subscription_attempts'); await engine.executeRaw('DELETE FROM codex_subscription_runs'); await engine.executeRaw('DELETE FROM minion_jobs');
@@ -258,4 +260,5 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   codexActionWritesContract({ engine: () => engine, root, claim, run, replies, calls, get, final });
   codexSkilloptRolloutContract({ engine: () => engine, replies, calls, get, final });
   codexSkilloptRunContract({ engine: () => engine, root, replies, calls });
+  codexSkilloptJobContract({ engine: () => engine, root, replies, calls });
 }

@@ -3,10 +3,10 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [native optimizer CLI admission](private-codex-skillopt-cli.md)
-connects explicit local limits and source/read scope to the durable optimizer
-workflow, with unchanged-identity recovery and honest subscription accounting.
-Migration 242 retains whole-run progress. Worker/batch/remote/bootstrap admission,
+Latest source checkpoint: [native optimizer background jobs](private-codex-skillopt-jobs.md)
+connects explicit CLI submission to permanent request/job identities and fenced
+worker execution. Migration 263 preserves queued recovery; migration 262 retains
+whole-run progress. Cycle/batch/remote/bootstrap admission,
 shared canonical publication recovery and broader read tools remain incomplete.
 
 ## Installation and source evidence (2026-10-09)

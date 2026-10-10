@@ -133,6 +133,8 @@ export interface ScoredRollout {
 // ─── Run state + receipts ─────────────────────────────────────────────────
 
 export interface SkillOptOpts {
+  /** Trusted queued workflow snapshot; checked before grant claim or inference. */
+  codexExpectedInputHash?: string;
   /** Explicit host scope for native evaluations; never inferred from candidate skill content. */
   codex?: { allowedTools: string[]; allowedSlugPrefixes: string[] };
   operationContext?: OperationContext;

@@ -58,8 +58,9 @@ No schema migration is added by this checkpoint.
 
 ## Remaining work
 
-Queued workers, cycle, batch/fleet, standalone bootstrap and remote producers
-still need their own explicit admission/recovery integration. Shared canonical
+The subsequent [background-job checkpoint](private-codex-skillopt-jobs.md) adds
+permanent CLI request/job binding and worker execution. Cycle, batch/fleet,
+standalone bootstrap and remote producers still need their own admission/recovery integration. Shared canonical
 skill publication recovery and broader read tools remain incomplete. Private
 flags refuse unsupported producer modes rather than creating an allowance they
 cannot safely consume. Existing non-private dispatch remains unchanged.

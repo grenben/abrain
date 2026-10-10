@@ -3,6 +3,7 @@ import { CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL } from '../src/core/brainstorm/code
 import { SUBSCRIPTION_GROUP_SCHEMA_SQL } from '../src/core/ai/subscription-group-schema.ts';
 import { CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL } from '../src/core/skillopt/codex-rollout-schema.ts';
 import { CODEX_SKILLOPT_RUN_SCHEMA_SQL } from '../src/core/skillopt/codex-run-schema.ts';
+import { CODEX_SKILLOPT_JOB_SCHEMA_SQL } from '../src/core/skillopt/codex-job-schema.ts';
 import { CODEX_BRAINSTORM_SCHEMA_SQL } from '../src/core/brainstorm/codex-schema.ts';
 import { THINK_AB_SCHEMA_SQL } from '../src/core/calibration/think-ab-schema.ts';
 import { CODEX_EVAL_SCHEMA_SQL } from '../src/core/ai/codex-eval-schema.ts';
@@ -138,6 +139,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/ai/subscription-group-schema.ts', expr: 'SUBSCRIPTION_GROUP_SCHEMA_SQL', postgres: SUBSCRIPTION_GROUP_SCHEMA_SQL, pglite: SUBSCRIPTION_GROUP_SCHEMA_SQL },
   { source: 'src/core/skillopt/codex-rollout-schema.ts', expr: 'CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL', postgres: CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL, pglite: CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL },
   { source: 'src/core/skillopt/codex-run-schema.ts', expr: 'CODEX_SKILLOPT_RUN_SCHEMA_SQL', postgres: CODEX_SKILLOPT_RUN_SCHEMA_SQL, pglite: CODEX_SKILLOPT_RUN_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-job-schema.ts', expr: 'CODEX_SKILLOPT_JOB_SCHEMA_SQL', postgres: CODEX_SKILLOPT_JOB_SCHEMA_SQL, pglite: CODEX_SKILLOPT_JOB_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;

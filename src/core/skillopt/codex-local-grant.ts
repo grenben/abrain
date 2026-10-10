@@ -14,7 +14,7 @@ import { splitEvalAllowance, type EvalAllowance } from '../../eval/longmemeval/c
 import { usageError } from '../../cli/cli-error.ts';
 
 const pending = new AsyncLocalStorage<Readonly<EvalAllowance>>();
-export type LocalOptimizerScope = Pick<SkillOptOpts, 'operationContext' | 'codex'>;
+export type LocalOptimizerScope = Pick<SkillOptOpts, 'operationContext' | 'codex'> & { backgroundAllowance?: Readonly<EvalAllowance> };
 const bad = (message: string): never => { throw usageError(message, 'Use explicit Codex limits, --source ID and one or more --read-prefix slug-or-prefix/* flags for a single optimizer run.'); };
 
 /** Local CLI authority only. No grant is persisted until all workflow inputs pass validation. */
@@ -35,8 +35,9 @@ export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string
     return run(rest, {});
   }
   // These producers have separate material-input/recovery requirements; never reinterpret a grant.
-  if (rest.some(a => ['--all', '--target-models', '--bootstrap-from-skill', '--bootstrap-from-routing', '--background', '--follow', '--resume'].includes(a)))
-    bad('This private CLI grant currently supports a single foreground optimizer run.');
+  if (rest.some(a => ['--all', '--target-models', '--bootstrap-from-skill', '--bootstrap-from-routing', '--resume'].includes(a)))
+    bad('This private CLI grant currently supports a single optimizer run.');
+  if (rest.includes('--follow') && !rest.includes('--background')) bad('--follow requires --background.');
   if (!source || !prefixes.length || new Set(prefixes).size !== prefixes.length) bad('Private optimizer reads need an explicit source and distinct read prefixes.');
   validateCodexReadJob({ action_protocol: CODEX_READ_PROTOCOL, prompt: 'scope preflight', source_id: source,
     allowed_tools: ['get_page'], allowed_slug_prefixes: prefixes, max_turns: 16, no_self_fix: true });
@@ -49,6 +50,7 @@ export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string
     logger: { info: console.log, warn: console.warn, error: console.error }, dryRun: rest.includes('--dry-run') },
     codex: { allowedTools: ['get_page'], allowedSlugPrefixes: prefixes } };
   const runId = `codex-skillopt:${grant!.requestId}`, saved = Object.freeze({ ...grant!, deadline: new Date(grant!.deadline) });
+  if (rest.includes('--background') && engine.kind !== 'pglite' && !rest.includes('--dry-run')) return run(rest, { ...scope, backgroundAllowance: saved });
   const abort = new AbortController(), cancel = () => abort.abort(new SubscriptionAdmissionError('subscription_owner_lost'));
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
   try {
@@ -70,6 +72,8 @@ export async function ensureLocalOptimizerGrant(tx: BrainEngine, runId: string):
   if (runId !== `codex-skillopt:${grant.requestId}`) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
   await declareDurablePersistence(tx);
+  if ((await tx.executeRaw('SELECT request_id FROM codex_skillopt_submissions WHERE request_id=$1::uuid', [grant.requestId])).length)
+    throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const [prior] = await tx.executeRaw<{ account_lane: string; max_attempts: number; max_turns: number; deadline: Date | string; parent_run_id: string | null }>(
     'SELECT account_lane,max_attempts,max_turns,deadline,parent_run_id FROM codex_subscription_runs WHERE run_id=$1 FOR UPDATE', [runId]);
   if (prior) {

@@ -545,7 +545,7 @@ export async function registerBuiltinHandlers(
   // submit). Body in skillopt/job.ts: re-resolves the role models and re-runs
   // the strict check at execution time.
   worker.register('skillopt', async (job) =>
-    (await import('../core/skillopt/job.ts')).runSkillOptJob(engine, job.data));
+    (await import('../core/skillopt/job.ts')).runSkillOptJob(engine, job.data, job));
 
   process.stderr.write('[minion worker] brain-health-100 handlers registered (12 ops, 4 protected) + embed-backfill (v0.40) + embed-catch-up (v0.42) + unify-types (v0.42) + skillopt (v0.42.0.0, protected)\n');
 

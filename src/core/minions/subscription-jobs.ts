@@ -33,6 +33,13 @@ export async function preflightSubscriptionJob(engine: BrainEngine, name: string
     validateCodexReadJob(data);
     await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
   }
+  if (name === 'skillopt') {
+    const { validateCodexOptimizerJob } = await import('../skillopt/codex-job-contract.ts');
+    validateCodexOptimizerJob(data);
+    await resolvePrivateModel(engine, { tier: 'deep', fallback: 'unused' }, policy);
+    await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
+    await resolvePrivateModel(engine, { tier: 'reasoning', fallback: 'unused' }, policy);
+  }
 }
 
 /** Do not enqueue unfenced private work that an older worker could claim. */

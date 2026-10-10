@@ -61,7 +61,7 @@ Modes:
   --json                        Machine-readable stdout
 
 Safety:
-  Private single foreground runs require explicit subscription admission:
+  Private single runs (foreground or --background) require explicit admission:
   --codex-max-attempts N        Native attempts, including failed calls (1–1000)
   --codex-max-turns N           Accepted turns (at most the attempt limit)
   --codex-deadline UTC          Absolute ISO UTC deadline (new grants: within 24h)
@@ -72,7 +72,7 @@ Safety:
                                 Current native registry only permits get_page.
                                 Cost and remaining subscription quota are unknown.
                                 --max-usd never authorizes subscription calls.
-                                Batch/fleet/bootstrap/background grants are pending.
+                                Batch/fleet/bootstrap grants are pending.
 
   --max-usd N|off               Hard cap. Default 5.00. Preflight refuses
                                 if estimate exceeds. A model with no price
