@@ -30,9 +30,16 @@ import { writePageThrough, type WriteThroughResult } from '../core/write-through
 import { randomBytes } from 'crypto';
 import { legacyNestedErrorDocument } from '../core/agent-output.ts';
 import { CapFlagError, mergeCapFlag, parseCapFlag, type CapFlag } from '../core/budget/cap-flag.ts';
+import { withBrainstormAllowance, BRAINSTORM_ALLOWANCE_HELP } from '../core/brainstorm/codex-local-grant.ts';
+import { codexSubscriptionContext } from '../core/ai/subscription-context.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { publishBrainstormResult } from '../core/brainstorm/codex-publication.ts';
+import { resolveSourceWithTier, localFederatedSourceIds, ALL_SOURCES } from '../core/source-resolver.ts';
+import { digest } from '../core/persistence/digest.ts';
 
 export interface BrainstormCliArgs {
   question?: string;
+  source?: string;
   json: boolean;
   save?: boolean;
   yes: boolean;
@@ -66,7 +73,11 @@ export function parseBrainstormArgs(args: string[]): BrainstormCliArgs {
   let i = 0;
   while (i < args.length) {
     const arg = args[i];
-    if (arg === '--help' || arg === '-h') {
+    if (arg === '--source') {
+      const value = args[++i];
+      if (!value || value.startsWith('--') || out.source !== undefined) { out.error = '--source requires one source ID'; return out; }
+      out.source = value;
+    } else if (arg === '--help' || arg === '-h') {
       out.help = true;
     } else if (arg === '--json') {
       out.json = true;
@@ -228,7 +239,7 @@ async function runBrainstormCli(
 ): Promise<void> {
   const parsed = parseBrainstormArgs(args);
   if (parsed.help) {
-    console.log(help);
+    console.log(help + BRAINSTORM_ALLOWANCE_HELP);
     return;
   }
   if (parsed.error) {
@@ -285,12 +296,16 @@ async function runBrainstormCli(
   // after a judge failure then hands back the slug the failed run saved
   // under, and the re-scored page overwrites it instead of forking a second
   // page under a fresh nonce.
-  const shouldSave = parsed.save ?? profile.default_save;
-  const freshSlug = buildIdeaSlug(parsed.question, profile.label);
+  const privateMode = !!readPrivateCodexConfig();
+  const shouldSave = privateMode && parsed.json ? false : parsed.save ?? profile.default_save;
+  const freshSlug = privateMode ? `wiki/ideas/${profile.label}-${digest([codexSubscriptionContext()?.runId,parsed.question]).slice(0,24)}` : buildIdeaSlug(parsed.question, profile.label);
   let result;
   try {
+    const scope = privateMode ? await resolveSourceWithTier(engine, parsed.source ?? null) : undefined;
+    const sourceId = scope ? (scope.source_id === ALL_SOURCES ? undefined : scope.source_id) : parsed.source;
+    const sourceIds = scope ? await localFederatedSourceIds(engine, scope.source_id, scope.tier) : undefined;
     result = await runBrainstorm(engine, config, {
-      question: parsed.question,
+      question: parsed.question, sourceId, sourceIds,
       profile: effectiveProfile,
       skipCostPreview: skipPreview,
       ideaSlug: shouldSave ? freshSlug : undefined,
@@ -331,6 +346,12 @@ async function runBrainstormCli(
   console.log(md);
 
   if (shouldSave) {
+    if (result.codex_run) {
+      if (!result.ideas.length) { console.log('No grounded ideas to save.'); return; }
+      const saved = await publishBrainstormResult(engine, result);
+      console.log(`Saved: ${saved.slug} (receipt ${saved.request_id})`);
+      return;
+    }
     const slug = result.idea_slug ?? freshSlug;
     const title = `${profile.label === 'lsd' ? 'LSD' : 'Brainstorm'}: ${parsed.question.slice(0, 100)}`;
     // Build ONE frontmatter object and render via the canonical serializer so
@@ -483,10 +504,10 @@ export function buildIdeaSlug(
 
 /** CLI entry: `gbrain brainstorm`. */
 export async function runBrainstormCommand(engine: BrainEngine, args: string[]): Promise<void> {
-  return runBrainstormCli(engine, args, BRAINSTORM_PROFILE, BRAINSTORM_HELP);
+  return withBrainstormAllowance(engine, args, clean => runBrainstormCli(engine, clean, BRAINSTORM_PROFILE, BRAINSTORM_HELP));
 }
 
 /** CLI entry: `gbrain lsd`. */
 export async function runLsdCommand(engine: BrainEngine, args: string[]): Promise<void> {
-  return runBrainstormCli(engine, args, LSD_PROFILE, LSD_HELP);
+  return withBrainstormAllowance(engine, args, clean => runBrainstormCli(engine, clean, LSD_PROFILE, LSD_HELP));
 }

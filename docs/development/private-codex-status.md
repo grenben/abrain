@@ -474,10 +474,13 @@ binding. Pure keyword retrieval and help remain owner-free. Existing identical
 expired grants export receipts only. Installed configuration, services and
 production data remain unchanged; live runtime qualification is still required.
 
-## Brainstorm judge checkpoint
+## Brainstorm pipeline checkpoint
 
-The real judge entrypoint now uses native structured Codex calls in strict mode,
-with complete ID coverage, host scoring, bounded sequential chunks and durable
-accepted-chunk reuse. This closes the judge transport/validation gap; the outer
-brainstorm/LSD generation, budgets, recovery and publication integration remains
-partial. See [scope and evidence](private-codex-brainstorm.md).
+The real brainstorm/LSD dispatcher now uses native structured crosses and judges,
+durable source/evidence selection, owner leases, accepted-result recovery and
+protocol-5 prepared publication in strict private mode. Local CLI allowances
+bind explicit attempts, turns and deadlines; auxiliary USD budgets are separate.
+Judgments retain complete ID coverage, host scoring and accepted-chunk reuse.
+Migration v238 is registered for both engines. Multi-fixture evaluation admission,
+producer coverage and live runtime qualification remain incomplete. Installed
+GBrain is unchanged. See [scope and evidence](private-codex-brainstorm.md).

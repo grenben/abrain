@@ -258,6 +258,7 @@ import { v254 } from './v254-codex-think-ab-trials.ts';
 import { v255 } from './v255-precise-auxiliary-spend.ts';
 import { v256 } from './v256-codex-proposal-cache.ts';
 import { v257 } from './v257-codex-eval-results.ts';
+import { v258 } from './v258-codex-brainstorm-runs.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -514,4 +515,5 @@ export const MIGRATIONS: Migration[] = [
   v255,
   v256,
   v257,
+  v258,
 ];

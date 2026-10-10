@@ -3,6 +3,8 @@
 [Subsystem index](../KEY_FILES.md). Read only the entries relevant to your change.
 Current behavior and load-bearing invariants; history belongs in Git and CHANGELOG.
 The page operations that submit through this layer are in [Core Services (2/3)](core-services-2.md).
+
+- `src/core/brainstorm/codex-publication{,-guard,-prepare}.ts` — protocol 5 for retained native brainstorm page plans. Migration v258 extends the journal protocol guard on both engines. Admission and commit validate the retained canonical request, source authority, optional job claim and evidence revisions; canonical file effects and provenance use the existing coordinator and receipts. Older consumers refuse the new protocol.
 Connector ingestion, item holds, checkpoint validation and the single-write fast path (`switches.ts`) continue in [Core Persistence (continued)](core-persistence-continued.md).
 Managed facts extraction (withdrawn-candidate skip and recovery, conversation facts batches, the unmanaged derived index) is in [Core Persistence (managed facts)](core-persistence-facts.md).
 

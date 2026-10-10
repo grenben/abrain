@@ -74,7 +74,7 @@ export interface PerFixtureResult {
   /** Did the domain-bank surface enough prefixes? D11 sparse signal. */
   short_of_target: boolean;
   /** Cost in USD (actual). */
-  cost_usd: number;
+  cost_usd: number | null;
   /** True iff judge failed mid-run for this fixture. */
   judge_failed: boolean;
 }
@@ -95,7 +95,7 @@ export interface BrainstormEvalReport {
   verdict: 'pass' | 'fail' | 'inconclusive';
   /** Reasons supporting the verdict. */
   reasons: string[];
-  total_cost_usd: number;
+  total_cost_usd: number | null;
 }
 
 export interface EvalBrainstormCliArgs {
@@ -332,7 +332,7 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
   const realSlugs = await loadRealSlugs(engine);
 
   const perFixture: PerFixtureResult[] = [];
-  let totalCost = 0;
+  let totalCost: number | null = 0;
   for (const [idx, fix] of slice.entries()) {
     if (!parsed.json) {
       console.error(`[eval-brainstorm] ${idx + 1}/${slice.length}: ${fix.question.slice(0, 60)}...`);
@@ -345,8 +345,9 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
       });
       const summary = summarizeFixture(fix.question, result, realSlugs);
       perFixture.push(summary);
-      totalCost += summary.cost_usd;
+      totalCost = totalCost === null || summary.cost_usd === null ? null : totalCost + summary.cost_usd;
     } catch (err) {
+      totalCost = null;
       const msg = err instanceof Error ? err.message : String(err);
       if (!parsed.json) {
         console.error(`[eval-brainstorm] fixture ${idx + 1} failed: ${msg}`);
@@ -359,7 +360,7 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
         mean_usefulness: Number.NaN,
         grounding_rate: 0,
         short_of_target: false,
-        cost_usd: 0,
+        cost_usd: null,
         judge_failed: true,
       });
     }
@@ -388,7 +389,7 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
     console.log(`Distance:   ${aggregate.distance.toFixed(3)} (threshold ${thresholds.distance_min})`);
     console.log(`Usefulness: ${aggregate.usefulness.toFixed(2)} (threshold ${thresholds.usefulness_min})`);
     console.log(`Grounding:  ${aggregate.grounding.toFixed(3)} (threshold ${thresholds.grounding_min})`);
-    console.log(`Cost:       $${totalCost.toFixed(2)}`);
+    console.log(`Cost:       ${totalCost === null ? 'unknown' : '$'+totalCost.toFixed(2)}`);
     console.log(`Verdict:    ${verdict.toUpperCase()}`);
     for (const r of reasons) {
       console.log(`  - ${r}`);

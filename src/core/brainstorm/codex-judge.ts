@@ -13,10 +13,7 @@ const clean = (value: unknown, max: number): value is string => typeof value ===
   value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 const invalid = (): never => { throw new CodexProposalError('invalid_input'); };
 
-/** Sequential native judging. A malformed or incomplete chunk never becomes a rejection. */
-export async function runCodexBrainstormJudge(config: JudgeConfig, ideas: JudgeIdea[], options: RunJudgeOptions): Promise<JudgeResult> {
-  const host = codexSubscriptionContext();
-  if (!host) throw new SubscriptionAdmissionError('subscription_required');
+export function validateCodexBrainstormJudgeInput(config:JudgeConfig,ideas:JudgeIdea[],options:RunJudgeOptions):void {
   const size = options.maxIdeasPerCall ?? 32;
   if (options.chatFn || !Number.isSafeInteger(size) || size < 1 || size > 1000 || !ideas.length || ideas.length > 512 ||
       new Set(ideas.map(i=>i.id)).size !== ideas.length || ideas.some(i=>!clean(i.id,80) || !/^[A-Za-z0-9._:-]+$/.test(i.id) ||
@@ -26,6 +23,14 @@ export async function runCodexBrainstormJudge(config: JudgeConfig, ideas: JudgeI
       config.rejectIfResistanceAbove!==undefined && (!Number.isFinite(config.rejectIfResistanceAbove) || config.rejectIfResistanceAbove<1 || config.rejectIfResistanceAbove>5) ||
       config.extraInstructions!==undefined && !clean(config.extraInstructions,4000) ||
       options.activeBiasTags!==undefined && (options.activeBiasTags.length>32 || options.activeBiasTags.some(t=>!clean(t,160)))) invalid();
+}
+
+/** Sequential native judging. A malformed or incomplete chunk never becomes a rejection. */
+export async function runCodexBrainstormJudge(config: JudgeConfig, ideas: JudgeIdea[], options: RunJudgeOptions): Promise<JudgeResult> {
+  const host = codexSubscriptionContext();
+  if (!host) throw new SubscriptionAdmissionError('subscription_required');
+  validateCodexBrainstormJudgeInput(config,ideas,options);
+  const size=options.maxIdeasPerCall??32;
   // Capture mutable caller input before the first asynchronous read.
   const snapshot = JSON.parse(JSON.stringify({config,ideas,biases:options.activeBiasTags??[]})) as {config:JudgeConfig;ideas:JudgeIdea[];biases:string[]};
   if (Buffer.byteLength(JSON.stringify(snapshot))>1048576) invalid();

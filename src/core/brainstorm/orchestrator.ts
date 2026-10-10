@@ -86,6 +86,8 @@ import {
   type CheckpointCross,
 } from './checkpoint.ts';
 import { resolveOwnerHolder } from '../owner-holder.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexBrainstorm } from './codex-run.ts';
 
 export { BudgetExhausted };
 
@@ -231,6 +233,9 @@ export interface BrainstormOptions {
 
 /** One idea emitted to the user, with citation transparency (D6). */
 export interface BrainstormIdea {
+  close_source_id?: string | null;
+  far_source_id?: string;
+  evidence?: Array<{source_id:string;slug:string;page_id:number;revision:string;quote:string}>;
   /** "01" .. "NN", stable within this run. */
   id: string;
   /** Free-form idea body (2-4 sentences). */
@@ -250,6 +255,8 @@ export interface BrainstormIdea {
 }
 
 export interface BrainstormResult {
+  generation_status?: 'complete' | 'empty';
+  codex_run?: {run_id:string;request_hash:string};
   profile_label: 'brainstorm' | 'lsd';
   question: string;
   /** Question embedding model used for distance calc. */
@@ -257,9 +264,9 @@ export interface BrainstormResult {
   /** All generated ideas (passed + filtered). Callers can render only `.filter(i => i.passes)`. */
   ideas: BrainstormIdea[];
   /** Close-set citations for the run header. */
-  close_set: Array<{ slug: string; title: string | null }>;
+  close_set: Array<{ slug: string; title: string | null; source_id?: string }>;
   /** Far-set citations for the run header. */
-  far_set: Array<{ slug: string; title: string | null; distance_score: number; source: 'prefix-stratified' | 'corpus-sample' }>;
+  far_set: Array<{ slug: string; title: string | null; source_id?: string; distance_score: number; source: 'prefix-stratified' | 'corpus-sample' }>;
   /** Calibration context applied during judging; `null` on cold-start. */
   active_bias_tags: string[] | null;
   /** D11 sparse signal — true when domain-bank couldn't fill m_far. */
@@ -273,14 +280,14 @@ export interface BrainstormResult {
   idea_slug?: string;
   /** Cost actuals (codex r2 #10). */
   cost: {
-    estimated_usd: number;
-    actual_usd: number;
+    estimated_usd: number | null;
+    actual_usd: number | null;
     input_tokens: number;
     output_tokens: number;
     /** The USD cap the run held, or null when the user turned it off. */
     cap_usd: number | null;
     /** `user` for a cap flag (including off), `default` for the $5 default. */
-    cap_source: 'user' | 'default';
+    cap_source: 'user' | 'default' | 'subscription';
   };
 }
 
@@ -592,6 +599,7 @@ export async function runBrainstorm(
   // through unchanged. Per A3: reuses StructuredAgentError (the v0.19.0
   // envelope) rather than introducing a new BrainstormError class.
   try {
+    if (readPrivateCodexConfig()) return await runCodexBrainstorm(engine, config, opts);
     return await runBrainstormImpl(engine, config, opts);
   } catch (err) {
     // classifyBrainstormError returns the original error unchanged when
@@ -1139,7 +1147,7 @@ export function formatBrainstormMarkdown(
     lines.push('');
     lines.push(idea.text);
     lines.push('');
-    lines.push(`_Citation: \`${idea.close_slug}\` × \`${idea.far_slug}\` — distance ${idea.distance_score.toFixed(2)}_`);
+    lines.push(`_Citation: \`${idea.close_slug}\`${idea.close_source_id ? ` (source: ${idea.close_source_id})` : ''} × \`${idea.far_slug}\`${idea.far_source_id ? ` (source: ${idea.far_source_id})` : ''} — distance ${idea.distance_score.toFixed(2)}_`);
     if (idea.judge?.note) {
       lines.push(`_Judge note: ${idea.judge.note}_`);
     }
@@ -1164,7 +1172,7 @@ close_slugs: [${result.close_set.map((c) => `"${c.slug}"`).join(', ')}]
 far_slugs: [${result.far_set.map((f) => `"${f.slug}"`).join(', ')}]
 short_of_target: ${result.short_of_target}
 calibration_cold_start: ${result.active_bias_tags === null}${judgeFailed}${unscored}
-cost_usd: ${result.cost.actual_usd.toFixed(4)}
+cost_usd: ${result.cost.actual_usd?.toFixed(4) ?? 'null'}
 ---
 
 `;
@@ -1190,7 +1198,7 @@ export function buildBrainstormFrontmatterObject(
     far_slugs: result.far_set.map((f) => f.slug),
     short_of_target: result.short_of_target,
     calibration_cold_start: result.active_bias_tags === null,
-    cost_usd: Number(result.cost.actual_usd.toFixed(4)),
+    cost_usd: result.cost.actual_usd === null ? null : Number(result.cost.actual_usd.toFixed(4)),
   };
   if (result.judge_failed) {
     obj.judge_failed = true;

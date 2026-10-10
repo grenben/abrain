@@ -48,6 +48,8 @@ const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Flags that live deeper than the one-level module scan. Keep commented. */
 const EXTRA_FLAGS: Record<string, string[]> = {
+  // LSD re-exports brainstorm; its allowance parser lives in core/brainstorm/codex-local-grant.ts.
+  lsd: ['--codex-request-id', '--codex-max-attempts', '--codex-max-turns', '--codex-deadline', '--aux-max-usd'],
   // embed's pace knobs resolve inside src/core/pace-mode.ts (two levels deep).
   embed: ['--pace', '--pace-max-concurrency'],
   // sync shares the same pace surface via env/config plus CLI passthrough.

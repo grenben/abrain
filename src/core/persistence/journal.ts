@@ -32,7 +32,7 @@ export interface WriteAdmission {
   principal: Principal;
   operation: string;
   targetKind?: 'page' | 'skill_bundle';
-  protocolVersion?: 1 | 2 | 3 | 4;
+  protocolVersion?: 1 | 2 | 3 | 4 | 5;
   sourceId: string;
   sourceIncarnation: string;
   slug: string;
