@@ -23,6 +23,10 @@
       "code_edges_symbol.code_edges_symbol_pkey": "p PRIMARY KEY (id)",
       "code_edges_symbol.code_edges_symbol_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "code_edges_symbol.code_edges_symbol_unique": "u UNIQUE (from_chunk_id, to_symbol_qualified, edge_type)",
+      "codex_parked_jobs.codex_parked_jobs_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id)",
+      "codex_parked_jobs.codex_parked_jobs_pkey": "p PRIMARY KEY (job_id)",
+      "codex_parked_jobs.codex_parked_jobs_receipt_id_fkey": "f FOREIGN KEY (receipt_id) REFERENCES codex_upgrade_receipts(id)",
+      "codex_parked_jobs.codex_parked_jobs_replacement_job_id_fkey": "f FOREIGN KEY (replacement_job_id) REFERENCES minion_jobs(id)",
       "codex_subscription_attempts.codex_subscription_attempts_cached_input_tokens_check": "c CHECK ((cached_input_tokens >= 0))",
       "codex_subscription_attempts.codex_subscription_attempts_input_tokens_check": "c CHECK ((input_tokens >= 0))",
       "codex_subscription_attempts.codex_subscription_attempts_output_tokens_check": "c CHECK ((output_tokens >= 0))",
@@ -337,6 +341,7 @@
     "functions": {
       "bump_page_generation_clock_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=c40a0a3b86e640b6c8979976173dd93ae92c8c1b9a9e3595cae2af1e265328fe",
       "bump_page_generation_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=c4135ae3f74177aa71313a6c73f22bda7a298bbf12435a8def390212ae11466a",
+      "enforce_codex_job_parking()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=eb6d05a54229e603ff2ccb3e9cf3926b673561a5be7300920719c7cd985ed0ea",
       "enforce_codex_job_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=8abd250e40832cc7171832994d1c2e567efa13ee9a7c533c7c99f5fb73901d7d",
       "enforce_minion_queue_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=be82640d1979fc81dc812efb78bb3596ef536f656d20750e5e4aa19016bf4784",
       "gbrain_advance_page_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=ae793ff5263f7b76311e0c22593fb658db9f82e7b3781914421d9508b6da0e88",
@@ -375,6 +380,9 @@
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "code_edges_symbol": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_parked_jobs": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "codex_subscription_attempts": [
@@ -701,6 +709,7 @@
       "code_edges_chunk_unique": "CREATE UNIQUE INDEX code_edges_chunk_unique ON public.code_edges_chunk USING btree (from_chunk_id, to_chunk_id, edge_type)",
       "code_edges_symbol_pkey": "CREATE UNIQUE INDEX code_edges_symbol_pkey ON public.code_edges_symbol USING btree (id)",
       "code_edges_symbol_unique": "CREATE UNIQUE INDEX code_edges_symbol_unique ON public.code_edges_symbol USING btree (from_chunk_id, to_symbol_qualified, edge_type)",
+      "codex_parked_jobs_pkey": "CREATE UNIQUE INDEX codex_parked_jobs_pkey ON public.codex_parked_jobs USING btree (job_id)",
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
       "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
       "codex_subscription_runs_pkey": "CREATE UNIQUE INDEX codex_subscription_runs_pkey ON public.codex_subscription_runs USING btree (run_id)",
@@ -1154,6 +1163,16 @@
           "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_parked_jobs": {
+        "columns": [
+          "1 job_id integer/int4 NOT NULL",
+          "2 receipt_id uuid/uuid NOT NULL",
+          "3 previous_status text/text NOT NULL",
+          "4 replacement_job_id integer/int4 NULL",
+          "5 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
       },
       "codex_subscription_attempts": {
         "columns": [
@@ -2785,6 +2804,7 @@
     },
     "triggers": {
       "content_chunks.chunk_search_vector_trigger": "CREATE TRIGGER chunk_search_vector_trigger BEFORE INSERT OR UPDATE OF chunk_text, doc_comment, symbol_name_qualified ON public.content_chunks FOR EACH ROW EXECUTE FUNCTION update_chunk_search_vector()",
+      "minion_jobs.codex_job_parking": "CREATE TRIGGER codex_job_parking BEFORE INSERT OR DELETE OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_parking()",
       "minion_jobs.codex_job_protocol": "CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol()",
       "minion_jobs.minion_job_notify": "CREATE TRIGGER minion_job_notify AFTER INSERT OR UPDATE OF status ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION notify_minion_job_change()",
       "minion_jobs.minion_queue_protocol": "CREATE TRIGGER minion_queue_protocol BEFORE INSERT OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_minion_queue_protocol()",

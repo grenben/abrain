@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { CODEX_UPGRADE_SCHEMA_SQL } from '../src/core/ai/private-upgrade-schema.ts';
+import { CODEX_JOB_UPGRADE_SCHEMA_SQL } from '../src/core/minions/codex-upgrade-schema.ts';
 import { CODEX_ACTION_WRITE_SCHEMA_SQL } from '../src/core/persistence/codex-action-schema.ts';
 import { SUBSCRIPTION_JOB_SCHEMA_SQL } from '../src/core/minions/subscription-job-schema.ts';
 /**
@@ -116,6 +117,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/minions/subscription-job-schema.ts', expr: 'SUBSCRIPTION_JOB_SCHEMA_SQL', postgres: SUBSCRIPTION_JOB_SCHEMA_SQL, pglite: SUBSCRIPTION_JOB_SCHEMA_SQL },
   { source: 'src/core/persistence/codex-action-schema.ts', expr: 'CODEX_ACTION_WRITE_SCHEMA_SQL', postgres: CODEX_ACTION_WRITE_SCHEMA_SQL, pglite: CODEX_ACTION_WRITE_SCHEMA_SQL },
   { source: 'src/core/ai/private-upgrade-schema.ts', expr: 'CODEX_UPGRADE_SCHEMA_SQL', postgres: CODEX_UPGRADE_SCHEMA_SQL, pglite: CODEX_UPGRADE_SCHEMA_SQL },
+  { source: 'src/core/minions/codex-upgrade-schema.ts', expr: 'CODEX_JOB_UPGRADE_SCHEMA_SQL', postgres: CODEX_JOB_UPGRADE_SCHEMA_SQL, pglite: CODEX_JOB_UPGRADE_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;

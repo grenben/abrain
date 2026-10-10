@@ -29,6 +29,10 @@
       "code_edges_symbol.code_edges_symbol_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "code_edges_symbol.code_edges_symbol_unique": "u UNIQUE (from_chunk_id, to_symbol_qualified, edge_type)",
       "code_traversal_cache.code_traversal_cache_pkey": "p PRIMARY KEY (id)",
+      "codex_parked_jobs.codex_parked_jobs_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id)",
+      "codex_parked_jobs.codex_parked_jobs_pkey": "p PRIMARY KEY (job_id)",
+      "codex_parked_jobs.codex_parked_jobs_receipt_id_fkey": "f FOREIGN KEY (receipt_id) REFERENCES codex_upgrade_receipts(id)",
+      "codex_parked_jobs.codex_parked_jobs_replacement_job_id_fkey": "f FOREIGN KEY (replacement_job_id) REFERENCES minion_jobs(id)",
       "codex_publication_plans.codex_publication_plans_kind_check": "c CHECK ((kind = ANY (ARRAY['patterns'::text, 'synthesis'::text])))",
       "codex_publication_plans.codex_publication_plans_pkey": "p PRIMARY KEY (plan_id)",
       "codex_publication_plans.codex_publication_plans_protocol_version_check": "c CHECK ((protocol_version = 1))",
@@ -459,6 +463,7 @@
     "functions": {
       "bump_page_generation_clock_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=d3359bcd09cccd881585abd9eee81c3dcf4161d935164f7953f2e9fdef73ed3e",
       "bump_page_generation_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=78059745996cfbb72586a2e0e161635b96a62a5db9d0be5c710f4d437d994431",
+      "enforce_codex_job_parking()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=eb6d05a54229e603ff2ccb3e9cf3926b673561a5be7300920719c7cd985ed0ea",
       "enforce_codex_job_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=8abd250e40832cc7171832994d1c2e567efa13ee9a7c533c7c99f5fb73901d7d",
       "enforce_minion_queue_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=be82640d1979fc81dc812efb78bb3596ef536f656d20750e5e4aa19016bf4784",
       "gbrain_advance_page_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=ae793ff5263f7b76311e0c22593fb658db9f82e7b3781914421d9508b6da0e88",
@@ -521,6 +526,9 @@
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "code_traversal_cache": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_parked_jobs": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "codex_publication_plans": [
@@ -936,6 +944,7 @@
       "code_traversal_cache_key_idx": "CREATE UNIQUE INDEX code_traversal_cache_key_idx ON public.code_traversal_cache USING btree (symbol_qualified, depth, source_id)",
       "code_traversal_cache_pkey": "CREATE UNIQUE INDEX code_traversal_cache_pkey ON public.code_traversal_cache USING btree (id)",
       "code_traversal_cache_source_idx": "CREATE INDEX code_traversal_cache_source_idx ON public.code_traversal_cache USING btree (source_id)",
+      "codex_parked_jobs_pkey": "CREATE UNIQUE INDEX codex_parked_jobs_pkey ON public.codex_parked_jobs USING btree (job_id)",
       "codex_publication_pending": "CREATE UNIQUE INDEX codex_publication_pending ON public.codex_publication_plans USING btree (source_id, source_incarnation, kind) WHERE (state = 'accepted'::text)",
       "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
@@ -1562,6 +1571,16 @@
           "9 computed_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_parked_jobs": {
+        "columns": [
+          "1 job_id integer/int4 NOT NULL",
+          "2 receipt_id uuid/uuid NOT NULL",
+          "3 previous_status text/text NOT NULL",
+          "4 replacement_job_id integer/int4 NULL",
+          "5 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
       },
       "codex_publication_plans": {
         "columns": [
@@ -3716,6 +3735,7 @@
       "links.planner_stats_del": "CREATE TRIGGER planner_stats_del AFTER DELETE ON public.links REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION gbrain_count_modifications()",
       "links.planner_stats_ins": "CREATE TRIGGER planner_stats_ins AFTER INSERT ON public.links REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION gbrain_count_modifications()",
       "links.planner_stats_upd": "CREATE TRIGGER planner_stats_upd AFTER UPDATE ON public.links REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION gbrain_count_modifications()",
+      "minion_jobs.codex_job_parking": "CREATE TRIGGER codex_job_parking BEFORE INSERT OR DELETE OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_parking()",
       "minion_jobs.codex_job_protocol": "CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol()",
       "minion_jobs.minion_queue_protocol": "CREATE TRIGGER minion_queue_protocol BEFORE INSERT OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_minion_queue_protocol()",
       "needs_rederive.trust_generation_insert": "CREATE CONSTRAINT TRIGGER trust_generation_insert AFTER INSERT ON public.needs_rederive DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (true) EXECUTE FUNCTION gbrain_bump_trust_generation()",

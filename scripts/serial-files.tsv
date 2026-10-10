@@ -18,6 +18,7 @@ test/agent-operator-gate-fixes.serial.test.ts	global-state	global-state: binds l
 test/agent-recovery-consent-journeys.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME)
 test/ai/codex-actions.serial.test.ts	R1	R1: shared action contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-pins.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME), global fetch, atomic-write and output spies
+test/ai/codex-upgrade-jobs.serial.test.ts	R1	R1: shared upgrade contract mutates GBRAIN_HOME, global fetch and CLI output spies
 test/ai/codex-publication.serial.test.ts	R1	R1: shared publication contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-synthesis.serial.test.ts	R1	R1: shared synthesis contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/gateway-ledger-records.serial.test.ts	global-state	global-state: process-wide test seams __setChatTransportForTests, __setEmbedTransportForTests, __setRerankTransportForTests; configureGateway changes the process-wide AI gateway
