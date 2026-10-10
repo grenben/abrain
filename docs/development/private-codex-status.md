@@ -375,3 +375,12 @@ batches and answers, fences writes, blocks replacement of unfinished work, and
 starts cooldown only after all selected answers and required saves complete.
 Installed capabilities and activation remain unchanged; runtime qualification,
 operator reconciliation and remaining generation coverage are incomplete.
+
+## Calibration A/B follow-up
+
+[Native calibration A/B trials](private-codex-think-ab.md) connect the production
+think path to retained v254 comparisons and explicit atomic preference receipts.
+Profile/evidence drift, failures and partial trials do not become votes. Local
+CLI generation uses explicit subscription allowances; inspection and rating are
+model-free. Runtime isolation, full crash acceptance, operator recovery and the
+remaining generation inventory remain incomplete; nothing is installed or activated.

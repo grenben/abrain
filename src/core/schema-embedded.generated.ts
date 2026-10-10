@@ -3251,4 +3251,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS codex_auto_think_pending ON codex_auto_think_r
 ALTER TABLE codex_auto_think_runs ENABLE ROW LEVEL SECURITY;
 CREATE INDEX IF NOT EXISTS codex_auto_think_cooldown ON codex_auto_think_runs(source_id,completed_at DESC) WHERE state='complete';
 -- END GENERATED from src/core/cycle/auto-think-schema.ts (AUTO_THINK_SCHEMA_SQL)
+
+-- BEGIN GENERATED from src/core/calibration/think-ab-schema.ts (THINK_AB_SCHEMA_SQL). Edit that file, then run: bun run build:schema
+CREATE TABLE IF NOT EXISTS codex_think_ab_trials (
+  trial_id UUID PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  source_incarnation UUID NOT NULL REFERENCES sources(incarnation) ON DELETE CASCADE,
+  input_hash TEXT NOT NULL,
+  binding JSONB NOT NULL,
+  baseline JSONB,
+  calibrated JSONB,
+  result_id BIGINT UNIQUE REFERENCES think_ab_results(id),
+  state TEXT NOT NULL DEFAULT 'accepted' CHECK (state IN ('accepted','ready','rated')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (state='accepted' OR baseline IS NOT NULL AND calibrated IS NOT NULL),
+  CHECK ((state='rated')=(result_id IS NOT NULL))
+);
+ALTER TABLE codex_think_ab_trials ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS codex_think_ab_source ON codex_think_ab_trials(source_id,created_at DESC);
+-- END GENERATED from src/core/calibration/think-ab-schema.ts (THINK_AB_SCHEMA_SQL)
 `;

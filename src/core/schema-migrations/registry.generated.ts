@@ -254,6 +254,7 @@ import { v250 } from './v250-codex-take-proposal-evidence.ts';
 import { v251 } from './v251-codex-calibration-evidence.ts';
 import { v252 } from './v252-codex-think-publications.ts';
 import { v253 } from './v253-codex-auto-think-runs.ts';
+import { v254 } from './v254-codex-think-ab-trials.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -506,4 +507,5 @@ export const MIGRATIONS: Migration[] = [
   v251,
   v252,
   v253,
+  v254,
 ];

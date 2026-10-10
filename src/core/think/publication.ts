@@ -32,6 +32,15 @@ export async function captureThinkPublicationEvidence(gather: ThinkGatherResult)
     if (state)
         state.evidence = await captureThinkEvidence(state.ctx, state.opts, gather);
 }
+/** Capture the same bounded evidence identities for retained read-only comparisons. */
+export async function withThinkEvidence(ctx: OperationContext, opts: RunThinkOpts, run: () => Promise<ThinkResult>): Promise<{result:ThinkResult;evidence:ThinkEvidence[]}> {
+    const state:PendingThink={ctx,opts};
+    return pending.run(state,async()=>{
+        const result=await run();
+        if(!state.evidence)throw new OperationError('retrieval_failed','Think evidence was not captured.','Use the native private think path.');
+        return {result,evidence:state.evidence};
+    });
+}
 export function thinkPublicationContext(engine: BrainEngine, opts: RunThinkOpts): OperationContext {
     return opts.publicationContext ?? { engine, config: loadConfig() ?? { engine: engine.kind }, remote: false, sourceId: opts.sourceId ?? 'default', dryRun: false, logger: { info() { }, warn() { }, error() { } } };
 }

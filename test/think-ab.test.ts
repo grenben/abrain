@@ -115,6 +115,13 @@ describe('runAbTrial', () => {
     expect(insert!.params[6]).toBe('first trial');
   });
 
+  test.each([{answer:''},{answer:'degraded answer',synthesisOk:false}])('failed or empty answers never reach preference or result storage',async answer=>{
+    const {engine,sqls}=buildMockEngine({});let preferences=0;
+    await expect(runAbTrial({engine,sourceId:'default',question:'q',thinkRunner:async()=>answer,
+      preferenceResolver:async()=>{preferences++;return 'tie';}})).rejects.toMatchObject({code:'invalid_params'});
+    expect(preferences).toBe(0);expect(sqls.some(s=>s.sql.includes('INSERT'))).toBe(false);
+  });
+
   test('throws when thinkRunner not provided', async () => {
     const { engine } = buildMockEngine({});
     try {

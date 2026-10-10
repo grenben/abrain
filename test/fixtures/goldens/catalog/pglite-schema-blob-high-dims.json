@@ -35,6 +35,15 @@
       "codex_subscription_runs.codex_subscription_runs_max_turns_check": "c CHECK (((max_turns >= 1) AND (max_turns <= 1000)))",
       "codex_subscription_runs.codex_subscription_runs_pkey": "p PRIMARY KEY (run_id)",
       "codex_subscription_runs.codex_subscription_runs_repairs_check": "c CHECK (((repairs >= 0) AND (repairs <= 1)))",
+      "codex_think_ab_trials.codex_think_ab_trials_check": "c CHECK (((state = 'accepted'::text) OR ((baseline IS NOT NULL) AND (calibrated IS NOT NULL))))",
+      "codex_think_ab_trials.codex_think_ab_trials_check1": "c CHECK (((state = 'rated'::text) = (result_id IS NOT NULL)))",
+      "codex_think_ab_trials.codex_think_ab_trials_pkey": "p PRIMARY KEY (trial_id)",
+      "codex_think_ab_trials.codex_think_ab_trials_result_id_fkey": "f FOREIGN KEY (result_id) REFERENCES think_ab_results(id)",
+      "codex_think_ab_trials.codex_think_ab_trials_result_id_key": "u UNIQUE (result_id)",
+      "codex_think_ab_trials.codex_think_ab_trials_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_think_ab_trials.codex_think_ab_trials_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_think_ab_trials.codex_think_ab_trials_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_think_ab_trials.codex_think_ab_trials_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'ready'::text, 'rated'::text])))",
       "codex_think_publications.codex_think_publications_pkey": "p PRIMARY KEY (plan_id)",
       "codex_think_publications.codex_think_publications_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
       "codex_think_publications.codex_think_publications_run_id_request_key_key": "u UNIQUE (run_id, request_key)",
@@ -388,6 +397,9 @@
       "codex_subscription_runs": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_think_ab_trials": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "codex_think_publications": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -716,6 +728,9 @@
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
       "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
       "codex_subscription_runs_pkey": "CREATE UNIQUE INDEX codex_subscription_runs_pkey ON public.codex_subscription_runs USING btree (run_id)",
+      "codex_think_ab_source": "CREATE INDEX codex_think_ab_source ON public.codex_think_ab_trials USING btree (source_id, created_at DESC)",
+      "codex_think_ab_trials_pkey": "CREATE UNIQUE INDEX codex_think_ab_trials_pkey ON public.codex_think_ab_trials USING btree (trial_id)",
+      "codex_think_ab_trials_result_id_key": "CREATE UNIQUE INDEX codex_think_ab_trials_result_id_key ON public.codex_think_ab_trials USING btree (result_id)",
       "codex_think_publications_pkey": "CREATE UNIQUE INDEX codex_think_publications_pkey ON public.codex_think_publications USING btree (plan_id)",
       "codex_think_publications_run_id_request_key_key": "CREATE UNIQUE INDEX codex_think_publications_run_id_request_key_key ON public.codex_think_publications USING btree (run_id, request_key)",
       "codex_upgrade_plan_hash": "CREATE INDEX codex_upgrade_plan_hash ON public.codex_upgrade_receipts USING btree (kind, plan_hash)",
@@ -1195,6 +1210,22 @@
           "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_think_ab_trials": {
+        "columns": [
+          "1 trial_id uuid/uuid NOT NULL",
+          "2 run_id text/text NOT NULL",
+          "3 source_id text/text NOT NULL",
+          "4 source_incarnation uuid/uuid NOT NULL",
+          "5 input_hash text/text NOT NULL",
+          "6 binding jsonb/jsonb NOT NULL",
+          "7 baseline jsonb/jsonb NULL",
+          "8 calibrated jsonb/jsonb NULL",
+          "9 result_id bigint/int8 NULL",
+          "10 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "11 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
       },
       "codex_think_publications": {
         "columns": [

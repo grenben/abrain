@@ -88,8 +88,9 @@ and non-secret allowance summary. It shares workers' `codex-subscription` lane.
 Ordinary `gbrain calibration` reads remain model-free. These flags are source
 interfaces; they are not instructions to activate the installed executable.
 
-Calibration as a whole remains **partial**: the A/B harness depends on unfinished
-private `think` acceptance. Full scheduled-worker dispatch, real process crashes,
+Calibration as a whole remains **partial**. The subsequent
+[native A/B checkpoint](private-codex-think-ab.md) implements paired trials,
+retained evidence, explicit preferences and source-scoped reports. Full scheduled-worker dispatch, real process crashes,
 native runtime isolation and live subscription behavior are not established by
 these focused tests. Aggregate hashes represent observed input snapshots; they
 are not a historical corpus archive or a general serializable database snapshot.

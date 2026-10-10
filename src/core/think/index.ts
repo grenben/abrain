@@ -161,6 +161,7 @@ export interface RunThinkOpts {
 
 /** Structured response from the LLM (matches the schema declared in prompt.ts). */
 export interface ThinkResponse {
+  evidence_hash?: string;
   answer: string;
   citations: Array<{ page_slug: string; row_num: number | null; citation_index?: number }>;
   gaps: string[];
@@ -182,6 +183,8 @@ export type ThinkSynthesisStatus =
   | 'llm_error';        // client.create() threw (429 / timeout / 5xx / network)
 
 export interface ThinkResult {
+  /** Native schema-bound prompt digest, for retained comparison provenance. */
+  codex_evidence_hash?: string;
   /** Host-retained publication reference, stripped from agent-facing output. */
   codex_publication?: { plan_id: string; payload_hash: string };
   question: string;
@@ -877,7 +880,7 @@ async function runThinkPipeline(engine: BrainEngine, opts: RunThinkOpts): Promis
     : null;
 
   return {
-    question: opts.question,
+    question: opts.question, ...(privateMode ? {codex_evidence_hash:response.evidence_hash} : {}),
     answer: response.answer, ...(synthesisStatus === 'ok' ? await groundThinkAnswer(engine, response.answer, [...(privateMode ? [] : [opts.question]), pagesBlock, takesBlock, graphBlock ?? '', trajectoryBlock], warnings) : {}),
     citations: resolved.citations,
     gaps: response.gaps,

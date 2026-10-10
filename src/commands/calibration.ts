@@ -19,6 +19,7 @@
  */
 
 import type { BrainEngine } from '../core/engine.ts';
+import { runCalibrationAb } from './calibration-ab.ts';
 import { regenerateCalibration } from './calibration-subscription.ts';
 import { sourceScopeOpts, type OperationContext } from '../core/operations.ts';
 import type { GBrainConfig } from '../core/config.ts';
@@ -68,7 +69,7 @@ export async function getLatestProfile(
   }
 
   if (opts.requirePublished) sql += ` AND published=true`;
-  sql += ` ORDER BY generated_at DESC LIMIT 1`;
+  sql += ` ORDER BY generated_at DESC, id DESC LIMIT 1`;
 
   const rows = await engine.executeRaw<CalibrationProfileRow>(sql, params);
   if (!rows[0]) return null;
@@ -168,6 +169,7 @@ export async function runCalibration(
   args: string[],
   config: GBrainConfig,
 ): Promise<void> {
+  if (await runCalibrationAb(engine,args)) return;
   const { opts } = parseArgs(args);
   const holder = resolveOwnerHolder({
     override: opts.holder,
@@ -219,7 +221,7 @@ export async function runCalibration(
     const { buildAbReport, formatAbReport } = await import('../core/calibration/think-ab.ts');
     const daysArg = args[args.indexOf('--days') + 1];
     const days = daysArg ? Math.max(1, parseInt(daysArg, 10) || 30) : 30;
-    const report = await buildAbReport(engine, { days });
+    const report = await buildAbReport(engine, { days, sourceId });
     if (opts.json) {
       process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     } else {

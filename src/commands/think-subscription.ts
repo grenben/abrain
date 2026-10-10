@@ -17,7 +17,7 @@ export function hasThinkAllowanceFlags(args: string[]): boolean {
     return args.some(arg => arg.startsWith('--codex-') || arg === '--max-usd' || arg.startsWith('--max-usd='));
 }
 /** Host-only local CLI consent wraps both inference and required publication. */
-export async function withThinkSubscription<T>(engine: BrainEngine, args: string[], opts: RunThinkOpts, run: () => Promise<T>): Promise<T> {
+export async function withThinkSubscription<T>(engine: BrainEngine, args: string[], opts: RunThinkOpts, run: () => Promise<T>, purpose: 'think' | 'calibration-ab' = 'think'): Promise<T> {
     const policy = readPrivateCodexConfig();
     if (!policy || codexSubscriptionContext()) {
         if (hasThinkAllowanceFlags(args))
@@ -50,7 +50,7 @@ export async function withThinkSubscription<T>(engine: BrainEngine, args: string
         }>('SELECT id,incarnation FROM sources WHERE id=ANY($1::text[]) AND NOT archived ORDER BY id FOR SHARE', [ids]);
         if (sources.length !== ids.length)
             throw new SubscriptionAdmissionError('subscription_identity_conflict');
-        const prefix = `codex-think:${requestId.toLowerCase()}:`;
+        const prefix = `codex-${purpose}:${requestId.toLowerCase()}:`;
         const id = prefix + digest({ input, sources, model, bin: policy.bin, auxiliaryUsd: capUsd ?? null, embedding: !!embedQuestion });
         const previous = await tx.executeRaw<{
             run_id: string;

@@ -13,7 +13,7 @@ export const PRIVATE_GENERATION_ROLES = [
   ['take-proposals',undefined,'reasoning','cycle/propose-takes.ts'],
   ['take-calibration',undefined,'reasoning','cycle/calibration-profile.ts'],
   ['calibration-voice-judge',undefined,'utility','calibration/voice-gate.ts'],
-  ['calibration-think-ab','models.think','deep','calibration/think-ab.ts'],
+  ['calibration-think-ab','models.think','deep','calibration/think-ab-codex.ts'],
   ['think','models.think','deep','think/index.ts'],
   ['auto-think','models.auto_think','deep','cycle/auto-think.ts'],
   ['query-expansion','models.expansion','utility','ai/gateway.ts'],
