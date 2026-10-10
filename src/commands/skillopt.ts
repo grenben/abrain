@@ -28,7 +28,9 @@ import type { BrainEngine } from '../core/engine.ts';
 import type { RunReceipt, SkillOptOpts } from '../core/skillopt/types.ts';
 import { capNotice, mergeCapFlag, parseCapFlag, type CapFlag } from '../core/budget/cap-flag.ts';
 import { withSkillOptAllowance, type LocalOptimizerScope } from '../core/skillopt/codex-local-grant.ts';
-import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
+import { CodexProposalError } from '../core/ai/providers/codex-contract.ts';
+import { readPrivateCodexConfig, PrivateRoutingError } from '../core/ai/private-policy.ts';
 
 /** Per-run cost cap when no cap flag is passed (a `default` cap: unpriced models warn and run). */
 const DEFAULT_SKILLOPT_MAX_COST_USD = 5.0;
@@ -140,7 +142,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
   if (parsed.bootstrapFromRouting || parsed.bootstrapFromSkill) {
     try {
       const run = await runGuardedBootstrap({
-        engine,
+        operationContext: scope.operationContext, engine,
         mode: parsed.bootstrapFromRouting ? 'routing' : 'skill',
         skillsDir,
         skillName: parsed.skillName,
@@ -152,7 +154,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
         maxCostUsd: parsed.maxCostUsd,
         maxCostSource: parsed.maxCostSource,
       });
-      if (run.dry_run) exitDryRun(run.models_plan, run.strict, parsed.json, {});
+      if (run.dry_run) { exitDryRun(run.models_plan, run.strict, parsed.json, {}); return; }
       if (parsed.json) {
         process.stdout.write(JSON.stringify({ ok: true, ...run.result, cost_usd: run.cost_usd, models_plan: run.models_plan }) + '\n');
       }
@@ -160,6 +162,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
     } catch (err) {
       handleErrorAndExit(err, parsed.json, 2);
     }
+    return;
   }
 
   // ── F4: --all batch mode ────────────────────────────────────────────────
@@ -317,6 +320,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
         return;
       } catch (err) {
         handleErrorAndExit(err, parsed.json, 2);
+        return;
       }
     }
   }
@@ -641,6 +645,8 @@ function mustFloat(v: string | undefined, flag: string): number {
 function handleErrorAndExit(err: unknown, json: boolean, exitCode: number): never {
   if (json) {
     const envelope = err instanceof StructuredAgentError ? err.envelope : serializeError(err);
+    if (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError) envelope.code = err.code;
+    else if (err instanceof CodexProposalError) envelope.code = `codex_${err.reason}`;
     process.stderr.write(JSON.stringify({ ok: false, error: envelope }) + '\n');
   } else {
     process.stderr.write(`gbrain skillopt: ${err instanceof Error ? err.message : String(err)}\n`);

@@ -36,8 +36,9 @@ export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string
     return run(rest, {});
   }
   // These producers have separate material-input/recovery requirements; never reinterpret a grant.
-  if (rest.some(a => ['--all', '--target-models', '--bootstrap-from-skill', '--bootstrap-from-routing', '--resume'].includes(a)))
+  if (rest.some(a => ['--all', '--target-models', '--resume'].includes(a)))
     bad('This private CLI grant currently supports a single optimizer run.');
+  if (shared.target && rest.some(a => ['--bootstrap-from-skill', '--bootstrap-from-routing'].includes(a))) bad('Shared benchmark publication requires a separate reviewed bundle.');
   if (rest.includes('--follow') && !rest.includes('--background')) bad('--follow requires --background.');
   if (!source || !prefixes.length || new Set(prefixes).size !== prefixes.length) bad('Private optimizer reads need an explicit source and distinct read prefixes.');
   validateCodexReadJob({ action_protocol: CODEX_READ_PROTOCOL, prompt: 'scope preflight', source_id: source,
@@ -68,13 +69,17 @@ export function localOptimizerAllowance() {
 }
 
 /** Same transaction as the optimizer input binding; failed preflight cannot leave an orphan grant. */
-export async function ensureLocalOptimizerGrant(tx: BrainEngine, runId: string): Promise<void> {
+export async function ensureLocalOptimizerGrant(tx: BrainEngine, runId: string, kind: 'optimizer' | 'bootstrap' = 'optimizer'): Promise<void> {
   const grant = pending.getStore(); if (!grant) return;
   if (runId !== `codex-skillopt:${grant.requestId}`) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
   await declareDurablePersistence(tx);
   if ((await tx.executeRaw('SELECT request_id FROM codex_skillopt_submissions WHERE request_id=$1::uuid', [grant.requestId])).length)
     throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  const incompatible = kind === 'optimizer'
+    ? await tx.executeRaw('SELECT run_id FROM codex_skillopt_bootstraps WHERE run_id=$1', [runId])
+    : await tx.executeRaw('SELECT run_id FROM codex_skillopt_runs WHERE run_id=$1 UNION SELECT run_id FROM codex_shared_skill_optimizations WHERE run_id=$1', [runId]);
+  if (incompatible.length) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const [prior] = await tx.executeRaw<{ account_lane: string; max_attempts: number; max_turns: number; deadline: Date | string; parent_run_id: string | null }>(
     'SELECT account_lane,max_attempts,max_turns,deadline,parent_run_id FROM codex_subscription_runs WHERE run_id=$1 FOR UPDATE', [runId]);
   if (prior) {

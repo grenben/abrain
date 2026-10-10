@@ -3,11 +3,12 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [shared optimizer CLI and workers](private-codex-shared-producers.md)
-connects the exact approved target, common semantic preflight and durable request
-identity to canonical worker publication. The existing migrations 263–264 retain
-jobs and shared plans. Cycle/batch/remote/bootstrap admission, broader read tools
-and production runtime qualification remain incomplete.
+Latest source checkpoint: [standalone benchmark bootstrap](private-codex-bootstrap-cli.md)
+connects both benchmark generators to explicit local subscription admission,
+immutable inputs and recovery of the same accepted review draft. Migration 265
+retains plans and ownership. Shared canonical benchmark generation,
+cycle/batch/remote admission, broader read tools and production runtime
+qualification remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 

@@ -43,7 +43,7 @@ export interface BootstrapProposalInput {
   /** Ordered host-selected intents. Missing means generate tasks from the full skill. */
   intents?: string[]; binding: string; abortSignal?: AbortSignal; chatFn?: unknown;
 }
-export async function proposeCodexBenchmark(opts: BootstrapProposalInput): Promise<{ tasks: BenchmarkTask[]; proposal: CachedCodexProposal }> {
+export async function prepareCodexBenchmark(opts: BootstrapProposalInput) {
   const host = codexSubscriptionContext();
   if (!host) throw new SubscriptionAdmissionError('subscription_required');
   if (opts.chatFn || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(opts.skillName) || opts.skillName.length > 100 ||
@@ -57,6 +57,10 @@ export async function proposeCodexBenchmark(opts: BootstrapProposalInput): Promi
   const model = await resolveModel(host.engine, { cliFlag: snapshot.optimizerModel, tier: 'deep', fallback: 'opus' });
   const declaredTools = parseSkillFrontmatter(snapshot.skillText)?.tools ?? [];
   if (declaredTools.length > 128 || declaredTools.some(t => !/^[A-Za-z0-9_.:-]{1,100}$/.test(t))) fail('invalid_input');
+  return { host, snapshot, signal, model, declaredTools };
+}
+export async function proposeCodexBenchmark(opts: BootstrapProposalInput): Promise<{ tasks: BenchmarkTask[]; proposal: CachedCodexProposal }> {
+  const { host, snapshot, signal, model, declaredTools } = await prepareCodexBenchmark(opts);
   const hash = digest({ protocol: VERSION, runId: host.runId, model, snapshot });
   const check = (ops: string[], arg: Record<string, unknown>) => obj({ op: { type: 'string', enum: ops }, arg });
   const checks = { type: 'array', minItems: 2, maxItems: 4, items: { anyOf: [

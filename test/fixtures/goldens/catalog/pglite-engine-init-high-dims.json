@@ -94,6 +94,16 @@
       "codex_shared_skill_optimizations.codex_shared_skill_optimizations_protocol_check": "c CHECK ((protocol = 1))",
       "codex_shared_skill_optimizations.codex_shared_skill_optimizations_request_id_key": "u UNIQUE (request_id)",
       "codex_shared_skill_optimizations.codex_shared_skill_optimizations_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check2": "c CHECK (((NOT completed) OR (result IS NOT NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 2097152)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_pkey": "p PRIMARY KEY (run_id)",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_result_check": "c CHECK (((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 1048576)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_result_hash_check": "c CHECK ((result_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
       "codex_skillopt_rollouts.codex_skillopt_rollouts_check": "c CHECK (((trajectory IS NULL) = (trajectory_hash IS NULL)))",
       "codex_skillopt_rollouts.codex_skillopt_rollouts_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
       "codex_skillopt_rollouts.codex_skillopt_rollouts_invocation_id_check": "c CHECK ((invocation_id ~ '^[A-Za-z0-9._:-]{1,160}$'::text))",
@@ -652,6 +662,9 @@
       "codex_shared_skill_optimizations": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_skillopt_bootstraps": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "codex_skillopt_rollouts": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -1091,6 +1104,7 @@
       "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
       "codex_shared_skill_optimizations_pkey": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_pkey ON public.codex_shared_skill_optimizations USING btree (run_id)",
       "codex_shared_skill_optimizations_request_id_key": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_request_id_key ON public.codex_shared_skill_optimizations USING btree (request_id)",
+      "codex_skillopt_bootstraps_pkey": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_pkey ON public.codex_skillopt_bootstraps USING btree (run_id)",
       "codex_skillopt_rollouts_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_rollouts_job_id_key ON public.codex_skillopt_rollouts USING btree (job_id)",
       "codex_skillopt_rollouts_pkey": "CREATE UNIQUE INDEX codex_skillopt_rollouts_pkey ON public.codex_skillopt_rollouts USING btree (run_id, invocation_id)",
       "codex_skillopt_runs_pkey": "CREATE UNIQUE INDEX codex_skillopt_runs_pkey ON public.codex_skillopt_runs USING btree (run_id)",
@@ -1843,6 +1857,21 @@
           "13 response jsonb/jsonb NULL",
           "14 response_hash text/text NULL",
           "15 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_bootstraps": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 input jsonb/jsonb NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 owner_token uuid/uuid NULL",
+          "6 lease_until timestamp with time zone/timestamptz NULL",
+          "7 result jsonb/jsonb NULL",
+          "8 result_hash text/text NULL",
+          "9 completed boolean/bool NOT NULL DEFAULT false",
+          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },

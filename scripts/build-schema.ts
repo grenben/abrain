@@ -4,6 +4,7 @@ import { SUBSCRIPTION_GROUP_SCHEMA_SQL } from '../src/core/ai/subscription-group
 import { CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL } from '../src/core/skillopt/codex-rollout-schema.ts';
 import { CODEX_SKILLOPT_RUN_SCHEMA_SQL } from '../src/core/skillopt/codex-run-schema.ts';
 import { CODEX_SKILLOPT_JOB_SCHEMA_SQL } from '../src/core/skillopt/codex-job-schema.ts';
+import { CODEX_BOOTSTRAP_RUN_SCHEMA_SQL } from '../src/core/skillopt/codex-bootstrap-schema.ts';
 import { CODEX_SHARED_OPTIMIZER_SCHEMA_SQL } from '../src/core/shared-skills/codex-optimizer-schema.ts';
 import { CODEX_BRAINSTORM_SCHEMA_SQL } from '../src/core/brainstorm/codex-schema.ts';
 import { THINK_AB_SCHEMA_SQL } from '../src/core/calibration/think-ab-schema.ts';
@@ -142,6 +143,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/skillopt/codex-run-schema.ts', expr: 'CODEX_SKILLOPT_RUN_SCHEMA_SQL', postgres: CODEX_SKILLOPT_RUN_SCHEMA_SQL, pglite: CODEX_SKILLOPT_RUN_SCHEMA_SQL },
   { source: 'src/core/skillopt/codex-job-schema.ts', expr: 'CODEX_SKILLOPT_JOB_SCHEMA_SQL', postgres: CODEX_SKILLOPT_JOB_SCHEMA_SQL, pglite: CODEX_SKILLOPT_JOB_SCHEMA_SQL },
   { source: 'src/core/shared-skills/codex-optimizer-schema.ts', expr: 'CODEX_SHARED_OPTIMIZER_SCHEMA_SQL', postgres: CODEX_SHARED_OPTIMIZER_SCHEMA_SQL, pglite: CODEX_SHARED_OPTIMIZER_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-bootstrap-schema.ts', expr: 'CODEX_BOOTSTRAP_RUN_SCHEMA_SQL', postgres: CODEX_BOOTSTRAP_RUN_SCHEMA_SQL, pglite: CODEX_BOOTSTRAP_RUN_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;
