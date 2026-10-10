@@ -311,7 +311,8 @@ describe('judge-runner — retries, error classes, usage, cost', () => {
     expect(l.unpricedCalls).toBe(1);
     expect(l.calls).toBe(3);
     l.markSkipped();
-    expect(l.snapshot()).toEqual({ max_usd: 1, estimate_usd: 0.5, actual_usd: 1.1, calls: 3, unpriced_calls: 1, skipped: 1 });
+    expect(l.snapshot()).toEqual({ max_usd: 1, estimate_usd: 0.5, actual_usd: null, known_priced_usd: 1.1, calls: 3, unpriced_calls: 1, skipped: 1 });
+    expect(new BudgetLedger(1, null).canAfford(null)).toBe(false);
     const open = new BudgetLedger(null, null);
     expect(open.canAfford(1e9)).toBe(true);
     expect(open.exhausted).toBe(false);
@@ -508,7 +509,9 @@ describe('qa-accuracy — headline vs excluding-errors vs 470 view', () => {
     expect(qa.by_type['temporal-reasoning']).toMatchObject({ total: 2, judged: 0, skipped_budget: 1, reader_errors: 1, accuracy_headline: 0, accuracy_excluding_errors: null });
     expect(qa.judge_error_classes).toEqual({ timeout: 1 });
     expect(qa.complete).toBe(false);
-    expect(qa.actual_cost_usd).toBeCloseTo(0.004, 12);
+    expect(qa.actual_cost_usd).toBeNull(); // The timeout row has unknown usage/cost.
+    expect(qa.known_priced_cost_usd).toBeCloseTo(0.004, 12);
+    expect(qa.unpriced_judge_rows).toBe(1);
     expect(qa.run_cost_usd).toBeNull();
     expect(qa.est_cost_usd).toBe(0.01);
     expect(qa.mixed_judge_config).toBe(false);

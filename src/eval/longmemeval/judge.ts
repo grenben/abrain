@@ -37,6 +37,10 @@
  */
 
 import { estimateTokens } from '../../core/search/token-budget.ts';
+import { CODEX_JUDGE_PROTOCOL, CODEX_READER_PROTOCOL } from './codex-protocols.ts';
+import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { codexSubscriptionContext } from '../../core/ai/subscription-context.ts';
+import { resolveModel } from '../../core/model-config.ts';
 import { isAbstentionQuestion } from './metrics.ts';
 import { redactSecrets, sha256Hex, stableStringify } from './run-config.ts';
 import {
@@ -228,7 +232,10 @@ export interface JudgeConfigInput {
 
 /** sha256 over the stable JSON of every judge-relevant pin (D33: gates re-judging on resume). */
 export function judgeConfigHash(input: JudgeConfigInput): string {
-  return sha256Hex(stableStringify(input));
+  return sha256Hex(stableStringify({ ...input,
+    ...(input.judge_model.startsWith('codex-cli:') ? { native_judge_protocol: CODEX_JUDGE_PROTOCOL } : {}),
+    ...(input.reader_model.startsWith('codex-cli:') ? { native_reader_protocol: CODEX_READER_PROTOCOL } : {}),
+  }));
 }
 
 /** Template overhead (longest instruction + boundary + labels), in estimated tokens. */
@@ -282,7 +289,8 @@ export interface JudgeRowFields {
   /** First 200 chars of the completion. */
   judge_raw: string;
   judge_cost_usd: number | null;
-  judge_attempts: number;
+  judge_attempts: number | null;
+  judge_native?: { protocol: string; cache_hit: boolean };
   judge_prompt_kind: JudgePromptKind;
   judge_prompt_version: string;
   judge_config_hash: string;
@@ -302,7 +310,8 @@ export interface JudgeErrorTelemetry {
   response_model: string | null;
   raw: string;
   cost_usd: number | null;
-  attempts: number;
+  attempts: number | null;
+  native?: { protocol: string; cache_hit: boolean };
 }
 
 /**
@@ -334,7 +343,8 @@ export function errorJudgeFields(
     judge_model_snapshot: telemetry?.response_model ?? null,
     judge_raw: telemetry ? telemetry.raw.slice(0, JUDGE_RAW_MAX_CHARS) : '',
     judge_cost_usd: telemetry?.cost_usd ?? null,
-    judge_attempts: telemetry?.attempts ?? 1,
+    judge_attempts: telemetry ? telemetry.attempts : ctx.model.startsWith('codex-cli:') ? null : 1,
+    ...(telemetry?.native ? { judge_native: telemetry.native } : {}),
     judge_prompt_kind: kind,
     judge_prompt_version: JUDGE_PROMPT_VERSION,
   };
@@ -357,6 +367,8 @@ export async function judgeRow(
   input: JudgePromptInput & Record<string, unknown>,
   ctx: JudgeLaneContext,
 ): Promise<JudgeRowFields> {
+  if (readPrivateCodexConfig()) await resolveModel(codexSubscriptionContext()?.engine ?? null,
+    { cliFlag: ctx.model, configKey: 'models.eval.longmemeval_judge', tier: 'deep', fallback: 'unused' });
   const { kind, prompt } = buildJudgePrompt(input);
   const configHash = ctx.configHashFor(input);
   const common = {
@@ -366,7 +378,9 @@ export async function judgeRow(
     judge_config_hash: configHash,
   };
   const projected = estimateJudgeCallUsd(ctx.model, estimateTokens(prompt), JUDGE_MAX_TOKENS);
-  if (!ctx.ledger.canAfford(projected)) {
+  // The enclosing durable subscription grant is separate authorization; USD alone never admits an unpriced call.
+  const subscription = readPrivateCodexConfig() && codexSubscriptionContext();
+  if (!subscription && !ctx.ledger.canAfford(projected)) {
     ctx.ledger.markSkipped();
     return { judge_skipped: 'budget', judge_model_snapshot: null, judge_raw: '', judge_cost_usd: null, judge_attempts: 0, ...common };
   }
@@ -389,6 +403,7 @@ export async function judgeRow(
     judge_raw: outcome.raw.slice(0, JUDGE_RAW_MAX_CHARS),
     judge_cost_usd: outcome.cost_usd,
     judge_attempts: outcome.attempts,
+    ...(outcome.native ? { judge_native: outcome.native } : {}),
     ...common,
   };
 }

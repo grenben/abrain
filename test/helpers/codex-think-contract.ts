@@ -1,5 +1,6 @@
 import { codexContextualContract } from './codex-contextual-contract.ts';
 import { codexProposalCacheContract } from './codex-proposal-cache-contract.ts';
+import { codexEvalContract } from './codex-eval-contract.ts';
 import { codexParserContract } from './codex-parser-contract.ts';
 import { codexThinkAbContract } from './codex-think-ab-contract.ts';
 import { codexThinkAutomationContract } from './codex-think-automation-contract.ts';
@@ -43,8 +44,11 @@ export function codexThinkContract(createEngine: () => Promise<{ engine: BrainEn
     const script=`#!${Bun.which('node')}
 import {readFileSync,writeFileSync,appendFileSync,statSync} from 'node:fs';
 const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1],schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8'));
-appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt:readFileSync(0,'utf8'),mode:statSync(arg('--output-schema')).mode&511,envKeys:Object.keys(process.env)})+'\\n');
-const value=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
+const prompt=readFileSync(0,'utf8');
+appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt,mode:statSync(arg('--output-schema')).mode&511,envKeys:Object.keys(process.env)})+'\\n');
+const configured=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
+const value=configured.byRole?configured.byRole[schema.properties.claims?'extractor':schema.properties.citations?'reader':'judge']:configured;
+if(value?.citations?.[0]?.session_id==='__first_session__')value.citations[0].session_id=JSON.parse(prompt).messages[0].content.match(/<chat_session id="([^"]+)"/)[1];
 if(value.wait) await new Promise(()=>setInterval(()=>{},1000));
 const text=value.raw??JSON.stringify({...(schema.properties.evidence_hash?{evidence_hash:schema.properties.evidence_hash.enum[0]}:{}),...value});
 writeFileSync(arg('--output-last-message'),text);
@@ -293,6 +297,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   });
   codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
   codexProposalCacheContract({engine:()=>engine,run,reply,calls});
+  codexEvalContract({engine:()=>engine,sourceId,run,reply,calls});
   codexParserContract({engine:()=>engine,sourceId,run,reply,calls});
   codexThinkAbContract({engine:()=>engine,sourceId,run,reply,valid,calls});
   codexThinkAutomationContract({engine:()=>engine,sourceId,root,run,reply,valid,calls});

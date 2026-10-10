@@ -120,6 +120,8 @@ export function selectBackfillRows(
 }
 
 export interface JudgePreflightInput {
+  /** Host enclosing subscription scope; never inferred from --yes or a USD cap. Dispatch verifies the durable grant. */
+  subscriptionAuthorized?: boolean;
   judgeModel: string;
   maxUsd: number | null;
   yes: boolean;
@@ -142,6 +144,10 @@ export type JudgePreflightResult =
  * or the estimate exceeds the cap without `--yes` (eval-cross-modal pattern).
  */
 export function judgePreflight(input: JudgePreflightInput): JudgePreflightResult {
+  if (input.subscriptionAuthorized && input.judgeModel.startsWith('codex-cli:')) return {
+    ok: true, estUsd: null, ledger: new BudgetLedger(input.maxUsd, null),
+    lines: [`[longmemeval] judge: ${input.judgeModel}, durable subscription admission; monetary cost and remaining quota unknown`],
+  };
   if (!input.available) {
     return {
       ok: false, exitCode: 1,

@@ -25,6 +25,8 @@
 
 import type { ChatOpts, ChatResult } from '../../core/ai/gateway.ts';
 import { canonicalLookup } from '../../core/model-pricing.ts';
+import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { runCodexJudge } from './codex-judge.ts';
 
 /** The judge chat seam: the gateway's `chat` in production, a canned fn in tests. */
 export type JudgeChatFn = (opts: ChatOpts) => Promise<ChatResult>;
@@ -48,10 +50,11 @@ interface JudgeOutcomeBase {
   /** Completion text of the LAST attempt (empty when every attempt threw). */
   raw: string;
   /** Summed over every attempt — retries cost money too. */
-  usage: JudgeUsage;
+  usage: JudgeUsage | null;
   /** null when the model is unpriced. */
   cost_usd: number | null;
-  attempts: number;
+  attempts: number | null;
+  native?: { protocol: string; cache_hit: boolean };
 }
 
 export type JudgeOutcome =
@@ -120,11 +123,12 @@ export function isJudgeModelPriced(model: string): boolean {
 }
 
 /**
- * Run one judge call with bounded retries. Never throws for a transport
- * failure — every path returns a `JudgeOutcome`. Only the caller's
- * `AbortSignal` (already-aborted) or a bug in `parse` can surface as a throw.
+ * Legacy calls use bounded retries and return transport-error outcomes.
+ * Private calls use one native proposal: ordinary model failures are errors;
+ * admission, authority loss, cancellation and unconfirmed termination propagate.
  */
 export async function runJudge(opts: RunJudgeOpts): Promise<JudgeOutcome> {
+  if (readPrivateCodexConfig()) return runCodexJudge(opts);
   const retries = opts.retries ?? 2;
   const backoffMs = opts.backoffMs ?? 500;
   const sleep = opts.sleep ?? defaultSleep;
@@ -197,7 +201,7 @@ export class BudgetLedger {
 
   canAfford(nextUsd: number | null): boolean {
     if (this.maxUsd === null) return true;
-    return this.actualUsd + (nextUsd ?? 0) <= this.maxUsd;
+    return nextUsd !== null && this.actualUsd + nextUsd <= this.maxUsd;
   }
 
   record(costUsd: number | null): void {
@@ -214,11 +218,14 @@ export class BudgetLedger {
     return this.maxUsd !== null && this.actualUsd > this.maxUsd;
   }
 
-  snapshot(): { max_usd: number | null; estimate_usd: number | null; actual_usd: number; calls: number; unpriced_calls: number; skipped: number } {
+  get costUsd(): number | null { return this.unpricedCalls ? null : this.actualUsd; }
+
+  snapshot(): { max_usd: number | null; estimate_usd: number | null; actual_usd: number | null; known_priced_usd?: number; calls: number; unpriced_calls: number; skipped: number } {
     return {
       max_usd: this.maxUsd,
       estimate_usd: this.estimateUsd,
-      actual_usd: this.actualUsd,
+      actual_usd: this.costUsd,
+      ...(this.unpricedCalls ? { known_priced_usd: this.actualUsd } : {}),
       calls: this.calls,
       unpriced_calls: this.unpricedCalls,
       skipped: this.skipped,

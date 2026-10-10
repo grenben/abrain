@@ -410,3 +410,13 @@ schema, quote evidence, authority and grant lifetime on every scoped reuse;
 failed calls never become cache entries or refunded attempts. LongMemEval's
 durable run lifecycle, additional native roles and aggregate accounting remain
 incomplete. Installed capabilities and activation are unchanged.
+
+## Native evaluation roles
+
+[Evaluation role contracts](private-codex-evaluation-roles.md) add native reader,
+extractor and judge dispatch, validated source evidence, explicit abstention and
+failure, atomic fenced fact batches, versioned receipts and honest aggregate
+costs. The real keyword reader/judge benchmark retains externally supplied
+admission across temporary-brain resets and fails on partial exhaustion. Full
+CLI grants, preprocessing across brains, mixed retrieval and run recovery remain
+incomplete; this does not change the installed artifact or activate private mode.

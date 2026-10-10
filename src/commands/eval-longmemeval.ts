@@ -136,7 +136,6 @@ import * as retrievalArms from '../eval/longmemeval/retrieval-arms.ts';
 import * as viaOperation from '../eval/longmemeval/via-operation.ts';
 import * as synopsisTier from '../eval/longmemeval/synopsis-tier.ts';
 import * as callPlan from '../eval/longmemeval/call-plan.ts';
-import { resolveModel } from '../core/model-config.ts';
 import type { ThinkLLMClient } from '../core/think/index.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
@@ -154,6 +153,7 @@ import {
   type AliasMap,
 } from '../eval/longmemeval/extract.ts';
 import { normalizeModelId } from '../core/model-id.ts';
+import { resolveEvalModels, resolveEvalExtractorModel } from '../eval/longmemeval/codex-config.ts';
 import { chat as gatewayChat, getEmbeddingDimensions, getEmbeddingModel, isAvailable } from '../core/ai/gateway.ts';
 import { rerankerReadinessForEngine, type EngineReadiness } from '../core/ai/reranker-readiness-engine.ts';
 import { describeRerankerFix } from '../core/ai/reranker-readiness.ts';
@@ -422,7 +422,7 @@ function parseArgs(args: string[]): ParsedArgs {
     capturePool: false,
     record: false,
     judge: false,
-    judgeModel: DEFAULT_JUDGE_MODEL,
+    judgeModel: '',
     maxUsd: 5,
     yes: false,
     judgeConcurrency: 1,
@@ -698,18 +698,10 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
 
   // Resolved BEFORE the resume block: the reader model is half of every
   // row's judge_config_hash (D33), which the --judge backfill gate needs.
-  const model = await resolveModel(null, {
-    cliFlag: opts.model,
-    configKey: 'models.eval.longmemeval',
-    envVar: 'GBRAIN_MODEL',
-    fallback: 'sonnet',
-  });
+  const { model, judgeModel, subscriptionAuthorized } = await resolveEvalModels(opts, runOpts);
+  opts.judgeModel = judgeModel;
   const extractorModel = trajectoryEnabled
-    ? await resolveModel(null, {
-        cliFlag: runOpts.extractorModel,
-        tier: 'utility',
-        fallback: 'haiku',
-      })
+    ? await resolveEvalExtractorModel(runOpts.extractorModel)
     : '';
   const readerHash = readerConfigHash(readerConfig, normalizeModelId(model));
   const judgeHashFor = makeJudgeConfigHasher(opts.judgeModel, { model, prompt_sha: readerConfig.promptSha, max_tokens: readerConfig.maxTokens, k: opts.topK });
@@ -806,7 +798,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
         judgePromptVersion: JUDGE_PROMPT_VERSION,
         judgeConfigHash: runJudgeHash,
         estCostUsd: st.judgeEstUsd,
-        runCostUsd: st.judgeLedger ? st.judgeLedger.actualUsd : null,
+        runCostUsd: st.judgeLedger ? st.judgeLedger.costUsd : null,
         methodologyNote: JUDGE_METHODOLOGY_NOTE,
       });
       const pct = (x: number | null): string => (x === null ? 'n/a' : `${(x * 100).toFixed(1)}%`);
@@ -818,7 +810,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
         `non-abstention ${pct(qa.accuracy_470)} (n=${qa.non_abstention_total}), abstention ${qa.abstention.correct}/${qa.abstention.total}; ` +
         `ci95 [${pct(ci.lower)}, ${pct(ci.upper)}] (${ci.label}); judge ${qa.judge_model} v=${qa.judge_prompt_version}; ` +
         `spend est ${qa.est_cost_usd === null ? 'unpriced' : `$${qa.est_cost_usd.toFixed(4)}`}, ` +
-        `this run $${(qa.run_cost_usd ?? 0).toFixed(4)}, all rows $${qa.actual_cost_usd.toFixed(4)}\n`,
+        `this run ${qa.run_cost_usd === null ? 'unknown' : `$${qa.run_cost_usd.toFixed(4)}`}, all rows ${qa.actual_cost_usd === null ? 'unknown' : `$${qa.actual_cost_usd.toFixed(4)}`}\n`,
       );
       if (opts.judge && !qa.complete) {
         const line = `[longmemeval] ${opts.allowIncompleteJudgments ? 'WARN' : 'FAIL'} --judge: judgments incomplete ` +
@@ -861,6 +853,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
       process.stderr.write(`[longmemeval] FAIL every question errored (${st.errorCount}/${st.questionsRun}) — no row was scored; see the error rows${st.errorMessages.length > 0 ? ` (first: ${st.errorMessages[0]})` : ''}\n`);
       exitCode = 1;
     }
+    if (subscriptionAuthorized && st.errorCount > 0) exitCode = 1;
     if (!opts.keywordOnly && st.vectorDegradedRows > 0) {
       process.stderr.write(`[longmemeval] FAIL vector arm: ${st.vectorDegradedRows} row(s) scored keyword-only after a silent embed failure (vector_enabled:false / embed_unavailable / embed_timeout) — vector_degraded_rows\n`);
       exitCode = 1;
@@ -1051,6 +1044,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
   let judgeLedger: BudgetLedger | null = null;
   if (opts.judge) {
     const pre = judgePreflight({
+      subscriptionAuthorized,
       judgeModel: opts.judgeModel,
       maxUsd: opts.maxUsd,
       yes: opts.yes,
@@ -1435,6 +1429,7 @@ async function runOneQuestion(
           sessionSlug: p.slug,
           sessionId: sessionIdFromSlug(p.slug),
           sessionBody: p.content,
+          sessionDate: dates[i],
           sourceId: 'default',
           aliasMap,
         });
@@ -1497,6 +1492,7 @@ async function runOneQuestion(
       reader_max_tokens: ctx.readerConfig.maxTokens,
       reader_config_hash: ctx.readerHash,
       reader_finish_reason: answer.finish_reason, reader_usage: answer.usage,
+      ...(answer.native ? { reader_native: answer.native } : {}),
       ...(readerError ? { error: readerError } : {}),
       ...(readerError && answer.text ? { reader_partial_output: answer.text } : {}),
       reader_context_chars: answer.context_chars,

@@ -1,0 +1,120 @@
+# Native Codex evaluation roles
+
+**Say to your agent:** *“Show which benchmark roles have native Codex schemas,
+and which parts of the full subscription benchmark still need integration.”*
+
+## Implemented source paths
+
+LongMemEval's actual `generateAnswer`, `extractAndInsertClaims`, `runJudge` and
+`judgeRow` dispatch to bounded native proposals under strict private mode.
+Injected inference clients are refused. Other modes retain the legacy clients.
+The host gateway factory is recognized by identity and frozen against mutation.
+
+The reader binds the complete prompt and sanitized delivered sessions into its
+schema. An answered response needs distinct citations with exact quotations
+from those sessions. Text in the question cannot ground a citation. A valid
+abstention has a fixed statement and no citations; malformed empty output is
+an error. Receipts preserve citations, protocol, cache status and measured usage.
+Quotation checks establish provenance, not the truth of a paraphrased answer.
+
+The extractor validates all rows before any insertion: at most 32 claims, bounded
+verbatim text, mentioned entities, real dates anchored in the excerpt or supplied
+session date, and a numeric metric or an event. Invalid rows, duplicate proposals,
+authority fields and malformed output reject the whole batch. Valid empty output
+is explicit. The old parsed-text cache is bypassed; scoped native reuse retains
+the raw proposal and revalidates it through the v256 cache.
+
+Private entity resolution uses the existing strict resolver with storage errors
+propagated. It refuses ambiguous identities and cannot turn a failed lookup into
+a guessed slug. The full batch is inserted atomically under source-incarnation,
+archive, worker and cancellation checks. Empty extraction also needs a current
+fence. Foreign admission/target brains remain refused until the benchmark's
+explicit temporary-brain ownership scope is implemented.
+
+The judge returns exactly one schema-constrained yes/no value bound to its
+rubric/input hash. The existing verdict parser validates it before acceptance.
+It does not retry an ambiguous native attempt automatically. Refusal, malformed
+output and missing completion remain error outcomes; admission and cancellation
+remain explicit failures. The durable ledger retains attempt truth. When the
+wrapper cannot establish failure usage or attempt count, its receipt uses null.
+Native execution uses the adapter's byte/time bounds and schema limits. Gateway
+budget metadata requests at least 256 tokens for the envelope and evidence hash;
+this is not evidence of a provider-enforced token cap.
+
+Native reader/judge protocol versions enter resume hashes. Role defaults and
+explicit reader/judge/extractor pins resolve through the strict policy; supplied
+host context exposes the applicable DB pins too, including at direct SDK entry.
+The no-call inventory includes
+these roles, and pin migration includes `models.eval.longmemeval_judge`.
+
+## Admission and honest reporting
+
+A USD-only judge cap refuses unpriced calls. An enclosing host subscription
+scope separately authorizes native dispatch, which verifies the real durable
+grant and shared lane. Its existence does not authorize paid embeddings or
+reranking. The pure judge preflight receives this host state explicitly.
+
+Judge aggregate cost is null if any attempted row has unknown cost. The known
+priced subtotal and unknown-row count are retained. Ledger reports follow the
+same rule; terminal output says unknown instead of printing a fabricated $0.
+Cache hits have no new measured provider usage. A partly answered private run
+fails when later questions fail, including exhaustion without judging enabled.
+
+## Verification and limits
+
+The shared fake-Codex contract runs on PGLite and PostgreSQL. It exercises native
+transport, citations, abstention, malformed output, refusal, completion, injected
+clients, pins, cache identity, full-batch validation, source provenance, entity
+lookup failures, publication fencing and honest aggregate accounting.
+
+Two tests run the real keyword benchmark over two questions and separate
+temporary database resets. The enclosing admission database retains all four
+reader/judge attempts, and unknown cost stays null. With only one allowed reader
+attempt, the first answer survives, the second row reports exhaustion, and the
+run fails. These tests use the supported optional `--no-trajectory` arm; they
+do not establish full preprocessing or mixed retrieval support.
+
+```bash
+bun test --timeout=30000 test/ai/codex-think.serial.test.ts
+bun test --timeout=240000 test/e2e/codex-think.test.ts
+bun test --timeout=60000 test/longmemeval-reader.test.ts test/longmemeval-extract.test.ts test/longmemeval-judge.test.ts
+bun test --timeout=60000 test/entity-resolve.test.ts test/entity-resolve-slug-fallback.test.ts test/entity-resolve-exact-name-floor.test.ts test/entity-resolve-prefix-dirs.test.ts
+bun test --timeout=60000 test/eval-longmemeval-gateway-routing.test.ts
+bun test --timeout=60000 test/eval-longmemeval-reader-mode.slow.test.ts
+bun test --timeout=60000 test/eval-longmemeval-judge.slow.test.ts
+bun test --timeout=60000 test/eval-longmemeval-brain-recycle.test.ts
+bun test test/ai/private-route-audit.test.ts
+GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify
+bun run build
+git diff --check
+```
+
+The shared contract passes **176 tests / 616 assertions on each engine**,
+including 37 native evaluation cases. Legacy reader/extractor/judge tests pass
+69 / 438; entity resolution passes 60 / 97. Separately run benchmark regressions
+pass 4 / 25 (gateway), 4 / 36 (reader modes), 12 / 263 (judge), and 1 / 5
+(brain recycling). Audit/pin/policy checks pass 24 / 97. Repository verification
+passes 75 checks with the external admin build skipped; typecheck and the
+3,663-module compiled build pass. No size ceilings were raised. Full CI and
+PgBouncer checks were not run in this checkpoint.
+
+Two intermediate typecheck errors (union narrowing and a test literal type)
+were corrected before the final successful verification. Restoring the prior
+reader, extractor and shared judge dispatchers makes 28 of the 37 new cases
+fail; the developed sources are restored afterward. Logs use
+`/tmp/maxbrain-eval-` with `contract-complete.log`, `postgres-complete.log`, `legacy.log`,
+`entity.log`, `caller-0.log` through `caller-3.log`, `routing-0.log` through
+`routing-2.log`, `verify-head.log`, `build.log`, and `discrimination.log`.
+Both disposable PostgreSQL lifecycle and provider tripwire checks completed;
+the test cluster was stopped.
+
+The full benchmark still needs explicit CLI grant creation in its durable host
+database, safe registration of reset/recycled temporary brains, contextual
+synopsis and fact-key integration, independent paid retrieval admission, and
+retained run/result recovery. Existing admission/foreign-brain safeguards stay
+enforced while that work proceeds. Full A–G acceptance remains incomplete.
+
+No installed executable, configuration, credentials, database or service changed.
+Production runtime qualification remains unverified; no live inference occurred.
+An eventual authorized upgrade must include the reviewed source/build and
+registered migrations through v256, plus the remaining activation gates.
