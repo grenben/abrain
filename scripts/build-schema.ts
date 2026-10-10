@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { THINK_AB_SCHEMA_SQL } from '../src/core/calibration/think-ab-schema.ts';
+import { CODEX_EVAL_SCHEMA_SQL } from '../src/core/ai/codex-eval-schema.ts';
 import { CODEX_PROPOSAL_CACHE_SCHEMA_SQL } from '../src/core/ai/codex-proposal-cache-schema.ts';
 import { AUTO_THINK_SCHEMA_SQL } from '../src/core/cycle/auto-think-schema.ts';
 import { THINK_PUBLICATION_SCHEMA_SQL } from '../src/core/think/publication-schema.ts';
@@ -125,6 +126,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/think/publication-schema.ts', expr: 'THINK_PUBLICATION_SCHEMA_SQL', postgres: THINK_PUBLICATION_SCHEMA_SQL, pglite: THINK_PUBLICATION_SCHEMA_SQL },
   { source: 'src/core/cycle/auto-think-schema.ts', expr: 'AUTO_THINK_SCHEMA_SQL', postgres: AUTO_THINK_SCHEMA_SQL, pglite: AUTO_THINK_SCHEMA_SQL },
   { source: 'src/core/calibration/think-ab-schema.ts', expr: 'THINK_AB_SCHEMA_SQL', postgres: THINK_AB_SCHEMA_SQL, pglite: THINK_AB_SCHEMA_SQL },
+  { source: 'src/core/ai/codex-eval-schema.ts', expr: 'CODEX_EVAL_SCHEMA_SQL', postgres: CODEX_EVAL_SCHEMA_SQL, pglite: CODEX_EVAL_SCHEMA_SQL },
   { source: 'src/core/ai/codex-proposal-cache-schema.ts', expr: 'CODEX_PROPOSAL_CACHE_SCHEMA_SQL', postgres: CODEX_PROPOSAL_CACHE_SCHEMA_SQL, pglite: CODEX_PROPOSAL_CACHE_SCHEMA_SQL },
 ];
 

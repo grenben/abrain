@@ -1,3 +1,4 @@
+import { codexEvalRunContract } from './codex-eval-run-contract.ts';
 import { codexFactKeysContract } from './codex-fact-keys-contract.ts';
 import { codexSynopsisTierContract } from './codex-synopsis-tier-contract.ts';
 import { codexScratchContract } from './codex-scratch-contract.ts';
@@ -303,6 +304,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   codexFactKeysContract({root,engine:()=>engine,run,reply,calls});
   codexSynopsisTierContract({root,engine:()=>engine,run,reply,calls});
   codexScratchContract({engine:()=>engine,run,reply,calls});
+  codexEvalRunContract({engine:()=>engine,run,reply,calls});
   codexEvalContract({engine:()=>engine,sourceId,run,reply,calls});
   codexParserContract({engine:()=>engine,sourceId,run,reply,calls});
   codexThinkAbContract({engine:()=>engine,sourceId,run,reply,valid,calls});

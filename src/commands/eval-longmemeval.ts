@@ -59,13 +59,10 @@ import {
   JUDGE_MAX_TOKENS,
   JUDGE_METHODOLOGY_NOTE,
   JUDGE_PROMPT_VERSION,
-  JUDGE_RAW_MAX_CHARS,
-  judgeRow,
-  stripJudgeFields,
   type JudgeLaneContext,
 } from '../eval/longmemeval/judge.ts';
 import {
-  judgePreflight,
+  judgePreflight, judgeLiveRow,
   makeJudgeConfigHasher,
   parseMaxUsd,
   runJudgeBackfill,
@@ -153,6 +150,7 @@ import {
   type AliasMap,
 } from '../eval/longmemeval/extract.ts';
 import { normalizeModelId } from '../core/model-id.ts';
+import { needsPrivateEvalLifecycle, withPrivateEvalLifecycle, bindPrivateEval, privateEvalAnswer, settlePrivateEvalQuestion, privateEvalResume, privateEvalReplayText } from '../eval/longmemeval/codex-run.ts';
 import { resolveEvalModels, resolveEvalExtractorModel } from '../eval/longmemeval/codex-config.ts';
 import { chat as gatewayChat, getEmbeddingDimensions, getEmbeddingModel, isAvailable } from '../core/ai/gateway.ts';
 import { rerankerReadinessForEngine, type EngineReadiness } from '../core/ai/reranker-readiness-engine.ts';
@@ -620,6 +618,7 @@ function gitShort(argv: readonly string[], fallback: string): string {
 }
 
 export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}): Promise<void> {
+  if (needsPrivateEvalLifecycle()) return withPrivateEvalLifecycle(() => runEvalLongMemEval(args, { ...runOpts, exitOnError: false }));
   const fail = (code: number): never => {
     if (runOpts.exitOnError !== false) process.exit(code);
     throw new Error(`longmemeval failed (exit ${code}); see evaluation diagnostics`);
@@ -708,6 +707,8 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
   /** This run's judge_config_hash (live rows; prior rows hash from their own recorded reader pins). */
   const runJudgeHash = judgeHashFor({});
   if (opts.callPlanPath) return callPlan.runLmeCallPlan({ args, opts, questions, questionByQid, pins, knobs, synopsis, model, extractorModel, readerConfig, decide: decideRun, judgeHashFor }, fail);
+  await bindPrivateEval({ datasetSha256, questions, options: { ...opts }, retrievalHash, readerHash, judgeHash: runJudgeHash, extractorModel,
+    requiresResources: !opts.retrievalOnly || !opts.keywordOnly || trajectoryEnabled || opts.judge || !!opts.arms.factKeys });
 
   /** Everything the run-end block needs; filled by the main path or the no-op resume path. */
   interface RunEndState {
@@ -916,7 +917,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
   /** Prior rows the --judge backfill judges from their stored hypothesis. */
   let backfill: RowLike[] = [];
   if (opts.resumeFromPath) {
-    priorRows = readJsonlRows(opts.resumeFromPath);
+    priorRows = await privateEvalResume(readJsonlRows(opts.resumeFromPath));
     const readerCheck = checkResumeReaderConfig(priorRows, readerConfig, normalizeModelId(model), opts.retrievalOnly, opts.judge);
     if (readerCheck.mismatched > 0 || readerCheck.unknown > 0) {
       process.stderr.write(`[longmemeval] resume: reader configuration mismatch (${readerCheck.mismatched} different, ${readerCheck.unknown} unknown). Refusing to mix reader modes, prompts, models or budgets even with --allow-mixed-run-config.\n`);
@@ -937,7 +938,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
     if (check.unstamped > 0) {
       process.stderr.write(`[longmemeval] resume: ${check.unstamped} row(s) carry no retrieval_config_hash (pre-stamp file) — re-scored, not refused\n`);
     }
-    const done = loadResumeSet(opts.resumeFromPath);
+    const done = subscriptionAuthorized ? new Set(priorRows.map(row => row.question_id as string)) : loadResumeSet(opts.resumeFromPath);
     const before = questions.length;
     questions = questions.filter(q => !done.has(q.question_id));
     process.stderr.write(`[longmemeval] resume: ${done.size} already done; ${questions.length}/${before} remaining\n`);
@@ -1013,7 +1014,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
   let replay: Map<string, string[]> | null = null;
   if (opts.expansionReplayPath) {
     try {
-      replay = loadExpansionReplay(opts.expansionReplayPath);
+      replay = loadExpansionReplay(opts.expansionReplayPath, privateEvalReplayText());
     } catch (err: any) {
       process.stderr.write(`Error: ${err.message ?? err}\n`);
       fail(1);
@@ -1239,30 +1240,10 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
         const brain = await brains.next();
         const qStart = Date.now();
         try {
-          const outcome = await runOneQuestion(brain, q, ctx);
-          if (judgeCtx && typeof outcome.row.error !== 'string') {
-            // Judge inline from the row's hypothesis (the same path the backfill
-            // takes). A judge THROW (judgeRow never throws for a transport
-            // failure, but a malformed provider result / hasher bug can) is a
-            // judge_error on the row — the paid reader row is kept, mirroring
-            // runJudgeBackfill's failure stamp — never an error row.
-            try {
-              Object.assign(outcome.row, await judgeRow({
-                ...outcome.row,
-                question_id: q.question_id, question_type: q.question_type, question: q.question,
-                answer: String(q.answer ?? ''), hypothesis: outcome.row.hypothesis, // 32 LongMemEval golds are integers
-              }, judgeCtx));
-            } catch (judgeErr: any) {
-              stripJudgeFields(outcome.row as unknown as Record<string, unknown>);
-              Object.assign(outcome.row, {
-                judge_error: 'provider_error',
-                judge_error_detail: redactSecrets(String(judgeErr?.message ?? judgeErr)).slice(0, JUDGE_RAW_MAX_CHARS),
-                judge_model: judgeCtx.model,
-                judge_prompt_version: JUDGE_PROMPT_VERSION,
-                judge_config_hash: runJudgeHash,
-              });
-            }
-          }
+          const outcome = await privateEvalAnswer(q, () => runOneQuestion(brain, q, ctx));
+          if (judgeCtx && typeof outcome.row.error !== 'string' && !(subscriptionAuthorized && typeof outcome.row.judge_correct === 'boolean'))
+            await judgeLiveRow(outcome.row, q, judgeCtx, runJudgeHash);
+          await settlePrivateEvalQuestion(q, outcome);
           emitter.emit(outcome.row);
           qaRows.push(outcome.row);
           if (typeof outcome.row.error === 'string') {
@@ -1296,6 +1277,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
           emitter.emit(errorRow);
           qaRows.push(errorRow);
           progress.tick(1, `${q.question_id} (error)`);
+          if (subscriptionAuthorized) fail(1);
         }
         if (process.env.GBRAIN_LME_DEBUG === '1') {
           process.stderr.write(`[longmemeval] ${q.question_id} ${Date.now() - qStart}ms\n`);

@@ -451,3 +451,15 @@ text. Source/revision drift, cancellation or lost host ownership cannot leave a
 partially published vector batch. Subscription cost remains null; embeddings
 have separate durable admission. Full CLI grant creation, request binding and
 run/result recovery remain incomplete. This changes source only.
+
+## Durable benchmark result follow-up
+
+Private benchmarks under an enclosing host grant now retain accepted reader
+answers before judging and accepted judgments before JSONL emission. Leased
+run ownership binds the dataset, selected questions, material options and
+resolved protocol/model hashes. Recovery reuses canonical receipts; edited
+JSONL files, changed inputs, stale owners and unsettled native attempts cannot
+authorize another call. Completed results remain exportable after the inference
+deadline. Failed private questions stop the batch immediately. Direct CLI grant
+creation, auxiliary-budget identity and live runtime qualification remain open;
+this is a source-only migration and implementation.
