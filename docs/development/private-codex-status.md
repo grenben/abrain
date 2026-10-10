@@ -3,12 +3,12 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [standalone benchmark bootstrap](private-codex-bootstrap-cli.md)
-connects both benchmark generators to explicit local subscription admission,
-immutable inputs and recovery of the same accepted review draft. Migration 265
-retains plans and ownership. Shared canonical benchmark generation,
-cycle/batch/remote admission, broader read tools and production runtime
-qualification remain incomplete.
+Latest source checkpoint: [scoped discovery reads](private-codex-discovery.md)
+adds an explicit native registry for authorized listing and keyword search,
+with filters before pagination, bounded retained results and child compatibility
+checks. Schema head remains 265. Hybrid query/graph tools, broader optimizer
+producers, full dispatch coverage and production runtime qualification remain
+incomplete.
 
 ## Installation and source evidence (2026-10-09)
 

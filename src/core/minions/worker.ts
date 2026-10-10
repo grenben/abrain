@@ -1520,7 +1520,7 @@ export class MinionWorker extends EventEmitter {
       }
       const result = isolated
         ? await runJobInChild({
-            jobId: job.id, spendAuthorized: job.spend_authorization != null, codexAuthorized: await jobSubscriptionBound(this.engine, job.id),
+            jobId: job.id, spendAuthorized: job.spend_authorization != null, codexAuthorized: await jobSubscriptionBound(this.engine, job.id), codexDiscovery: job.data?.read_registry === 'codex-discovery-v1',
             jobName: job.name,
             lockToken,
             abortSignal: abort.signal,

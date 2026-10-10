@@ -695,6 +695,7 @@ const search: Operation = {
     min_trust: MIN_TRUST_PARAM,
   },
   handler: async (ctx, p) => {
+    if (ctx.nativeDiscovery) return (await import('./native-discovery.ts')).nativeDiscovery(ctx, p, 'search');
     const startedAt = Date.now();
     const timings = new SearchTimings();
     const setup = <T>(work: () => Promise<T>) => timings.stage('setup', work);

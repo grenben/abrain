@@ -1,3 +1,5 @@
+import type { NativeDiscoveryScope, PageReadScope, PageReadPolicy } from './page-read-policy.ts';
+export type { NativeDiscoveryScope, PageReadScope, PageReadPolicy } from './page-read-policy.ts';
 // Page types
 // v0.38: `PageType` opens from a closed 23-element union to `string`. The
 // closed union was always a fiction — every gbrain user accumulated organic
@@ -311,6 +313,8 @@ export interface PageInput {
 }
 
 export interface PageFilters {
+  /** Host-owned Codex discovery scope, applied before pagination. */
+  nativeDiscovery?: NativeDiscoveryScope;
   type?: PageType;
   tag?: string;
   limit?: number;
@@ -392,25 +396,6 @@ export interface PageFilters {
    * read none of those fields (list_pages).
    */
   listColumnsOnly?: boolean;
-}
-
-/** v0.26.5 — opts for getPage / softDeletePage / restorePage. */
-export interface PageReadScope {
-  sourceId?: string;
-  sourceIds?: string[];
-  /** Resolved by the trusted operation layer, never from MCP parameters. */
-  excludePrivate?: boolean;
-  /** Untrusted chunk reads require a verified protected-body index, even with visibility opt-outs. */
-  requireSafeChunks?: boolean;
-  /** #5575 read floor (eligibility/policy.ts): only pages at or above this tier; a chunk's tier is its page's. */
-  minTrust?: import('./trust/tier.ts').TrustTier;
-  /** #5575 CEO-20, proactive reads only: hide unconfirmed agent-written pages with an instruction-family gate flag. */
-  suppressFlagged?: boolean;
-}
-
-export interface PageReadPolicy extends PageReadScope {
-  /** Undefined is unrestricted; an empty list permits no holders. */
-  takesHoldersAllowList?: string[];
 }
 
 export interface GetPageOpts extends PageReadScope {

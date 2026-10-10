@@ -16,12 +16,12 @@ import type { WriteRequest } from '../persistence/model.ts';
 /** Freeze the host authority and normalized admission before any write is submitted. */
 export async function retainCodexWrite(engine: BrainEngine, ctx: MinionJobContext, data: CodexReadJob, row: CodexActionRow): Promise<RetainedCodexWrite> {
   if (row.host_binding) return row.host_binding;
-  if (typeof row.input.content !== 'string' || Buffer.byteLength(row.input.content) > CODEX_ACTION_LIMITS.content) actionError('invalid_proposal');
-  const snapshot = await engine.readPageSnapshot(row.input.slug, { sourceId: data.source_id, includeDeleted: true });
+  if (typeof row.input.slug !== 'string' || typeof row.input.content !== 'string' || Buffer.byteLength(row.input.content) > CODEX_ACTION_LIMITS.content) actionError('invalid_proposal');
+  const snapshot = await engine.readPageSnapshot(row.input.slug!, { sourceId: data.source_id, includeDeleted: true });
   if (snapshot) {
     const [read] = await engine.executeRaw<{ output: { revision?: string; slug?: string; source_id?: string } }>(
       `SELECT output FROM subagent_tool_executions WHERE job_id=$1 AND message_idx<$2 AND tool_name='brain_get_page' AND status='complete' AND output->>'slug'=$3 ORDER BY message_idx DESC LIMIT 1`,
-      [ctx.id, row.message_idx, row.input.slug]);
+      [ctx.id, row.message_idx, row.input.slug!]);
     if (!read || read.output.source_id !== data.source_id || read.output.revision !== snapshot.revision || snapshot.page.deleted_at) actionError('read_revision_required');
   }
   const params: Record<string, unknown> = { ...row.input, source_id: data.source_id, ...(snapshot ? { expected_revision: snapshot.revision } : {}) };
@@ -52,7 +52,7 @@ export async function retainCodexWrite(engine: BrainEngine, ctx: MinionJobContex
 
 function checkReceipt(row: CodexActionRow, retained: RetainedCodexWrite, receipt: WriteRequest) {
   const a = retained.admission;
-  if (retained.binding.canonicalId !== row.gbrain_tool_use_id || a.slug !== row.input.slug || a.callerIntent.content !== row.input.content ||
+  if (retained.binding.canonicalId !== row.gbrain_tool_use_id || a.slug !== row.input.slug! || a.callerIntent.content !== row.input.content ||
       receipt.protocol_version !== 3 || receipt.digest !== intentDigest(a) || authorityDigest(receipt.intent) !== authorityDigest(a.intent) ||
       authorityDigest(receipt.authority) !== authorityDigest(a.authority)) return actionError('needs_reconciliation');
 }

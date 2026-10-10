@@ -1,3 +1,4 @@
+import { invalidParam } from './op-fix.ts';
 /**
  * list_pages pagination for MCP callers (agent operator contract v1, F3b;
  * absorbs community PR #5954).
@@ -76,4 +77,16 @@ export function listingTruncatedNotice(pagination: ListPagesPagination, params: 
     why: `More pages match than the ${pagination.limit} returned${clamp}; this listing is not complete.`,
     fix,
   };
+}
+
+export const LIST_PAGES_SORT_VALUES = ['updated_desc', 'updated_asc', 'created_desc', 'slug'] as const;
+export function listPageOrder(ctx: import('./contract.ts').OperationContext, p: Record<string, unknown>) {
+  const raw = p.sort as string | undefined;
+  let sort = raw && (LIST_PAGES_SORT_VALUES as readonly string[]).includes(raw) ? raw as typeof LIST_PAGES_SORT_VALUES[number] : undefined;
+  const updatedAfter = typeof p.updated_after === 'string' ? p.updated_after : undefined;
+  const slug = typeof p.updated_after_slug === 'string' ? p.updated_after_slug : undefined;
+  if (slug !== undefined && updatedAfter === undefined) throw invalidParam(ctx, 'list_pages', 'updated_after', "list_pages: updated_after_slug requires updated_after (the cursor row's updated_at_iso).", { def: { type: 'string', description: 'Only pages updated after this ISO time.' }, example: '2026-08-11T00:00:00.000000Z' });
+  const updatedAfterKeyset = updatedAfter !== undefined && slug !== undefined ? { updatedAt: updatedAfter, slug } : undefined;
+  if (updatedAfterKeyset) sort = 'updated_asc';
+  return { sort, updatedAfter, updatedAfterKeyset };
 }

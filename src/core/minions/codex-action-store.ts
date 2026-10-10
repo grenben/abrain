@@ -6,12 +6,12 @@ import type { ChatResult } from '../ai/gateway.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { authorityDigest } from './submission-authority.ts';
 import { persistMessage, loadPriorMessages, type PersistedMessage } from './handlers/subagent-persistence.ts';
-import { actionError, CODEX_READ_PROTOCOL, CODEX_ACTION_LIMITS, type CodexAction } from './codex-action-contract.ts';
+import { actionError, CODEX_DISCOVERY_REGISTRY, CODEX_READ_PROTOCOL, CODEX_ACTION_LIMITS, type CodexAction } from './codex-action-contract.ts';
 import type { MinionJobContext } from './types.ts';
 
 export interface CodexActionRow {
   message_idx: number; ordinal: number; tool_use_id: string; gbrain_tool_use_id: string;
-  tool_name: string; input: { slug: string; content?: string }; host_binding?: RetainedCodexWrite | null; status: 'pending' | 'complete' | 'failed'; output: unknown; error: string | null;
+  tool_name: string; input: Extract<CodexAction, { kind: 'tool' }>['arguments']; host_binding?: RetainedCodexWrite | null; status: 'pending' | 'complete' | 'failed'; output: unknown; error: string | null;
 }
 /** Every history mutation locks the live claim, and also binds this handler's data to that claim. */
 export async function withActionFence<T>(engine: BrainEngine, ctx: MinionJobContext, run: (tx: BrainEngine) => Promise<T>): Promise<T> {
@@ -49,7 +49,7 @@ export async function loadCodexActions(engine: BrainEngine, ctx: MinionJobContex
     if (!versions.length) await message(tx, ctx, envelope(0, 'user', [{ type: 'text', text: prompt }]));
     const messages = await loadPriorMessages(tx, ctx.id);
     const rows = await tx.executeRaw<CodexActionRow>('SELECT message_idx,ordinal,tool_use_id,gbrain_tool_use_id::text,tool_name,input,status,output,error,host_binding FROM subagent_tool_executions WHERE job_id=$1 ORDER BY message_idx', [ctx.id]);
-    if (rows.some(r => r.tool_name !== 'brain_get_page' && !(historyVersion(ctx) === 4 && r.tool_name === 'brain_put_page'))) actionError('needs_reconciliation');
+    if (rows.some(r => r.tool_name !== 'brain_get_page' && !(ctx.data.read_registry === CODEX_DISCOVERY_REGISTRY && ['brain_search', 'brain_list_pages'].includes(r.tool_name)) && !(historyVersion(ctx) === 4 && r.tool_name === 'brain_put_page'))) actionError('needs_reconciliation');
     if (Buffer.byteLength(JSON.stringify(messages)) > CODEX_ACTION_LIMITS.history || !equal(messages[0]?.content_blocks, [{ type: 'text', text: prompt }])) actionError('history_limit_or_conflict');
     for (const [i, msg] of messages.entries()) {
       if (msg.message_idx !== i || msg.role !== (i % 2 ? 'assistant' : 'user') || msg.content_blocks.length !== 1) actionError('history_conflict');

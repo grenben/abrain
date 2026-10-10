@@ -14,7 +14,7 @@ import { WORKER_EXIT_CONFIGURATION } from './worker-exit-codes.ts';
 export const CHILD_READINESS_PROTOCOL_VERSION = 1;
 export const CHILD_READINESS_TIMEOUT_MS = 20_000;
 export const CHILD_READINESS_MAX_BYTES = 64 * 1024;
-export const CHILD_READINESS_FEATURES = ['local-configuration-outcome-v1', 'postgres-cancellation-v1', 'spend-enforcement-v1', 'codex-subscription-v1', 'codex-host-read-v1', 'codex-host-actions-v1'] as const;
+export const CHILD_READINESS_FEATURES = ['local-configuration-outcome-v1', 'postgres-cancellation-v1', 'spend-enforcement-v1', 'codex-subscription-v1', 'codex-host-read-v1', 'codex-host-actions-v1', 'codex-discovery-v1'] as const;
 /** Every child must advertise these; `spend-enforcement-v1` only gates spend-authorized rows (child-job-runner.ts). */
 const REQUIRED_CHILD_FEATURES = ['local-configuration-outcome-v1', 'postgres-cancellation-v1'] as const;
 

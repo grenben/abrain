@@ -1,3 +1,4 @@
+import { codexDiscoveryContract } from './codex-discovery-contract.ts';
 import { beforeAll, beforeEach, afterAll, test, expect, spyOn } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -259,6 +260,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
       abortSignal: new AbortController().signal, shutdownSignal: new AbortController().signal,
       invocation: { cmd: '/nonexistent/forbidden', argsPrefix: [] }, tiniPath: '' })).rejects.toMatchObject({ reasonCode: 'child_protocol_incompatible' });
   });
+  codexDiscoveryContract({ engine: () => engine, claim, run, replies, calls, final });
   codexActionWritesContract({ engine: () => engine, root, claim, run, replies, calls, get, final });
   codexSkilloptRolloutContract({ engine: () => engine, replies, calls, get, final });
   codexSkilloptRunContract({ engine: () => engine, root, replies, calls });

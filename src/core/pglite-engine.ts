@@ -1401,7 +1401,7 @@ export class PGLiteEngine implements BrainEngine {
     }
 
     // Fetch 3x to give dedup headroom, then page-dedup + re-limit.
-    const innerLimit = Math.min(limit * 3, searchLimitCap() * 3);
+    const innerLimit = opts?.nativeDiscovery ? Math.min((limit + offset) * 3, 3063) : Math.min(limit * 3, searchLimitCap() * 3);
 
     // Source-aware ranking (v0.22): see postgres-engine.ts for rationale.
     const boostMap = opts?.source_boosts ?? resolveBoostMap();

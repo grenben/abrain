@@ -1,3 +1,4 @@
+import { nativeDiscoveryFilter } from './native-discovery.ts';
 /**
  * Pages: one SQL implementation for both engines (refactor wave 1,
  * W1-extended). Statement text is PostgresEngine's master text (SQL-text
@@ -417,6 +418,7 @@ export async function listPages(exec: ScopedRead, filters?: PageFilters): Promis
         : sqlFragment``;
     // slugPrefix uses the (source_id, slug) UNIQUE btree index for range scans.
     // Escape LIKE metacharacters so the user prefix is treated as a literal.
+    const nativeCondition = nativeDiscoveryFilter(filters?.nativeDiscovery);
     const slugPrefix = filters?.slugPrefix;
     const slugCondition = slugPrefix
       ? sqlFragment`AND p.slug LIKE ${slugPrefix.replace(/[\\%_]/g, (c) => '\\' + c) + '%'} ESCAPE '\\'`
@@ -459,7 +461,7 @@ export async function listPages(exec: ScopedRead, filters?: PageFilters): Promis
       const { rows } = await exec.run(sqlFragment`
         SELECT ${columns}, to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at_iso FROM pages p
         ${tagJoin}
-        WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition} ${slugAfterCondition} ${sourceCondition} ${deletedCondition} ${privateCondition} ${effectiveAfterCondition} ${effectiveBeforeCondition}
+        WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition} ${slugAfterCondition} ${nativeCondition} ${sourceCondition} ${deletedCondition} ${privateCondition} ${effectiveAfterCondition} ${effectiveBeforeCondition}
         ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}
       `);
       return rows.map(rowToPage);

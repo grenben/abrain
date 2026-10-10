@@ -513,6 +513,8 @@ export interface OperationContext {
    * v0.15 behavior; pure addition, no regression).
    */
   allowedSlugPrefixes?: string[];
+  /** Host-only, deterministic discovery; never hydrated from operation parameters. */
+  nativeDiscovery?: import('../types.ts').NativeDiscoveryScope;
   /**
    * #5994: the stored authority of a failed write that `gbrain repair
    * failed-writes` replays. Set only by that trusted local repair lane; no

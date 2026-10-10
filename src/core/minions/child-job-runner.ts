@@ -114,6 +114,7 @@ export interface RunJobInChildOpts {
   /** The row carries a spend authorization: only a child with `spend-enforcement-v1` may run it. */
   spendAuthorized?: boolean;
   codexAuthorized?: boolean;
+  codexDiscovery?: boolean;
   jobName: string;
   lockToken: string;
   /** Per-job abort (timeout / cancel / lock-lost / lock-renewal-failed). */
@@ -147,7 +148,7 @@ interface ChildExit {
  */
 export async function runJobInChild(opts: RunJobInChildOpts): Promise<unknown> {
   if (opts.codexAuthorized && !childSubscriptionEnforcementReady()) throw childConfigurationError('child_protocol_incompatible');
-  if (opts.codexAuthorized && opts.jobName === 'subagent' && !childCodexActionsReady()) throw childConfigurationError('child_protocol_incompatible');
+  if (opts.codexAuthorized && opts.jobName === 'subagent' && !childCodexActionsReady(opts.codexDiscovery)) throw childConfigurationError('child_protocol_incompatible');
   if (opts.spendAuthorized && !childSpendEnforcementReady()) throw new SpendEnforcementUnavailableError();
   let executionStopped = false;
   let configurationError: LocalConfigurationError | undefined;
