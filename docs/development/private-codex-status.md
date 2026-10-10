@@ -460,6 +460,16 @@ run ownership binds the dataset, selected questions, material options and
 resolved protocol/model hashes. Recovery reuses canonical receipts; edited
 JSONL files, changed inputs, stale owners and unsettled native attempts cannot
 authorize another call. Completed results remain exportable after the inference
-deadline. Failed private questions stop the batch immediately. Direct CLI grant
-creation, auxiliary-budget identity and live runtime qualification remain open;
-this is a source-only migration and implementation.
+deadline. Failed private questions stop the batch immediately. The local allowance follow-up below adds direct CLI grant creation and auxiliary
+budget identity. Live runtime qualification remains open; this is a source-only
+migration and implementation.
+
+## Local benchmark allowance follow-up
+
+The actual CLI now accepts explicit subscription bounds and a separate auxiliary
+USD cap. It atomically binds the allowance to the loaded evaluation request,
+uses the shared job account lane, and opens the existing selected owner without
+applying migrations. Named auxiliary budget identities are part of the v2 run
+binding. Pure keyword retrieval and help remain owner-free. Existing identical
+expired grants export receipts only. Installed configuration, services and
+production data remain unchanged; live runtime qualification is still required.

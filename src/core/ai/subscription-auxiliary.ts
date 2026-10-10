@@ -4,9 +4,18 @@ import { hasAdmittedCodexAttempt } from './subscription-context.ts';
 import { SubscriptionAdmissionError } from './subscription-admission.ts';
 import { reservationCostUsd, usageCostUsd } from '../budget/reservation-cost.ts';
 import { reserveGroup, settle } from '../minions/budget-meter.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
+export interface SubscriptionAuxiliaryBudget { readonly engine: BrainEngine; readonly budgetKey: string; readonly capUsd: number | null }
+const budgets = new AsyncLocalStorage<readonly SubscriptionAuxiliaryBudget[]>();
+/** Trusted scope metadata for immutable run identity; contains no provider credentials. */
+export function subscriptionAuxiliaryBudgets(): readonly SubscriptionAuxiliaryBudget[] { return budgets.getStore() ?? []; }
 /** A durable, independent API budget. Unknown effects retain their reservation.
  * The caller binds key and cap to its immutable subscription request identity. */
-export async function withSubscriptionAuxiliaryBudget<T>(engine: BrainEngine, budgetKey: string, capUsd: number | undefined, run: () => Promise<T>): Promise<T> {
+export function withSubscriptionAuxiliaryBudget<T>(engine: BrainEngine, budgetKey: string, capUsd: number | undefined, run: () => Promise<T>): Promise<T> {
+    const scope = Object.freeze([...subscriptionAuxiliaryBudgets(), Object.freeze({ engine, budgetKey, capUsd: capUsd ?? null })]);
+    return budgets.run(scope, () => runAuxiliaryBudget(engine, budgetKey, capUsd, run));
+}
+async function runAuxiliaryBudget<T>(engine: BrainEngine, budgetKey: string, capUsd: number | undefined, run: () => Promise<T>): Promise<T> {
     let refusal: unknown;
     const result = await withAIInvocationGuard(async (call) => {
         if (refusal)

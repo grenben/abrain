@@ -259,8 +259,10 @@ question-answer pipeline (not just retrieval) — `gbrain eval longmemeval
 <dataset.jsonl>` runs the LongMemEval benchmark against gbrain's
 hybrid retrieval. Each question gets a clean in-memory PGLite, its haystack
 imported, the question asked, the hypothesis emitted as JSONL — exactly the
-shape LongMemEval's `evaluate_qa.py` consumes. Your `~/.gbrain` brain is
-never opened. See `## Public benchmarks: LongMemEval` below.
+shape LongMemEval's `evaluate_qa.py` consumes. Benchmark pages remain isolated.
+Explicit private Codex allowances and recovery receipts use the selected host
+database without automatic migrations. See `## Public benchmarks: LongMemEval`
+below and [private evaluation allowances](development/private-codex-evaluation-runs.md#explicit-local-cli-allowances).
 
 ## Best-effort by design
 
@@ -800,8 +802,10 @@ the per-miss rows, `--all` diagnoses every scored question. It is not a
 
 ### Architecture (read this if you're touching the harness)
 
-- In-memory PGLite brains via `createBenchmarkBrain`. Your `~/.gbrain` is
-  never opened. `TRUNCATE` never returns PGLite's WASM memory, which grows
+- In-memory PGLite brains via `createBenchmarkBrain`. Explicit private Codex
+  allowances use the selected host for limits and receipts, while benchmark
+  pages remain in disposable state. Other standalone runs open no host brain.
+  `TRUNCATE` never returns PGLite's WASM memory, which grows
   with each question's vectors, so a harness-owned brain is replaced with a
   fresh, re-configured one every `LME_BRAIN_RECYCLE_EVERY` (40) questions
   (`brainRecycler` in `src/eval/longmemeval/harness.ts`); without it a long
@@ -837,7 +841,7 @@ Unknown flags exit 1 before any work starts.
 | Flag | Default | Purpose |
 |---|---|---|
 | `--limit N` | run all | Run only the first N questions (after `--question-ids` filtering) |
-| `--model M` | `GBRAIN_MODEL`, else `sonnet` | Answer-generation model. A standalone run opens no brain, so it never reads `models.eval.longmemeval` or `models.tier.*`; the nightly probe resolves those against the brain and passes the result here |
+| `--model M` | `GBRAIN_MODEL`, else `sonnet` | Answer-generation model. Ordinary standalone runs open no host brain; the nightly probe resolves host pins before calling the harness. Explicit private Codex allowances open the selected owner and enforce its pins through the strict resolver; unset private roles use configured Codex |
 | `--retrieval-only` | off | Skip LLM answer generation; emit the retrieved sessions as the hypothesis |
 | `--keyword-only` | off | Skip vector embedding: pure keyword retrieval (no reranker, no embed cache) |
 | `--expansion` | **off** | LLM multi-query expansion. Off for EVERY mode — the per-call setting beats the bundle, so `--mode tokenmax` alone does not expand. One Haiku call per question, non-deterministic; each row records `expansion_variants` |

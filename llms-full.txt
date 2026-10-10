@@ -1907,7 +1907,8 @@ writing or reviewing an operation, consult `src/core/operations.ts` for the cont
   and `gbrain eval replay --against base.ndjson`. For public benchmark
   coverage (LongMemEval, ground-truth scoring), `gbrain eval longmemeval
   <dataset.jsonl>` runs against an isolated in-memory PGLite
-  per question — your `~/.gbrain` is never opened. Full guide:
+  per question. Explicit private Codex allowances and recovery receipts use the
+  selected host database; benchmark pages remain isolated. Full guide:
   [`docs/eval-bench.md`](./docs/eval-bench.md).
 - **Drive the brain to a target health score:** preview, then agree.
   `gbrain doctor --remediation-plan --json` previews job steps and the

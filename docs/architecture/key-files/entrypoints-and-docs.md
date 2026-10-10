@@ -133,3 +133,5 @@ Current behavior and load-bearing invariants; history belongs in Git and CHANGEL
 - `src/schema.sql` — Full Postgres + pgvector DDL: canonical for every table except the TS fragment tables, whose `BEGIN/END GENERATED` regions are rewritten from the fragment modules; `bun run build:schema` derives schema-embedded.generated.ts and the PGLite template from it (`docs/ENGINES.md#canonical-schema-sources`)
 
 - `templates/` — SOUL.md, USER.md, ACCESS_POLICY.md, HEARTBEAT.md templates
+
+- `src/commands/eval-longmemeval-subscription.ts:runConfiguredLocalLongMemEval` owns LongMemEval gateway setup and the explicit private allowance connection. The dispatcher passes its canonical selected-brain connector with `probeOnly: true`; the handler refuses old schemas rather than completing startup/migrations. Non-private and pure keyword benchmark runs retain their engine-free owner path. The generated eval flag registry includes the allowance flags through this module's imports.

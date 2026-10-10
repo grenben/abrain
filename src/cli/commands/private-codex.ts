@@ -1,8 +1,8 @@
 import { writeStdoutFinal, setCliExitVerdict } from '../../core/cli-force-exit.ts';
 import { auditPrivateRoutes } from '../../core/ai/private-route-audit.ts';
 import type { CliDispatchContext } from '../command-table.ts';
-import { PIN_HELP, runPins } from './private-codex-pins.ts';
-import { JOB_UPGRADE_HELP, runJobUpgrade } from './private-codex-jobs.ts';
+import { PIN_HELP, runPins } from '../private-codex/pins.ts';
+import { JOB_UPGRADE_HELP, runJobUpgrade } from '../private-codex/jobs.ts';
 
 /** Engine-free: an audit must never bootstrap a database, discover models or invoke a provider. */
 export async function run(args: string[], ctx: CliDispatchContext): Promise<void> {

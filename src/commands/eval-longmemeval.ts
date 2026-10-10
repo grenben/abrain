@@ -151,6 +151,7 @@ import {
 } from '../eval/longmemeval/extract.ts';
 import { normalizeModelId } from '../core/model-id.ts';
 import { needsPrivateEvalLifecycle, withPrivateEvalLifecycle, bindPrivateEval, privateEvalAnswer, settlePrivateEvalQuestion, privateEvalResume, privateEvalReplayText } from '../eval/longmemeval/codex-run.ts';
+import { CODEX_EVAL_ALLOWANCE_HELP } from '../eval/longmemeval/codex-allowance-flags.ts';
 import { resolveEvalModels, resolveEvalExtractorModel } from '../eval/longmemeval/codex-config.ts';
 import { chat as gatewayChat, getEmbeddingDimensions, getEmbeddingModel, isAvailable } from '../core/ai/gateway.ts';
 import { rerankerReadinessForEngine, type EngineReadiness } from '../core/ai/reranker-readiness-engine.ts';
@@ -460,7 +461,8 @@ function printHelp(): void {
     `gbrain eval longmemeval <dataset.jsonl> [options]`,
     ``,
     `Run the LongMemEval benchmark against gbrain's hybrid retrieval. Spins up an`,
-    `in-memory PGLite per benchmark run; the user's brain is never opened.`,
+    `in-memory PGLite per benchmark run. Explicit private allowances and recovery`,
+    `receipts live in the configured host database; benchmark data stays isolated.`,
     ``,
     `Arguments:`,
     `  <dataset.jsonl>           LongMemEval dataset file (one question per line).`,
@@ -480,6 +482,7 @@ function printHelp(): void {
     }
   }
   lines.push(`  -h, --help                Show this help.`);
+  lines.push('', ...CODEX_EVAL_ALLOWANCE_HELP);
   lines.push(``);
   lines.push(`Row fields: recall_all_hit (every gold session in the top-k distinct sessions),`);
   lines.push(`recall_any_hit (at least one), recall_hit (DEPRECATED alias of recall_any_hit),`);
@@ -1520,5 +1523,6 @@ async function runOneQuestion(
 
 /** Schema-v2 by_type_summary (metrics.ts builder) — the ONE summary shape. */
 export type ByTypeSummary = ByTypeSummaryV2;
+export { parseArgs as parseLongMemEvalArgs };
 export { buildByTypeSummaryV2 as buildByTypeSummary } from '../eval/longmemeval/metrics.ts';
 export { seedRecallByTypeFromFile } from '../eval/longmemeval/resume.ts';

@@ -7,7 +7,9 @@ import { hasAIInvocationGuard, withAIInvocationPreflight } from '../../core/ai/i
 import { SubscriptionAdmissionError } from '../../core/ai/subscription-admission.ts';
 import { withCodexProposalCache } from '../../core/ai/codex-proposal-cache.ts';
 import { digest, sha256 } from '../../core/persistence/digest.ts';
-import { claimEvalRun, fenceEvalRun, readEvalResult, retainEvalResult, releaseEvalRun, type EvalClaim, type EvalOutcome } from './codex-run-store.ts';
+import { fenceEvalRun, readEvalResult, retainEvalResult, releaseEvalRun, type EvalClaim, type EvalOutcome } from './codex-run-store.ts';
+import { claimAuthorizedEvalRun } from './codex-local-grant.ts';
+import { subscriptionAuxiliaryBudgets } from '../../core/ai/subscription-auxiliary.ts';
 
 interface RunState { host: CodexSubscriptionContext; claim?: EvalClaim; questions?: Map<string, unknown>; replayText?: string }
 const runs = new AsyncLocalStorage<RunState>();
@@ -66,9 +68,16 @@ export async function bindPrivateEval(input: {
     state.replayText = bytes.toString('utf8');
     options.expansionReplayPath = sha256(bytes);
   }
-  const bindingHash = digest({ protocol: 'codex-longmemeval-run-v1', ...input, options, questions: input.questions.map(q => ({ id:q.question_id, hash:digest(q) })), policy: readPrivateCodexConfig() });
+  const auxiliary = [];
+  for (const budget of subscriptionAuxiliaryBudgets()) {
+    const [brain] = await budget.engine.executeRaw<{ brain_id: string }>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
+    if (!brain) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    auxiliary.push({ brainId:brain.brain_id, key:budget.budgetKey, capUsd:budget.capUsd });
+  }
+  const bindingHash = digest({ protocol: 'codex-longmemeval-run-v2', ...input, options, auxiliary,
+    questions: input.questions.map(q => ({ id:q.question_id, hash:digest(q) })), policy: readPrivateCodexConfig() });
   state.questions = new Map(input.questions.map(q => [q.question_id, JSON.parse(JSON.stringify(q))]));
-  state.claim = await claimEvalRun(state.host, bindingHash, input.questions.length, options.judge === true ? 'judged' : 'answer');
+  state.claim = await claimAuthorizedEvalRun(state.host, bindingHash, input.questions.length, options.judge === true ? 'judged' : 'answer');
 }
 
 async function fenced<T>(state: RunState, run: (tx: BrainEngine, claim: EvalClaim) => Promise<T>): Promise<T> {
