@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { CODEX_ACTION_WRITE_SCHEMA_SQL } from '../src/core/persistence/codex-action-schema.ts';
 import { SUBSCRIPTION_JOB_SCHEMA_SQL } from '../src/core/minions/subscription-job-schema.ts';
 /**
  * Schema text generator (refactor wave 1, W2): one copy of schema DDL.
@@ -112,6 +113,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/questions/schema.ts', expr: 'PINNED_QUESTIONS_SCHEMA_SQL', postgres: PINNED_QUESTIONS_SCHEMA_SQL, pglite: PINNED_QUESTIONS_SCHEMA_SQL },
   { source: 'src/core/ai/subscription-schema.ts', expr: 'SUBSCRIPTION_SCHEMA_SQL', postgres: SUBSCRIPTION_SCHEMA_SQL, pglite: SUBSCRIPTION_SCHEMA_SQL },
   { source: 'src/core/minions/subscription-job-schema.ts', expr: 'SUBSCRIPTION_JOB_SCHEMA_SQL', postgres: SUBSCRIPTION_JOB_SCHEMA_SQL, pglite: SUBSCRIPTION_JOB_SCHEMA_SQL },
+  { source: 'src/core/persistence/codex-action-schema.ts', expr: 'CODEX_ACTION_WRITE_SCHEMA_SQL', postgres: CODEX_ACTION_WRITE_SCHEMA_SQL, pglite: CODEX_ACTION_WRITE_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;

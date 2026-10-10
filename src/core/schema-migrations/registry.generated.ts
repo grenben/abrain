@@ -247,6 +247,7 @@ import { v243 } from './v243-codex-subscription-admission.ts';
 import { v244 } from './v244-codex-subscription-jobs.ts';
 import { v245 } from './v245-extract-subscription-cost.ts';
 import { v246 } from './v246-codex-publication-plans.ts';
+import { v247 } from './v247-codex-action-write-bindings.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -492,4 +493,5 @@ export const MIGRATIONS: Migration[] = [
   v244,
   v245,
   v246,
+  v247,
 ];

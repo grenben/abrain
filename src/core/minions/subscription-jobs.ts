@@ -43,18 +43,20 @@ async function runIdentity(engine: BrainEngine, job: MinionJob): Promise<string>
   const data = job.data ?? {};
   const sourceId = data.source_id ?? data.sourceId;
   let sourceCreatedAt: string | null = null;
+  let sourceIncarnation: string | null = null;
   if (sourceId !== undefined) {
     if (typeof sourceId !== 'string' || !sourceId ||
       (data.source_id !== undefined && data.sourceId !== undefined && data.source_id !== data.sourceId)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
-    const [source] = await engine.executeRaw<{ created_at: Date | string; archived: boolean }>(
-      'SELECT created_at, archived FROM sources WHERE id=$1', [sourceId]);
+    const [source] = await engine.executeRaw<{ created_at: Date | string; archived: boolean; incarnation: string }>(
+      'SELECT created_at, archived, incarnation FROM sources WHERE id=$1', [sourceId]);
     if (!source || source.archived) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     sourceCreatedAt = new Date(source.created_at).toISOString();
+    sourceIncarnation = source.incarnation;
   }
   return `codex-job:${job.id}:v1:${authorityDigest({ name: job.name, data, authority: job.submission_authority,
-    model: policy.model, bin: policy.bin, sourceCreatedAt })}`;
+    model: policy.model, bin: policy.bin, sourceCreatedAt, sourceIncarnation })}`;
 }
 
 /** Must run inside the queue insertion transaction, including every coalescing path. */

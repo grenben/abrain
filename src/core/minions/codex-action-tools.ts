@@ -4,11 +4,12 @@ import { matchesSlugAllowList } from '../ops/context.ts';
 import { isQuarantined } from '../quarantine.ts';
 import { actionError, CODEX_ACTION_LIMITS, type CodexReadJob } from './codex-action-contract.ts';
 
-/** Fixed local read registry. No provider, shell, network, plugin or write tool is admitted. */
+/** Fixed local registry. Reads execute here; write definitions require the durable write handler. */
 export function buildCodexReadTools(engine: BrainEngine, jobId: number, data: CodexReadJob) {
   return buildBrainTools({ engine, subagentId: jobId, config: { engine: engine.kind },
     allowedNames: new Set(data.allowed_tools), sourceId: data.source_id,
     allowedSlugPrefixes: data.allowed_slug_prefixes }).map(tool => ({ ...tool, async execute(input: unknown, ctx: Parameters<typeof tool.execute>[1]) {
+    if (tool.name !== 'brain_get_page') actionError('write_requires_durable_binding');
     const slug = (input as { slug: string }).slug;
     if (!matchesSlugAllowList(slug, data.allowed_slug_prefixes)) actionError('unauthorized_action');
     // Source authority is host supplied, absent from the model schema. The operation still validates its original parameters.

@@ -1393,6 +1393,8 @@ CREATE TABLE IF NOT EXISTS subagent_tool_executions (
   -- (job_id, message_idx, content_blocks index, tool_name).
   ordinal             INTEGER,
   gbrain_tool_use_id  UUID,
+  -- Host-owned Codex write authority and stable request binding; never supplied by model arguments.
+  host_binding       JSONB,
   started_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   ended_at            TIMESTAMPTZ,
   CONSTRAINT subagent_tool_executions_stable_id UNIQUE (job_id, message_idx, ordinal),
@@ -3080,3 +3082,46 @@ DROP TRIGGER IF EXISTS codex_job_protocol ON minion_jobs;
 CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON minion_jobs
   FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol();
 -- END GENERATED from src/core/minions/subscription-job-schema.ts (SUBSCRIPTION_JOB_SCHEMA_SQL)
+
+-- BEGIN GENERATED from src/core/persistence/codex-action-schema.ts (CODEX_ACTION_WRITE_SCHEMA_SQL). Edit that file, then run: bun run build:schema
+ALTER TABLE subagent_tool_executions ADD COLUMN IF NOT EXISTS host_binding JSONB;
+ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
+ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3));
+CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+  DECLARE target text; version integer; floor integer; active boolean; record jsonb;
+  BEGIN
+    IF TG_OP='DELETE' THEN target:=OLD.target_kind; version:=OLD.protocol_version;
+    ELSE target:=NEW.target_kind; version:=NEW.protocol_version; END IF;
+    SELECT writer_protocol_floor,skill_bundles_enabled INTO floor,active FROM persistence_brain WHERE singleton=1 FOR SHARE;
+    PERFORM gbrain_require_persistence_protocol(GREATEST(floor,version,CASE WHEN target='skill_bundle' THEN 2 ELSE 1 END));
+    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+    IF TG_OP='UPDATE' AND (NEW.target_kind<>OLD.target_kind OR NEW.protocol_version<>OLD.protocol_version) THEN
+      RAISE EXCEPTION 'unsupported_mutation_protocol: a request target is immutable' USING ERRCODE='42501';
+    END IF;
+    IF NEW.operation IN ('put_skill','delete_skill','adopt_skillpack') AND target<>'skill_bundle' THEN
+      RAISE EXCEPTION 'unsupported_mutation_protocol: skill operations require a typed target' USING ERRCODE='42501';
+    END IF;
+    IF target='skill_bundle' THEN
+      IF version<>2 OR NEW.page_id IS NOT NULL OR NEW.worktree_id IS NULL THEN
+        RAISE EXCEPTION 'unsupported_mutation_protocol: invalid skill target' USING ERRCODE='42501';
+      END IF;
+      IF TG_OP='INSERT' AND NOT active THEN
+        RAISE EXCEPTION 'writer_not_quiesced: shared publication is disabled' USING ERRCODE='42501';
+      END IF;
+      IF (TG_OP='INSERT' OR (NEW.state='running' AND OLD.state IS DISTINCT FROM 'running')) AND NOT EXISTS (SELECT 1 FROM persistence_worktrees w JOIN persistence_writer_protocols p
+        ON p.worktree_id=w.id AND p.host_id=w.owner_host_id AND p.owner_epoch=w.owner_epoch AND p.protocol_version=2
+        WHERE w.id=NEW.worktree_id AND w.state='active') THEN
+        RAISE EXCEPTION 'writer_not_quiesced: canonical owner capability must be revalidated' USING ERRCODE='42501';
+      END IF;
+    ELSIF version NOT IN (1,3) OR (version=3 AND NEW.operation<>'put_page') THEN
+      RAISE EXCEPTION 'unsupported_mutation_protocol: invalid page target' USING ERRCODE='42501';
+    END IF;
+    record:=NEW.recovery;
+    IF record IS NOT NULL AND ((target='page' AND record->>'version' IS DISTINCT FROM '1')
+      OR (target='skill_bundle' AND (record->>'version' IS DISTINCT FROM '2' OR record->>'target' IS DISTINCT FROM 'skill_bundle'
+        OR jsonb_typeof(record->'files') IS DISTINCT FROM 'array'))) THEN
+      RAISE EXCEPTION 'unsupported_mutation_protocol: recovery target mismatch' USING ERRCODE='42501';
+    END IF;
+    RETURN NEW;
+  END $$;
+-- END GENERATED from src/core/persistence/codex-action-schema.ts (CODEX_ACTION_WRITE_SCHEMA_SQL)

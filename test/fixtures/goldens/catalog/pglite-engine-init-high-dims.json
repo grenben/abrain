@@ -283,7 +283,7 @@
       "persistence_requests.persistence_requests_preparation_attempts_check": "c CHECK ((preparation_attempts >= 0))",
       "persistence_requests.persistence_requests_principal_kind_check": "c CHECK ((principal_kind = ANY (ARRAY['oauth_client'::text, 'legacy_token'::text, 'local_cli'::text, 'local_stdio'::text, 'application'::text])))",
       "persistence_requests.persistence_requests_principal_kind_principal_id_request_id_key": "u UNIQUE (principal_kind, principal_id, request_id)",
-      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2])))",
+      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2, 3])))",
       "persistence_requests.persistence_requests_sequence_key": "u UNIQUE (sequence)",
       "persistence_requests.persistence_requests_state_check": "c CHECK ((state = ANY (ARRAY['queued'::text, 'running'::text, 'recovering'::text, 'committed'::text, 'conflict'::text, 'failed'::text, 'cancelled'::text])))",
       "persistence_requests.persistence_requests_target_kind_check": "c CHECK ((target_kind = ANY (ARRAY['page'::text, 'skill_bundle'::text])))",
@@ -470,7 +470,7 @@
       "gbrain_graduation_fence()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=cd4642fe8deee2a3c14ef41f53862f0a449b2d8a10e47177bd4f5d2e05ce8803",
       "gbrain_guard_effect_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e8b5589dafd4a355106104daffdf57c7776d34fe18c5b5f5336a27de188688a1",
       "gbrain_guard_protocol_activation()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=f27354966c25d961fcecbffebba0e45747ad3de23575351319f6aee4f9aefd47",
-      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=12baf1d365a8aa3009ac0fe6605497e6433304e8d5915a3fc0b0b39ad748f6c2",
+      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=16b856859f0bee5d1b65e0475e3b083fdf2a53f661445412eb84596e9feb3d3a",
       "gbrain_guard_skill_publication()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e854c0d058e75a65c3a90127c5c417380975100e83fc34288f6085e786df10a9",
       "gbrain_lease_shared_skill_delivery()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=5e493c1ac8dce8cb025a736629e563437c4b214744137c302c532c20bf7e7acf",
       "gbrain_preserve_fact_withdrawal()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=9beb118551a08451a228146373f50f2aa2ce0cfe89937e937d361b33224aa0aa",
@@ -3387,8 +3387,9 @@
           "11 provider_id text/text NULL",
           "12 ordinal integer/int4 NULL",
           "13 gbrain_tool_use_id uuid/uuid NULL",
-          "14 started_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
-          "15 ended_at timestamp with time zone/timestamptz NULL"
+          "14 host_binding jsonb/jsonb NULL",
+          "15 started_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "16 ended_at timestamp with time zone/timestamptz NULL"
         ],
         "flags": "relkind=r rls=false force_rls=false"
       },

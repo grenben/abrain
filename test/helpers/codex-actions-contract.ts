@@ -17,6 +17,8 @@ import * as store from '../../src/core/minions/codex-action-store.ts';
 import * as persistence from '../../src/core/minions/handlers/subagent-persistence.ts';
 import { runJobInChild } from '../../src/core/minions/child-job-runner.ts';
 import { noteChildSubscriptionEnforcement } from '../../src/core/minions/subscription-child.ts';
+import { disposePersistenceConsumer } from '../../src/core/persistence/service.ts';
+import { codexActionWritesContract } from './codex-action-writes-contract.ts';
 
 export function codexActionsContract(factory: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
   const root = mkdtempSync(join(tmpdir(), 'codex-actions-')), bin = join(root, 'fake.mjs'), control = join(root, 'replies.json'), capture = join(root, 'calls.jsonl');
@@ -61,10 +63,13 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     await engine.putPage('notes/other-only', { title: 'Other', type: 'note', compiled_truth: 'SYNTHETIC_OTHER_SOURCE_CANARY' }, { sourceId: 'other' });
   });
   beforeEach(async () => {
+    await disposePersistenceConsumer(engine);
+    await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
     await engine.executeRaw('DELETE FROM codex_subscription_attempts'); await engine.executeRaw('DELETE FROM codex_subscription_runs'); await engine.executeRaw('DELETE FROM minion_jobs');
     writeFileSync(capture, ''); replies(get(), final); resetGateway(); configureGateway({ env: {} });
   });
   afterAll(async () => {
+    await disposePersistenceConsumer(engine);
     await engine?.disconnect(); await cleanup?.(); unregister?.(); resetGateway(); globalThis.fetch = fetch;
     for (const [k, v] of saved) if (v === undefined) delete process.env[k]; else process.env[k] = v;
     rmSync(root, { recursive: true, force: true });
@@ -220,4 +225,5 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
       abortSignal: new AbortController().signal, shutdownSignal: new AbortController().signal,
       invocation: { cmd: '/nonexistent/forbidden', argsPrefix: [] }, tiniPath: '' })).rejects.toMatchObject({ reasonCode: 'child_protocol_incompatible' });
   });
+  codexActionWritesContract({ engine: () => engine, root, claim, run, replies, calls, get, final });
 }

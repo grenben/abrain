@@ -4,7 +4,7 @@ let supported = false;
 let actionsSupported = false;
 export function noteChildSubscriptionEnforcement(features: readonly string[]): void {
   supported = features.includes('codex-subscription-v1');
-  actionsSupported = features.includes('codex-host-read-v1');
+  actionsSupported = features.includes('codex-host-read-v1') && features.includes('codex-host-actions-v1');
 }
 export function childSubscriptionEnforcementReady(): boolean { return supported; }
 export function childCodexActionsReady(): boolean { return actionsSupported; }

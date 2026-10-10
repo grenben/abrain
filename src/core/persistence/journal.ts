@@ -1,3 +1,4 @@
+import { authorizeCodexWrite } from './codex-action-guard.ts';
 import { randomUUID } from 'node:crypto';
 import { WRITE_SWITCHES, writeSwitchOn } from './switches.ts';
 import type { BrainEngine } from '../engine.ts';
@@ -31,7 +32,7 @@ export interface WriteAdmission {
   principal: Principal;
   operation: string;
   targetKind?: 'page' | 'skill_bundle';
-  protocolVersion?: 1 | 2;
+  protocolVersion?: 1 | 2 | 3;
   sourceId: string;
   sourceIncarnation: string;
   slug: string;
@@ -182,12 +183,13 @@ async function prepareAdmission(engine: BrainEngine, input: WriteAdmission, over
   const stamp = writerStamp();
   return { requestId, apply: async (tx: BrainEngine): Promise<WriteRequest> => {
     await declarePersistenceProtocol(tx);
-    // The guards are sent together in lock order (worktree, source, writer, counters) and judged in
+    // The guards are sent together in lock order (worktree, optional job, source, writer, counters) and judged in
     // that order: the first refusal in this list is the one reported, as when they ran one by one.
-    const [, , , , , counters, topology, prior] = await pipelined(tx, [
+    const [, , , , , , counters, topology, prior] = await pipelined(tx, [
       () => assertGraduationAdmission(tx),
       async () => assertMutationProtocol({ target_kind: input.targetKind, protocol_version: input.protocolVersion }),
       async () => { if (input.worktreeId) await assertWorktreeAdmission(tx, input); },
+      () => authorizeCodexWrite(tx, input, true),
       // Source membership is locked before principal/counter/request guards. A
       // deleted/recreated source never receives work accepted for its old identity.
       async () => {
@@ -202,7 +204,7 @@ async function prepareAdmission(engine: BrainEngine, input: WriteAdmission, over
       () => input.principal.kind === 'local_cli' ? tx.executeRaw('SELECT id FROM persistence_topology_changes WHERE principal_id=$1::uuid AND request_id=$2::uuid', [input.principal.id, requestId])
         : Promise.resolve([]),
       () => getWriteRequest(tx, input.principal, requestId),
-    ]) as [unknown, unknown, unknown, unknown, unknown, Counter[], unknown[], WriteRequest | null];
+    ]) as [unknown, unknown, unknown, unknown, unknown, unknown, Counter[], unknown[], WriteRequest | null];
     if (topology.length) throw lifecycleIdConflict(requestId);
     if (prior) {
       if ((prior.target_kind ?? 'page') !== (input.targetKind ?? 'page') || (prior.protocol_version ?? 1) !== (input.protocolVersion ?? 1)) {
