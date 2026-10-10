@@ -4,10 +4,10 @@ import { resolveModel } from '../../core/model-config.ts';
 import { DEFAULT_JUDGE_MODEL } from './judge.ts';
 
 export async function resolveEvalModels(opts: { model?: string; judgeModel: string; judgeConcurrency: number },
-  injected: { client?: unknown; extractorClient?: unknown; judgeClient?: unknown }) {
+  injected: { client?: unknown; extractorClient?: unknown; judgeClient?: unknown; expandFn?: unknown; embedTransport?: unknown; rerankerReadiness?: unknown }) {
   const privateMode = !!readPrivateCodexConfig(), subscription = codexSubscriptionContext();
-  if (privateMode && (injected.client || injected.extractorClient || injected.judgeClient || opts.judgeConcurrency !== 1))
-    throw new Error('private evaluation requires the native role clients and sequential judging');
+  if (privateMode && (injected.client || injected.extractorClient || injected.judgeClient || injected.expandFn || injected.embedTransport || injected.rerankerReadiness || opts.judgeConcurrency !== 1))
+    throw new Error('private evaluation requires native role clients, authorized provider transports and sequential judging');
   const engine = privateMode ? subscription?.engine ?? null : null;
   const judgeModel = privateMode ? await resolveModel(engine, {
     cliFlag: opts.judgeModel || undefined, configKey: 'models.eval.longmemeval_judge', tier: 'deep', fallback: DEFAULT_JUDGE_MODEL,

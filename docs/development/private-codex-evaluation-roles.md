@@ -118,3 +118,30 @@ No installed executable, configuration, credentials, database or service changed
 Production runtime qualification remains unverified; no live inference occurred.
 An eventual authorized upgrade must include the reviewed source/build and
 registered migrations through v256, plus the remaining activation gates.
+
+## Disposable benchmark ownership follow-up
+
+The harness now creates its in-memory targets through a closed factory. An
+existing engine cannot be registered as disposable, and a factory object cannot
+reconnect to a persistent database. The command checks ownership before writing
+configuration, including for injected or recycled engines. Reset preserves the
+brain identity and refuses any database holding subscription grants, so it cannot
+erase attempts, unresolved account-lane holds or proposal history. Reset,
+disconnect and concurrent question scopes cannot overlap.
+
+Private extraction binds the exact temporary engine and its brain identity to a
+live host context. Before effects, the host transaction locks the grant and runs
+the host's authority hook. A separate scratch transaction checks source identity
+and inserts the entire batch. The host hook receives only the host transaction.
+Cancellation rolls back scratch effects before their commit. These two databases
+do **not** form an atomic transaction: if scratch commits but host acknowledgement
+fails, the question becomes invalid and cannot perform further inference. Its
+derived state must be rebuilt through the next reset; no durable benchmark result
+receipt is claimed here.
+
+A native proposal retained in the host v256 cache can be revalidated and inserted
+into a rebuilt corpus without a second inference charge. The real keyword CLI
+fixture now runs extraction, reader and judge for two questions, preserving six
+attempts/accepted turns in the external host database. Injected expansion,
+embedding and readiness transports are refused under private mode. The optional
+synopsis/fact-key arms and paid hybrid retrieval still need their own integration.

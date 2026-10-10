@@ -33,6 +33,8 @@
  * the optimistic claim).
  */
 
+import { assertSubscriptionTarget, subscriptionTargetTransaction } from '../../core/ai/subscription-target.ts';
+
 import { createHash } from 'crypto';
 import type { ThinkLLMClient } from '../../core/think/index.ts';
 import {
@@ -202,7 +204,7 @@ function hashSessionBody(body: string): string {
  * a one-token alias under the first token ("Marco Smith" → first-mention
  * "marco" aliases to the same slug as later "Marco" mentions).
  */
-async function canonicalizeEntity(
+export async function canonicalizeEvalEntity(
   engine: BrainEngine,
   sourceId: string,
   rawEntity: string,
@@ -347,16 +349,13 @@ export async function extractAndInsertClaims(opts: {
   let sourceIncarnation: string | undefined;
   const fence = async (tx: BrainEngine) => {
     if (context!.signal?.aborted) throw new CodexProposalError('aborted');
-    await context!.checkAuthorityInTransaction?.(tx);
     const [source] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [opts.sourceId]);
     if (!source || source.archived || source.incarnation !== sourceIncarnation) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     if (context!.signal?.aborted) throw new CodexProposalError('aborted');
   };
   if (privateMode) {
     if (!context) throw new SubscriptionAdmissionError('subscription_required');
-    const [target] = await opts.engine.executeRaw<{ brain_id: string }>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
-    const [owner] = await context.engine.executeRaw<{ brain_id: string }>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
-    if (!target || target.brain_id !== owner?.brain_id) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    await assertSubscriptionTarget(opts.engine);
     const [source] = await opts.engine.executeRaw<{ incarnation: string }>('SELECT incarnation FROM sources WHERE id=$1 AND NOT archived', [opts.sourceId]);
     if (!source) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     sourceIncarnation = source.incarnation;
@@ -382,7 +381,7 @@ export async function extractAndInsertClaims(opts: {
   }
 
   if (!claims || claims.length === 0) {
-    if (privateMode) { await context!.checkAuthority?.(); await opts.engine.transaction(fence); }
+    if (privateMode) { await context!.checkAuthority?.(); await subscriptionTargetTransaction(opts.engine, fence); }
     return { inserted: 0, parsed: 0, cacheHit };
   }
 
@@ -391,7 +390,7 @@ export async function extractAndInsertClaims(opts: {
   const rows: Array<NewFact & { row_num: number; source_markdown_slug: string }> = [];
   let rowNum = 1;
   for (const c of claims) {
-    const canonical = await canonicalizeEntity(opts.engine, opts.sourceId, c.entity, opts.aliasMap, privateMode);
+    const canonical = await canonicalizeEvalEntity(opts.engine, opts.sourceId, c.entity, opts.aliasMap, privateMode);
     if (!canonical) { if (privateMode) throw new CodexProposalError('invalid_output'); continue; }
     rows.push({
       fact: c.text,
@@ -416,7 +415,7 @@ export async function extractAndInsertClaims(opts: {
   if (rows.length === 0) return { inserted: 0, parsed: claims.length, cacheHit };
   if (privateMode) {
     await context!.checkAuthority?.();
-    return opts.engine.transaction(async tx => {
+    return subscriptionTargetTransaction(opts.engine, async tx => {
       await fence(tx);
       const ins = await tx.insertFacts(rows, { source_id: opts.sourceId }); // gbrain-allow-direct-insert: benchmark native extraction; bounded validated rows, source/worker fence, atomic batch.
       if (context!.signal?.aborted) throw new CodexProposalError('aborted');

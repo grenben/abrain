@@ -418,5 +418,15 @@ extractor and judge dispatch, validated source evidence, explicit abstention and
 failure, atomic fenced fact batches, versioned receipts and honest aggregate
 costs. The real keyword reader/judge benchmark retains externally supplied
 admission across temporary-brain resets and fails on partial exhaustion. Full
-CLI grants, preprocessing across brains, mixed retrieval and run recovery remain
+CLI grants, synopsis/fact-key preprocessing, mixed retrieval and run recovery remain
 incomplete; this does not change the installed artifact or activate private mode.
+
+## Disposable benchmark target follow-up
+
+Factory-owned in-memory targets now preserve their identity across resets and
+refuse resets of subscription owners. Extraction can populate those targets
+under the external host grant and transaction fence, with attempts and retained
+native proposals surviving corpus replacement. Cancellation and uncertain owner
+commits fail the question; this is not cross-database atomic publication or full
+run/result recovery. The real keyword extraction/reader/judge path is covered by
+synthetic fake-Codex fixtures. Installed GBrain remains unchanged.

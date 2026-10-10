@@ -5,9 +5,12 @@
  * slug, and render the first non-empty trajectory block. Peeled from
  * src/commands/eval-longmemeval.ts.
  *
- * INVARIANT: best-effort. Any error (or a 5s findTrajectory stall) degrades to
- * "no block injected" — a routing failure never fails the question.
+ * Non-private best-effort: any error (or a 5s findTrajectory stall) degrades to
+ * "no block injected". Private lookup/timeout failures fail the question.
  */
+
+import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { canonicalizeEvalEntity, makeAliasMap } from './extract.ts';
 
 import type { PGLiteEngine } from '../../core/pglite-engine.ts';
 import type { TrajectoryPoint } from '../../core/engine.ts';
@@ -33,10 +36,12 @@ export async function routeTrajectory(
   retrievedSlugs: readonly string[],
   intent: Intent,
 ): Promise<TrajectoryRoute> {
+  const privateMode = !!readPrivateCodexConfig();
   try {
     const candidates = extractCandidateEntities(question, [...retrievedSlugs]);
     for (const cand of candidates) {
-      const resolved = await resolveEntitySlugWithSource(engine, 'default', cand.raw);
+      const resolved = privateMode ? await canonicalizeEvalEntity(engine, 'default', cand.raw, makeAliasMap(), true)
+        : await resolveEntitySlugWithSource(engine, 'default', cand.raw);
       if (!resolved) continue;
       // Unlike the think production path, the harness does NOT skip
       // fallback_slugify results: the extractor and the lookup both slugify
@@ -47,7 +52,7 @@ export async function routeTrajectory(
         5000,
         'findTrajectory',
       ).catch((err: unknown) => {
-        if (err instanceof OperationTimeoutError) return [];
+        if (!privateMode && err instanceof OperationTimeoutError) return [];
         throw err;
       });
       if (points.length === 0) continue;
@@ -56,6 +61,7 @@ export async function routeTrajectory(
       return { block: fmt.rendered, points: fmt.emittedPoints, entityResolved: resolved.slug, resolutionSource: resolved.source };
     }
   } catch {
+    if (privateMode) throw new Error('private_eval_trajectory_failed');
     // Best-effort: any error degrades to "no block injected".
   }
   return EMPTY_TRAJECTORY_ROUTE;

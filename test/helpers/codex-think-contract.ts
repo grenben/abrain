@@ -1,3 +1,4 @@
+import { codexScratchContract } from './codex-scratch-contract.ts';
 import { codexContextualContract } from './codex-contextual-contract.ts';
 import { codexProposalCacheContract } from './codex-proposal-cache-contract.ts';
 import { codexEvalContract } from './codex-eval-contract.ts';
@@ -297,6 +298,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   });
   codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
   codexProposalCacheContract({engine:()=>engine,run,reply,calls});
+  codexScratchContract({engine:()=>engine,run,reply,calls});
   codexEvalContract({engine:()=>engine,sourceId,run,reply,calls});
   codexParserContract({engine:()=>engine,sourceId,run,reply,calls});
   codexThinkAbContract({engine:()=>engine,sourceId,run,reply,valid,calls});

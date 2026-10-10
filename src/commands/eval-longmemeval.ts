@@ -43,7 +43,7 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
-import { brainRecycler, createBenchmarkBrain, LME_BRAIN_RECYCLE_EVERY, resetTables } from '../eval/longmemeval/harness.ts';
+import { brainRecycler, createBenchmarkBrain, LME_BRAIN_RECYCLE_EVERY, runBenchmarkQuestion, assertBenchmarkBrain } from '../eval/longmemeval/harness.ts';
 export { LME_BRAIN_RECYCLE_EVERY };
 import { haystackToPages, normalizeSessions } from '../eval/longmemeval/adapter.ts';
 import {
@@ -1139,6 +1139,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
   };
 
   const configureBrain = async (engine: PGLiteEngine): Promise<void> => {
+    await assertBenchmarkBrain(engine);
     // #3676: nightly probe callers may copy audited live search config into
     // this isolated engine. Data tables stay hermetic.
     for (const [key, value] of Object.entries(runOpts.searchConfigSnapshot ?? {})) {
@@ -1398,140 +1399,141 @@ async function runOneQuestion(
     }
   }
 
-  await resetTables(engine);
-  const adapterPages = haystackToPages(q);
-  const dates = q.haystack_dates ?? [];
-  const pageMeta: { slug: string; content: string; date?: string }[] = [];
-  // Per-question alias map for the extractor so canonical-slug aliases never
-  // leak across questions.
-  const aliasMap: AliasMap = makeAliasMap();
+  return runBenchmarkQuestion(engine, async () => {
+    const adapterPages = haystackToPages(q);
+    const dates = q.haystack_dates ?? [];
+    const pageMeta: { slug: string; content: string; date?: string }[] = [];
+    // Per-question alias map for the extractor so canonical-slug aliases never
+    // leak across questions.
+    const aliasMap: AliasMap = makeAliasMap();
 
-  let meta: HybridSearchMeta | undefined;
-  const extra0: Record<string, unknown> = {};
-  const decideBefore = await decideLane.lmeSpendBefore(engine, ctx.decide);
-  let pool: SearchResult[] | undefined;
-  let preRerank: SearchResult[] | undefined;
-  let viaRow: viaOperation.ViaOperationRow | undefined;
-  // The embed-producing section (import + search) runs in ONE embed-cache
-  // transaction and COMMITS before the trajectory lookup / reader call.
-  const results: SearchResult[] = await ctx.embedTxn(async () => {
-    for (let i = 0; i < adapterPages.length; i++) {
-      const p = adapterPages[i];
-      pageMeta.push({ slug: p.slug, content: p.content, date: dates[i] });
-      await importFromContent(engine, p.slug, p.content, { noEmbed: opts.keywordOnly });
-      // Inline claim extractor populates the facts table so trajectory routing
-      // has data to retrieve. Fail-open per session.
-      if (ctx.trajectoryEnabled) {
-        await extractAndInsertClaims({
-          engine,
-          client: ctx.extractorClient,
-          model: ctx.extractorModel,
-          sessionSlug: p.slug,
-          sessionId: sessionIdFromSlug(p.slug),
-          sessionBody: p.content,
-          sessionDate: dates[i],
-          sourceId: 'default',
-          aliasMap,
-        });
+    let meta: HybridSearchMeta | undefined;
+    const extra0: Record<string, unknown> = {};
+    const decideBefore = await decideLane.lmeSpendBefore(engine, ctx.decide);
+    let pool: SearchResult[] | undefined;
+    let preRerank: SearchResult[] | undefined;
+    let viaRow: viaOperation.ViaOperationRow | undefined;
+    // The embed-producing section (import + search) runs in ONE embed-cache
+    // transaction and COMMITS before the trajectory lookup / reader call.
+    const results: SearchResult[] = await ctx.embedTxn(async () => {
+      for (let i = 0; i < adapterPages.length; i++) {
+        const p = adapterPages[i];
+        pageMeta.push({ slug: p.slug, content: p.content, date: dates[i] });
+        await importFromContent(engine, p.slug, p.content, { noEmbed: opts.keywordOnly });
+        // Inline claim extractor populates the facts table so trajectory routing
+        // has data to retrieve. Private extraction failures fail the question.
+        if (ctx.trajectoryEnabled) {
+          await extractAndInsertClaims({
+            engine,
+            client: ctx.extractorClient,
+            model: ctx.extractorModel,
+            sessionSlug: p.slug,
+            sessionId: sessionIdFromSlug(p.slug),
+            sessionBody: p.content,
+            sessionDate: dates[i],
+            sourceId: 'default',
+            aliasMap,
+          });
+        }
       }
+      if (ctx.synopsis) Object.assign(extra0, { contextual_synopsis: await synopsisTier.applySynopsisTier(engine, adapterPages, ctx.synopsis) });
+      if (ctx.factKeys) Object.assign(extra0, { fact_keys: await retrievalArms.applyFactKeyArm(engine, adapterPages, ctx.factKeys.arm, ctx.factKeys.spend) });
+      if (opts.viaOp.op) {
+        const via = await viaOperation.runViaOperation(engine, q.question, { ...opts.viaOp, op: opts.viaOp.op }, ctx.expectExpansion);
+        meta = via.meta; viaRow = via.row;
+        return via.results;
+      }
+      if (opts.keywordOnly) return engine.searchKeyword(q.question, { limit: opts.topK });
+      const searchOpts: HybridSearchOpts = {
+        limit: opts.arms.timeScope ? Math.max(opts.topK, opts.arms.timeScopePool) : opts.topK,
+        // Per-call wins over the bundle: expansion fires ONLY with --expansion.
+        expansion: opts.expansion,
+        ...(expandFn ? { expandFn } : {}),
+        ...(opts.expansionVariantBudget !== undefined ? { expansionVariantBudget: opts.expansionVariantBudget } : {}),
+        onMeta: (m) => { meta = m; }, ...decideLane.lmeDecideSearchOpts(ctx.decide),
+        ...(opts.capturePool
+          ? { onRerankPool: (p: readonly SearchResult[], pre?: readonly SearchResult[]) => { pool = [...p]; preRerank = pre ? [...pre] : undefined; } }
+          : {}),
+      };
+      return retrievalArms.scopeResults(await hybridSearch(engine, q.question, searchOpts), opts.arms, { q, pageMeta, slugToRaw, gold, k: opts.topK, extra: extra0 });
+    });
+
+    // Trajectory routing for temporal / knowledge_update intents. Skips for
+    // 'other' or when --no-trajectory. Best-effort (trajectory-route.ts).
+    const intent: Intent = ctx.trajectoryEnabled ? classifyIntent(q) : 'other';
+    const route: TrajectoryRoute = ctx.trajectoryEnabled && intent !== 'other'
+      ? await routeTrajectory(engine, q.question, results.map(r => r.slug), intent)
+      : EMPTY_TRAJECTORY_ROUTE;
+
+    // Reader pins (D30) ride every answered row: requested model, the
+    // provider-reported snapshot when it differs, the system-prompt sha and the
+    // output cap. --retrieval-only rows are marked so a --judge backfill can
+    // refuse them (no reader hypothesis to grade).
+    let hypothesis: string;
+    let readerFields: Record<string, unknown>;
+    if (opts.retrievalOnly) {
+      hypothesis = renderRetrievedAsHypothesis(results, slugToRaw);
+      readerFields = { retrieval_only: true };
+    } else {
+      // The gateway is called with the NORMALIZED id (gatewayClient normalizes
+      // again, idempotently), so the snapshot comparison inside generateAnswer
+      // sees the same string the provider echoes — a bare alias never shows up
+      // as a fake `reader_model_snapshot`.
+      const answer = decideLane.lmeAbstention(ctx.decide, meta) ?? await generateAnswer(ctx.client, q, results, pageMeta, slugToRaw, normalizeModelId(ctx.model), route.block, ctx.readerConfig);
+      const readerError = answer.finish_reason === 'max_tokens' ? 'reader_max_tokens'
+        : answer.finish_reason !== 'end_turn' ? 'reader_unknown_finish_reason'
+        : answer.text === '' ? 'reader_empty_response' : null;
+      hypothesis = readerError ? '' : answer.text;
+      readerFields = {
+        reader_model: ctx.model,
+        reader_model_snapshot: answer.response_model,
+        reader_mode: ctx.readerConfig.mode,
+        reader_prompt_version: ctx.readerConfig.promptVersion,
+        reader_prompt_sha: ctx.readerConfig.promptSha,
+        reader_max_tokens: ctx.readerConfig.maxTokens,
+        reader_config_hash: ctx.readerHash,
+        reader_finish_reason: answer.finish_reason, reader_usage: answer.usage,
+        ...(answer.native ? { reader_native: answer.native } : {}),
+        ...(readerError ? { error: readerError } : {}),
+        ...(readerError && answer.text ? { reader_partial_output: answer.text } : {}),
+        reader_context_chars: answer.context_chars,
+        reader_context_sessions: answer.context_sessions,
+        reader_sessions_truncated: answer.sessions_truncated,
+      };
     }
-    if (ctx.synopsis) Object.assign(extra0, { contextual_synopsis: await synopsisTier.applySynopsisTier(engine, adapterPages, ctx.synopsis) });
-    if (ctx.factKeys) Object.assign(extra0, { fact_keys: await retrievalArms.applyFactKeyArm(engine, adapterPages, ctx.factKeys.arm, ctx.factKeys.spend) });
-    if (opts.viaOp.op) {
-      const via = await viaOperation.runViaOperation(engine, q.question, { ...opts.viaOp, op: opts.viaOp.op }, ctx.expectExpansion);
-      meta = via.meta; viaRow = via.row;
-      return via.results;
-    }
-    if (opts.keywordOnly) return engine.searchKeyword(q.question, { limit: opts.topK });
-    const searchOpts: HybridSearchOpts = {
-      limit: opts.arms.timeScope ? Math.max(opts.topK, opts.arms.timeScopePool) : opts.topK,
-      // Per-call wins over the bundle: expansion fires ONLY with --expansion.
-      expansion: opts.expansion,
-      ...(expandFn ? { expandFn } : {}),
-      ...(opts.expansionVariantBudget !== undefined ? { expansionVariantBudget: opts.expansionVariantBudget } : {}),
-      onMeta: (m) => { meta = m; }, ...decideLane.lmeDecideSearchOpts(ctx.decide),
-      ...(opts.capturePool
-        ? { onRerankPool: (p: readonly SearchResult[], pre?: readonly SearchResult[]) => { pool = [...p]; preRerank = pre ? [...pre] : undefined; } }
-        : {}),
+
+    // search_meta (plan 0e): `reranked` is derived — no such meta field exists.
+    const degraded = meta?.degraded ?? [];
+    const searchMeta: Record<string, unknown> & RowSearchMeta = {
+      vector_enabled: meta?.vector_enabled ?? false,
+      expansion_applied: meta?.expansion_applied ?? false,
+      degraded,
+      reranked: false,
+      ...(meta?.autocut ? { autocut: meta.autocut } : {}),
     };
-    return retrievalArms.scopeResults(await hybridSearch(engine, q.question, searchOpts), opts.arms, { q, pageMeta, slugToRaw, gold, k: opts.topK, extra: extra0 });
+    const { rerankerSkipped, vectorDegraded, expansionFailed } = classifyDegradation(searchMeta, { keywordOnly: opts.keywordOnly, expansion: ctx.expectExpansion });
+    searchMeta.reranked = (viaRow ? viaOperation.rerankCalled(viaRow) : results.some(r => Number.isFinite(r.rerank_score))) && !rerankerSkipped;
+
+    const extra: Record<string, unknown> = {
+      ...extra0,
+      retrieval_config_hash: ctx.retrievalConfigHash,
+      ...readerFields,
+      search_meta: searchMeta,
+      ...(expansionVariants ? { expansion_variants: expansionVariants } : {}),
+      ...(expansionReplayed ? { expansion_replayed: true } : {}), ...(viaRow ? { via_operation: viaRow } : {}),
+      ...(ctx.trajectoryEnabled ? {
+        intent,
+        trajectory_points: route.points,
+        entity_resolved: route.entityResolved,
+        resolution_source: route.resolutionSource,
+        methodology_note: trajectoryMethodologyNote(ctx.extractorModel),
+      } : {}),
+    };
+    Object.assign(extra, buildCaptureExtras({ pool, preRerank, meta, results, slugToRaw, gold }), await decideLane.lmeDecideRow(engine, ctx.decide, meta, decideBefore));
+
+    const row = buildRow({ question: q, hypothesis, results, k: opts.topK, slugToRaw, mode: opts.mode, extra });
+    return { row, rerankerSkipped, vectorDegraded, expansionFailed };
   });
-
-  // Trajectory routing for temporal / knowledge_update intents. Skips for
-  // 'other' or when --no-trajectory. Best-effort (trajectory-route.ts).
-  const intent: Intent = ctx.trajectoryEnabled ? classifyIntent(q) : 'other';
-  const route: TrajectoryRoute = ctx.trajectoryEnabled && intent !== 'other'
-    ? await routeTrajectory(engine, q.question, results.map(r => r.slug), intent)
-    : EMPTY_TRAJECTORY_ROUTE;
-
-  // Reader pins (D30) ride every answered row: requested model, the
-  // provider-reported snapshot when it differs, the system-prompt sha and the
-  // output cap. --retrieval-only rows are marked so a --judge backfill can
-  // refuse them (no reader hypothesis to grade).
-  let hypothesis: string;
-  let readerFields: Record<string, unknown>;
-  if (opts.retrievalOnly) {
-    hypothesis = renderRetrievedAsHypothesis(results, slugToRaw);
-    readerFields = { retrieval_only: true };
-  } else {
-    // The gateway is called with the NORMALIZED id (gatewayClient normalizes
-    // again, idempotently), so the snapshot comparison inside generateAnswer
-    // sees the same string the provider echoes — a bare alias never shows up
-    // as a fake `reader_model_snapshot`.
-    const answer = decideLane.lmeAbstention(ctx.decide, meta) ?? await generateAnswer(ctx.client, q, results, pageMeta, slugToRaw, normalizeModelId(ctx.model), route.block, ctx.readerConfig);
-    const readerError = answer.finish_reason === 'max_tokens' ? 'reader_max_tokens'
-      : answer.finish_reason !== 'end_turn' ? 'reader_unknown_finish_reason'
-      : answer.text === '' ? 'reader_empty_response' : null;
-    hypothesis = readerError ? '' : answer.text;
-    readerFields = {
-      reader_model: ctx.model,
-      reader_model_snapshot: answer.response_model,
-      reader_mode: ctx.readerConfig.mode,
-      reader_prompt_version: ctx.readerConfig.promptVersion,
-      reader_prompt_sha: ctx.readerConfig.promptSha,
-      reader_max_tokens: ctx.readerConfig.maxTokens,
-      reader_config_hash: ctx.readerHash,
-      reader_finish_reason: answer.finish_reason, reader_usage: answer.usage,
-      ...(answer.native ? { reader_native: answer.native } : {}),
-      ...(readerError ? { error: readerError } : {}),
-      ...(readerError && answer.text ? { reader_partial_output: answer.text } : {}),
-      reader_context_chars: answer.context_chars,
-      reader_context_sessions: answer.context_sessions,
-      reader_sessions_truncated: answer.sessions_truncated,
-    };
-  }
-
-  // search_meta (plan 0e): `reranked` is derived — no such meta field exists.
-  const degraded = meta?.degraded ?? [];
-  const searchMeta: Record<string, unknown> & RowSearchMeta = {
-    vector_enabled: meta?.vector_enabled ?? false,
-    expansion_applied: meta?.expansion_applied ?? false,
-    degraded,
-    reranked: false,
-    ...(meta?.autocut ? { autocut: meta.autocut } : {}),
-  };
-  const { rerankerSkipped, vectorDegraded, expansionFailed } = classifyDegradation(searchMeta, { keywordOnly: opts.keywordOnly, expansion: ctx.expectExpansion });
-  searchMeta.reranked = (viaRow ? viaOperation.rerankCalled(viaRow) : results.some(r => Number.isFinite(r.rerank_score))) && !rerankerSkipped;
-
-  const extra: Record<string, unknown> = {
-    ...extra0,
-    retrieval_config_hash: ctx.retrievalConfigHash,
-    ...readerFields,
-    search_meta: searchMeta,
-    ...(expansionVariants ? { expansion_variants: expansionVariants } : {}),
-    ...(expansionReplayed ? { expansion_replayed: true } : {}), ...(viaRow ? { via_operation: viaRow } : {}),
-    ...(ctx.trajectoryEnabled ? {
-      intent,
-      trajectory_points: route.points,
-      entity_resolved: route.entityResolved,
-      resolution_source: route.resolutionSource,
-      methodology_note: trajectoryMethodologyNote(ctx.extractorModel),
-    } : {}),
-  };
-  Object.assign(extra, buildCaptureExtras({ pool, preRerank, meta, results, slugToRaw, gold }), await decideLane.lmeDecideRow(engine, ctx.decide, meta, decideBefore));
-
-  const row = buildRow({ question: q, hypothesis, results, k: opts.topK, slugToRaw, mode: opts.mode, extra });
-  return { row, rerankerSkipped, vectorDegraded, expansionFailed };
 }
 
 /** Schema-v2 by_type_summary (metrics.ts builder) — the ONE summary shape. */

@@ -1,3 +1,4 @@
+import { createBenchmarkBrain } from '../../src/eval/longmemeval/harness.ts';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -201,6 +202,22 @@ export function codexEvalContract(f: Fixture) { describe('native evaluation role
       expect(rows[2].qa_accuracy).toMatchObject({ complete: true, actual_cost_usd: null, run_cost_usd: null, unpriced_judge_rows: 2 });
       expect(f.calls().length - before).toBe(4);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test('real benchmark extracts source-scoped facts across resets with host admission intact', async () => {
+    const { root, dataset, output } = benchmark(), scratch = await createBenchmarkBrain(), before = f.calls().length;
+    f.reply({ byRole: { extractor: { claims: [claim] }, reader: { ...validReader(), citations: [{ session_id: '__first_session__', quote: body }] }, judge: { answer: 'yes' } } });
+    try {
+      await f.run(async id => {
+        await runEvalLongMemEval([dataset, '--keyword-only', '--no-embed-cache', '--by-type', '--judge', '--output', output], { engine: scratch, exitOnError: false });
+        const [run] = await f.engine().executeRaw<{ attempts: number; accepted_turns: number }>('SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [id]);
+        expect(Number(run!.attempts)).toBe(6); expect(Number(run!.accepted_turns)).toBe(6);
+      }, {}, 6);
+      const rows = readFileSync(output, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(rows[2].qa_accuracy.complete).toBe(true);
+      expect(await scratch.executeRaw('SELECT fact,source_id,source_session FROM facts')).toEqual([{ fact: body, source_id: 'default', source_session: 's-edb2d7971f' }]);
+      expect(await scratch.executeRaw('SELECT run_id FROM codex_subscription_runs')).toEqual([]);
+      expect(f.calls().length - before).toBe(6);
+    } finally { await scratch.disconnect(); rmSync(root, { recursive: true, force: true }); }
   });
   test('partially answered private benchmark fails honestly when its allowance is exhausted', async () => {
     const { root, dataset, output } = benchmark(), before = f.calls().length;
