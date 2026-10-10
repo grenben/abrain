@@ -25,7 +25,7 @@ import { observationDateLine, observationDateRule, parseExtractedEventDate, type
 import { chat, embedOne, isAvailable, getEmbeddingModel } from '../ai/gateway.ts';
 import { classifyGlobalLlmError } from '../ai/errors.ts';
 import { stripReasoningBlocks } from '../llm-json.ts';
-import type { ChatResult } from '../ai/gateway.ts';
+import type { ChatResult, ChatOpts } from '../ai/gateway.ts';
 import { INJECTION_PATTERNS } from '../think/sanitize.ts';
 import { resolveModelDetailed, type ResolveSource } from '../model-config.ts';
 import { normalizeModelId, splitProviderModelId } from '../model-id.ts';
@@ -33,7 +33,7 @@ import type { BrainEngine, NewFact, FactKind, FactAttribution } from '../engine.
 import { normalizeMetricLabel } from './extract-from-fence.ts';
 import { isNullLikeEntity } from './write-single.ts';
 import { isAIInvocationPolicyError } from '../ai/invocation-guard.ts';
-import { codexFactsResponseSchema, privateFactsMode } from './codex-proposals.ts';
+import { codexFactsResponseSchema, privateFactsMode, codexFactsChat, type NativeFactsAccounting } from './codex-proposals.ts';
 
 /**
  * v0.31 (D15): kill-switch for fact extraction.
@@ -104,9 +104,14 @@ export async function getFactsExtractionModel(engine?: BrainEngine): Promise<str
  */
 export const DEFAULT_EXTRACTION_MAX_TOKENS = 4000;
 
+function privateConfigReadFailure(): null {
+  if (privateFactsMode()) throw new Error('private_facts_config_unavailable');
+  return null;
+}
+
 export async function getFactsExtractionMaxTokens(engine?: BrainEngine): Promise<number> {
   if (!engine) return DEFAULT_EXTRACTION_MAX_TOKENS;
-  const raw = await engine.getConfig('facts.extraction_max_tokens').catch(() => null);
+  const raw = await engine.getConfig('facts.extraction_max_tokens').catch(privateConfigReadFailure);
   if (raw == null || raw.trim() === '') return DEFAULT_EXTRACTION_MAX_TOKENS;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_EXTRACTION_MAX_TOKENS;
@@ -126,7 +131,7 @@ export async function getFactsExtractionPromptAppendix(
   engine?: BrainEngine,
 ): Promise<string | null> {
   if (!engine) return null;
-  const raw = await engine.getConfig('facts.extraction_prompt_appendix').catch(() => null);
+  const raw = await engine.getConfig('facts.extraction_prompt_appendix').catch(privateConfigReadFailure);
   if (raw == null || raw.trim() === '') return null;
   return raw.trim();
 }
@@ -149,7 +154,7 @@ export interface ExtractorVariant {
 const flagIs = (v: string | null, values: readonly string[]) => v != null && values.includes(v.trim().toLowerCase());
 const FLAG_ON = ['true', 'on', '1'] as const;
 const FLAG_OFF = ['false', 'off', '0'] as const;
-const readFlag = (engine: BrainEngine, key: string) => Promise.resolve().then(() => engine.getConfig(key)).catch(() => null);
+const readFlag = (engine: BrainEngine, key: string) => Promise.resolve().then(() => engine.getConfig(key)).catch(privateConfigReadFailure);
 
 export async function getExtractorVariant(engine?: BrainEngine): Promise<ExtractorVariant> {
   if (!engine) return {};
@@ -228,7 +233,7 @@ export function isJunkFact(text: string, kind?: string): boolean {
 
 export async function isJunkFilterEnabled(engine?: BrainEngine): Promise<boolean> {
   if (!engine) return true;
-  const raw = await engine.getConfig('facts.extraction_junk_filter').catch(() => null);
+  const raw = await engine.getConfig('facts.extraction_junk_filter').catch(privateConfigReadFailure);
   if (raw == null) return true;
   return !['false', '0', 'no', 'off'].includes(raw.trim().toLowerCase());
 }
@@ -241,7 +246,7 @@ export async function isJunkFilterEnabled(engine?: BrainEngine): Promise<boolean
  * different default.
  */
 export async function getMissingConfidence(engine?: BrainEngine): Promise<number> {
-  const raw = engine ? await engine.getConfig('facts.extraction_missing_confidence').catch(() => null) : null;
+  const raw = engine ? await engine.getConfig('facts.extraction_missing_confidence').catch(privateConfigReadFailure) : null;
   const n = raw == null || raw.trim() === '' ? NaN : Number(raw.trim());
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 1.0;
 }
@@ -265,6 +270,8 @@ export interface FactEmbeddingSignature { model: string; dimensions: number; }
 
 export interface ExtractInput {
   turnText: string;
+  /** Host accounting only; never receives mutable proposal content. */
+  onNativeProposal?: (event: Readonly<NativeFactsAccounting>) => void;
   /** Opaque session id (MCP _meta.session_id, CLI --session, or null). */
   sessionId?: string | null;
   /** Existing canonical entity slugs the agent already resolved (D4 hint). */
@@ -653,13 +660,14 @@ export async function extractFactsFromTurnWithOutcome(
       ? ` Known entity slugs the user already mentioned: ${input.entityHints.slice(0, ENTITY_HINTS_CAP).join(', ')}.`
       : ''
   }`;
-  let result: ChatResult;
+  let result: Pick<ChatResult, 'text' | 'stopReason'>;
+  const request = privateFactsMode() ? (opts: ChatOpts) => codexFactsChat(opts, input.onNativeProposal) : chat;
   // The cap the last call was actually sent at. When the truncation retry
   // escalates to maxTokens*2, the malformed-output retry below must re-send
   // at the escalated cap — re-sending at 1x would just re-truncate.
   let effectiveMaxTokens = maxTokens;
   try {
-    result = await chat({
+    result = await request({
       model,
       system: extractorSystem,
       messages: [{ role: 'user', content: userContent }],
@@ -672,6 +680,7 @@ export async function extractFactsFromTurnWithOutcome(
     // models) produced unparseable JSON and silently extracted zero facts.
     // Retry ONCE at double the cap, then surface the truncation loudly.
     if (result.stopReason === 'length') {
+      if (privateFactsMode()) return { ok: false, reason: 'truncated_output', model };
       process.stderr.write(
         `[facts-extract] WARN: extractor output truncated at maxTokens=${maxTokens} ` +
         `(model=${model}); retrying once at ${maxTokens * 2}\n`,
@@ -711,7 +720,8 @@ export async function extractFactsFromTurnWithOutcome(
 
   let parsedShape = parseExtractorJsonDetailed(result.text);
   if (!parsedShape ||
-      (parsedShape.invalidCandidates > 0 && parsedShape.facts.length === 0)) {
+      (parsedShape.invalidCandidates > 0 && (privateFactsMode() || parsedShape.facts.length === 0))) {
+    if (privateFactsMode()) return { ok: false, reason: 'malformed_output', model };
     process.stderr.write(
       `[facts-extract] WARN: extractor returned malformed output (model=${model}); ` +
       'retrying once with an explicit JSON-only reminder\n',
@@ -744,7 +754,7 @@ export async function extractFactsFromTurnWithOutcome(
 
     parsedShape = parseExtractorJsonDetailed(result.text);
     if (!parsedShape ||
-        (parsedShape.invalidCandidates > 0 && parsedShape.facts.length === 0)) {
+        (parsedShape.invalidCandidates > 0 && (privateFactsMode() || parsedShape.facts.length === 0))) {
       return { ok: false, reason: 'malformed_output', model };
     }
   }

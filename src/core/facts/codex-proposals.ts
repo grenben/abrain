@@ -1,4 +1,5 @@
-import type { ChatOpts } from '../ai/gateway.ts';
+import { cachedCodexProposal } from '../ai/codex-proposal-cache.ts';
+import type { ChatOpts, ChatResult } from '../ai/gateway.ts';
 import { chat } from '../ai/gateway.ts';
 import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
@@ -65,4 +66,12 @@ export async function codexClassify(newFact: { fact: string; kind: FactKind }, c
   if (value.decision === 'independent') return { decision: 'independent', reason: 'classifier' };
   return value.decision === 'duplicate' ? { decision: 'duplicate', matched_id: value.matched_id, reason: 'classifier' }
     : { decision: 'supersede', supersedes_id: value.matched_id, reason: 'classifier' };
+}
+
+export interface NativeFactsAccounting { cacheHit: boolean; usage?: Readonly<ChatResult['usage']> }
+/** Reuse native raw responses only inside an explicit host cache scope. */
+export async function codexFactsChat(opts: ChatOpts, observe?: (event: Readonly<NativeFactsAccounting>) => void): Promise<Pick<ChatResult, 'text' | 'stopReason'>> {
+  const result = await cachedCodexProposal(opts);
+  observe?.(Object.freeze({ cacheHit: result.cacheHit, usage: result.usage ? Object.freeze({ ...result.usage }) : undefined }));
+  return { text: result.text, stopReason: 'end' };
 }

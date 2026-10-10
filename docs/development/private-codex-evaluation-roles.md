@@ -183,4 +183,51 @@ transport, with a network tripwire; embedding opt-in changes only the disposable
 fixture configuration and is restored afterward. This does not qualify real
 Codex isolation or activate the installed brain.
 
-Full benchmark CLI grant creation, dataset/request binding, fact-key publication and durable result recovery remain incomplete. An authorized future installation still needs migrations through v256 and runtime qualification.
+Full benchmark CLI grant creation, dataset/request binding and durable result recovery remain incomplete. An authorized future installation still needs migrations through v256 and runtime qualification.
+
+## Native fact-key follow-up
+
+The private `--fact-keys chunk|page` arm now supports both `paper` and
+`production` extraction. Paper mode retains the published user-fact instruction
+and requires bounded facts with exact source quotations. Production mode calls
+GBrain's actual facts extractor, including its configured prompt, attribution,
+date grounding and deterministic filters. Individual fact embeddings are
+explicitly disabled because this arm embeds the keyed chunk inputs itself.
+Private configuration read failures fail instead of selecting default behavior.
+
+The arm reads the canonical page snapshot. A caller's unrelated `content` value
+cannot supply evidence for another page's vectors. Duplicate pages, missing or
+unsealed projections, oversized batches, injected clients, legacy cache paths,
+conflicting owner/target model pins and USD-only native admission are refused.
+`--keyword-only` conflicts with private fact keys, which necessarily embed data.
+At most 256 pages/chunks are prepared per batch. The production extractor retains
+its shipped 8,000-character source window; paper input is separately bounded.
+
+All native proposals are validated before embedding, and every vector is ready
+before publication. The host fence wraps one scratch transaction containing the
+existing prepared projection installs. Source, incarnation, revision and chunk
+identity checks apply even to valid empty extraction. A conflict on a later page
+rolls back the earlier page's vector update. Paid calls remain accounted even
+when publication fails. This atomicity applies to the scratch database; it is
+not a distributed transaction with the host admission database.
+
+Exact embedding-input hashes are written in that same transaction. They bind
+the fact-key protocol, model, vector column and actual keyed text. Original
+`chunk_text` stays unchanged. Generic projection rebuilds cannot mistake these
+vectors for embeddings of plain or title-wrapped text. The target must be a
+factory-owned temporary brain under an active host scope.
+
+Both modes retain raw native responses in the host v256 cache. Every hit repeats
+schema and semantic validation and reports no new native token charge. The
+production extractor now uses that cache only when a host explicitly supplies a
+scope; ordinary calls retain their normal admission. Private malformed or
+truncated output cannot trigger legacy repair/salvage retries. Valid empty
+output is separate from refusal, invalid JSON, failed configuration reads and
+failed source lookup. Cache entries are never made from those failures.
+
+Row receipts carry the native protocol, accepted-response/cache counters,
+measured usage and `usd: null`. Paid chunk embeddings remain independently
+metered, including on rebuild. Both role/model selections enter the no-call
+inventory and the protocol enters retrieval hashes.
+
+Full CLI grant creation, immutable dataset/request binding and durable result recovery still need implementation. No installed executable, service, credential or activation changed.

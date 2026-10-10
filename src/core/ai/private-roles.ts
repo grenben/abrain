@@ -28,6 +28,8 @@ export const PRIVATE_GENERATION_ROLES = [
   ['ocr',undefined,'utility','ai/gateway.ts'],
   ['nightly-probes','models.eval.longmemeval','reasoning','cycle/nightly-probe-routes.ts'],
   ['longmemeval-reader','models.eval.longmemeval',undefined,'../eval/longmemeval/reader.ts'],
+  ['longmemeval-fact-keys-paper',undefined,'utility','../eval/longmemeval/codex-fact-keys-extract.ts'],
+  ['longmemeval-fact-keys-production','facts.extraction_model','reasoning','../eval/longmemeval/codex-fact-keys-extract.ts'],
   ['longmemeval-synopsis','models.contextual_synopsis','utility','../eval/longmemeval/codex-synopsis-tier.ts'],
   ['longmemeval-extractor',undefined,'utility','../eval/longmemeval/extract.ts'],
   ['longmemeval-judge','models.eval.longmemeval_judge','deep','../eval/shared/judge-runner.ts'],

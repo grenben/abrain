@@ -439,5 +439,15 @@ admission. The real synthetic CLI fixture exercises import, synopsis publication
 and hybrid vector search. Empty pages differ from missing/stale pages and
 provider failures; cancellation and source/owner drift cannot complete a page.
 The legacy JSONL cache and USD-only cap do not authorize native calls. Full CLI
-grants, fact keys and durable run recovery remain open; installation and live
+grants and durable run recovery remain open; fact keys are covered below. Installation and live
 runtime qualification are unchanged.
+
+## Native fact-key follow-up
+
+Both benchmark fact-key extractors now use native schemas, retained validated
+proposals and canonical page snapshots. Prepared vectors publish in one fenced
+temporary-database transaction with exact input hashes and unchanged source
+text. Source/revision drift, cancellation or lost host ownership cannot leave a
+partially published vector batch. Subscription cost remains null; embeddings
+have separate durable admission. Full CLI grant creation, request binding and
+run/result recovery remain incomplete. This changes source only.

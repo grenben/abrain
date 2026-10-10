@@ -1131,7 +1131,7 @@ export async function runEvalLongMemEval(args: string[], runOpts: RunOpts = {}):
 
   const ctx: RunContext = {
     opts, model, readerConfig, readerHash, client, trajectoryEnabled, extractorClient, extractorModel, decide: decideRun,
-    factKeys: await retrievalArms.resolveFactKeyArm(opts.arms, extractorClient), synopsis,
+    factKeys: await retrievalArms.resolveFactKeyArm(opts.arms, extractorClient, opts.keywordOnly), synopsis,
     expandFn: runOpts.expandFn ?? expandQuery,
     replay,
     retrievalConfigHash: retrievalHash, expectExpansion: pins.expansion,

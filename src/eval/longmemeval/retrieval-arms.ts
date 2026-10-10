@@ -19,6 +19,14 @@
  * the same pool rides on the row, so each run is its own paired control.
  */
 
+import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { codexSubscriptionContext } from '../../core/ai/subscription-context.ts';
+import { applyPrivateFactKeys } from './codex-fact-keys.ts';
+import { privateFactKeyModel, CODEX_FACT_KEYS_PROTOCOL } from './codex-fact-keys-extract.ts';
+import type { NativeFactsAccounting } from '../../core/facts/codex-proposals.ts';
+import { PAPER_USER_FACT_SYSTEM } from './fact-keys-prompt.ts';
+export { PAPER_USER_FACT_SYSTEM } from './fact-keys-prompt.ts';
+
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -52,31 +60,39 @@ export interface FactKeyArm {
   cachePath?: string;
 }
 
-/** The benchmark's published user-fact extraction instruction (zero-shot form). */
-export const PAPER_USER_FACT_SYSTEM = 'You will be given a list of messages from a human user to an AI assistant. Extract all the personal information, life events, experience, and preferences related to the user. Make sure you include all details such as life events, personal experience, preferences, specific numbers, locations, or dates. State each piece of information in a simple sentence. Put these sentences in a json list, each element being a standalone personal fact about the user. Minimize the coreference across the facts, e.g., replace pronouns with actual entities. If there is no specific events, personal information, or preference mentioned, just generate an empty list.';
-
 /** Output cap and user message of the paper extractor call. */
 export const PAPER_FACT_MAX_TOKENS = 2000;
 export const paperFactUserPrompt = (turns: string): string =>
   `Human user messages:\n${turns}\n\nPersonal facts about the user (a list of strings in json format; do not generate anything else):`;
-
 export function defaultFactCachePath(extractor: FactExtractor, model: string): string {
   return join(homedir(), '.cache', 'gbrain-eval', `fact-keys-${extractor}-${model.replace(/[^a-z0-9.-]+/gi, '_')}.jsonl`);
 }
 
 export class FactKeySpend {
-  usd = 0;
+  usd: number | null = 0;
   calls = 0;
   cacheHits = 0;
-  constructor(readonly maxUsd: number) {}
+  inputTokens = 0;
+  outputTokens = 0;
+  unknownUsageCalls = 0;
+  constructor(readonly maxUsd: number, readonly subscription = false) { if (subscription) this.usd = null; }
+  recordNative(usage: NativeFactsAccounting['usage'], cacheHit: boolean): void {
+    if (!this.subscription) throw new Error('native fact keys require subscription accounting');
+    if (cacheHit) { this.cacheHits++; return; }
+    this.calls++;
+    if (!usage) { this.unknownUsageCalls++; return; }
+    this.inputTokens += usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
+    this.outputTokens += usage.output_tokens;
+  }
   add(model: string, usage: { input_tokens?: number; output_tokens?: number } | undefined): void {
+    if (this.subscription) throw new Error('subscription fact keys require native accounting');
     this.calls++;
     const p = canonicalLookup(model);
     if (!p || !usage) return;
-    this.usd += ((usage.input_tokens ?? 0) * p.input + (usage.output_tokens ?? 0) * p.output) / 1_000_000;
+    this.usd = (this.usd ?? 0) + ((usage.input_tokens ?? 0) * p.input + (usage.output_tokens ?? 0) * p.output) / 1_000_000;
   }
   exhausted(): boolean {
-    return this.usd >= this.maxUsd;
+    return this.usd !== null && this.usd >= this.maxUsd;
   }
 }
 
@@ -162,6 +178,15 @@ export interface FactKeyArmResult {
   pages_keyed: number;
   chunks_keyed: number;
   items: number;
+  pages_empty?: number;
+  protocol?: string;
+  billing?: 'subscription';
+  usd?: null;
+  calls?: number;
+  cache_hits?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  usage_complete?: boolean;
 }
 
 /**
@@ -175,6 +200,7 @@ export async function applyFactKeyArm(
   arm: FactKeyArm,
   spend: FactKeySpend,
 ): Promise<FactKeyArmResult> {
+  if (readPrivateCodexConfig()) return applyPrivateFactKeys(engine, pages, arm, spend);
   const col = await resolveActiveEmbeddingColumnFromEngine(engine);
   const column = quoteIdentifier(col.name);
   const cast = vectorCastSuffix(col);
@@ -253,6 +279,7 @@ export interface RetrievalArmOptions {
   factExtractor: FactExtractor;
   factKeysModel?: string;
   factKeysMaxUsd: number;
+  factKeysMaxUsdExplicit?: boolean;
   timeScope?: TimeScopeMode;
   timeScopePool: number;
 }
@@ -273,8 +300,8 @@ export const LME_RETRIEVAL_ARM_FLAGS: Array<{ name: string; arg?: string; help: 
     apply: (o, v) => { if (v !== 'paper' && v !== 'production') throw new Error(`--fact-extractor must be paper|production (got: ${v})`); o.arms.factExtractor = v; } },
   { name: '--fact-keys-model', arg: 'MODEL', help: ['Extraction model for --fact-keys (default: the utility tier, haiku).'],
     apply: (o, v) => { o.arms.factKeysModel = v; } },
-  { name: '--fact-keys-max-usd', arg: 'N', help: ['Spend cap for uncached fact extraction (default 20). Cached extractions are free.'],
-    apply: (o, v) => { const n = Number(v); if (!Number.isFinite(n) || n <= 0) throw new Error(`--fact-keys-max-usd must be a positive number (got: ${v})`); o.arms.factKeysMaxUsd = n; } },
+  { name: '--fact-keys-max-usd', arg: 'N', help: ['Spend cap for uncached fact extraction (default 20). Cached extractions are free.', 'Private Codex uses the host subscription allowance; omit this flag.'],
+    apply: (o, v) => { const n = Number(v); if (!Number.isFinite(n) || n <= 0) throw new Error(`--fact-keys-max-usd must be a positive number (got: ${v})`); o.arms.factKeysMaxUsd = n; o.arms.factKeysMaxUsdExplicit = true; } },
   { name: '--time-scope', arg: 'reserved|partition', help: [
       'Eval-only arm: re-order a widened pool by the question\'s explicit time range',
       '(resolved against question_date) using each session\'s observation and',
@@ -288,13 +315,18 @@ export const LME_RETRIEVAL_ARM_FLAGS: Array<{ name: string; arg?: string; help: 
 /** Folds active arms into retrieval_config_hash; empty when no arm is on (existing receipts keep their hash). */
 export function armPins(o: RetrievalArmOptions): { retrieval_arms?: Record<string, unknown> } {
   const pins: Record<string, unknown> = {};
-  if (o.factKeys) Object.assign(pins, { fact_keys: o.factKeys, fact_extractor: o.factExtractor, fact_keys_model: o.factKeysModel ?? 'utility-tier' });
+  if (o.factKeys) Object.assign(pins, { fact_keys: o.factKeys, fact_extractor: o.factExtractor, fact_keys_model: o.factKeysModel ?? readPrivateCodexConfig()?.model ?? 'utility-tier', ...(readPrivateCodexConfig() ? { fact_keys_protocol: CODEX_FACT_KEYS_PROTOCOL } : {}) });
   if (o.timeScope) Object.assign(pins, { time_scope: o.timeScope, time_scope_pool: o.timeScopePool });
   return Object.keys(pins).length > 0 ? { retrieval_arms: pins } : {};
 }
 
-export async function resolveFactKeyArm(o: RetrievalArmOptions, client: ThinkLLMClient): Promise<{ arm: FactKeyArm; spend: FactKeySpend } | null> {
+export async function resolveFactKeyArm(o: RetrievalArmOptions, client: ThinkLLMClient, keywordOnly = false): Promise<{ arm: FactKeyArm; spend: FactKeySpend } | null> {
   if (!o.factKeys) return null;
+  if (readPrivateCodexConfig()) {
+    if (o.factKeysMaxUsdExplicit || keywordOnly) throw new Error('private fact keys require hybrid retrieval and a host subscription allowance; omit --fact-keys-max-usd');
+    const model = await privateFactKeyModel(codexSubscriptionContext()?.engine ?? null, o.factExtractor, o.factKeysModel);
+    return { arm: { assignment: o.factKeys, extractor: o.factExtractor, model, client, maxUsd: o.factKeysMaxUsd }, spend: new FactKeySpend(o.factKeysMaxUsd, true) };
+  }
   const model = o.factExtractor === 'production' && !o.factKeysModel
     ? await getFactsExtractionModel()
     : await resolveModel(null, { cliFlag: o.factKeysModel, tier: 'utility', fallback: 'haiku' });

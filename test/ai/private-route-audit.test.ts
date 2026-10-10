@@ -7,6 +7,6 @@ test('no-call audit cannot be green when workers/jobs/feature coverage are unkno
   expect(result.planes.database).toBe('uninspected');expect(result.planes.workers).toBe('uninspected');
   expect(result.roles.map(r=>r.role)).toContain('atoms');expect(result.roles.map(r=>r.role)).toContain('iterative-minions');
   expect(result.budgets.monetary_cost_usd).toBeNull();expect(result.budgets.remaining_quota).toBeNull();
-  for (const role of ['longmemeval-reader','longmemeval-extractor','longmemeval-judge','longmemeval-synopsis'] as const) expect(result.roles.map(r=>r.role)).toContain(role);
+  for (const role of ['longmemeval-reader','longmemeval-extractor','longmemeval-judge','longmemeval-synopsis','longmemeval-fact-keys-paper','longmemeval-fact-keys-production'] as const) expect(result.roles.map(r=>r.role)).toContain(role);
   expect(DB_GENERATIVE_PINS).toContain('models.eval.longmemeval_judge');
 });
