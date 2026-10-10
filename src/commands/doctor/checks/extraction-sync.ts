@@ -1,3 +1,4 @@
+import { ROLLUP_COST_SELECT, rollupCost } from '../../../core/extract/rollup-cost.ts';
 /**
  * Extraction + sync-lag check cluster (incl. checkSyncFreshness) — verbatim peel from src/commands/doctor.ts (containment
  * sprint). No behavior change; doctor.ts re-exports every exported symbol
@@ -1005,14 +1006,12 @@ export async function computeAtomProvenanceDriftCheck(
  * Empty rollup short-circuits BEFORE hitting the rollup_write_failures
  * branch so a brand-new brain doesn't surface a "0 failures" warning.
  */
-export async function computeExtractHealthCheck(
-  engine: BrainEngine,
-): Promise<Check> {
+export async function computeExtractHealthCheck(engine: BrainEngine): Promise<Check> {
   const name = 'extract_health';
   try {
     type RollupRow = {
       kind: string;
-      cost_7d_usd: number;
+      cost_7d_usd: number | null; subscription_run_count?: number; api_metered_cost_7d_usd?: number | null;
       eval_pass_count: number;
       eval_fail_count: number;
       halt_count: number;
@@ -1030,7 +1029,7 @@ export async function computeExtractHealthCheck(
     const rollupQuery = (withExpected: boolean) =>
       `SELECT
          kind,
-         SUM(cost_usd) AS cost_7d_usd,
+         ${ROLLUP_COST_SELECT},
          SUM(eval_pass_count) AS eval_pass_count,
          SUM(eval_fail_count) AS eval_fail_count,
          SUM(halt_count) AS halt_count,
@@ -1068,7 +1067,7 @@ export async function computeExtractHealthCheck(
 
     type KindAggregate = {
       kind: string;
-      cost_7d_usd: number;
+      cost_7d_usd: number | null; subscription_run_count?: number; api_metered_cost_7d_usd?: number | null;
       eval_pass_count: number;
       eval_fail_count: number;
       halt_count: number;
@@ -1094,7 +1093,7 @@ export async function computeExtractHealthCheck(
       const haltReasons = haltReasonsWithUnknown(halts, recordedReasons.get(r.kind) ?? {});
       return {
         kind: r.kind,
-        cost_7d_usd: Number(r.cost_7d_usd) || 0,
+        ...rollupCost(r),
         eval_pass_count: Number(r.eval_pass_count) || 0,
         eval_fail_count: Number(r.eval_fail_count) || 0,
         halt_count: halts,

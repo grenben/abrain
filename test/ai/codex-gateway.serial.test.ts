@@ -9,7 +9,7 @@ import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { BudgetTracker } from '../../src/core/budget/budget-tracker.ts';
-import { PNG_PIXEL, syntheticPng } from '../helpers/codex-image-fixtures.ts';
+import { PNG_PIXEL, JPEG_PIXELS, WEBP_PIXELS, syntheticPng } from '../helpers/codex-image-fixtures.ts';
 const root=mkdtempSync(join(tmpdir(),'codex-gateway-')); const bin=join(root,'fixture.mjs'), capture=join(root,'capture.jsonl');
 const saved=Object.fromEntries(['GBRAIN_HOME','HOME','CODEX_HOME'].map(k=>[k,process.env[k]]));
 const originalFetch=globalThis.fetch;
@@ -82,6 +82,15 @@ test('corrupt OCR pixels consume no attempt and never reach the executable',asyn
     expect(Number(after[0]!.n)).toBe(Number(before[0]!.n));
     expect(await generateOcrText(PNG_PIXEL,'image/png')).toBe('');
   },1);
+});
+
+test('JPEG and WebP OCR use the same bounded admission and native image interface',async()=>{
+  await withRun(async()=>{
+    expect(await generateOcrText(JPEG_PIXELS,'image/jpeg')).toBe('');
+    expect(await generateOcrText(WEBP_PIXELS,'image/webp')).toBe('');
+    const calls=readFileSync(capture,'utf8').trim().split('\n').slice(-2).map(s=>JSON.parse(s));
+    expect(calls.every(c=>c.args.includes('--image'))).toBe(true);
+  },2);
 });
 
 test('terminal invalid output retains measured usage and can be followed by a subsequent bounded attempt',async()=>{

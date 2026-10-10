@@ -122,6 +122,8 @@ export interface RollupUpsertInput {
   /** ISO YYYY-MM-DD. Defaults to today (UTC) if omitted. */
   day?: string;
   cost_delta?: number;
+  /** cost_delta is only the known API subtotal when subscription inference was admitted. */
+  subscription?: boolean;
   halt_delta?: number;
   eval_fail_delta?: number;
   eval_pass_delta?: number;
@@ -203,10 +205,10 @@ export async function upsertExtractRollup(
       `INSERT INTO extract_rollup_7d (
          kind, source_id, day,
          cost_usd, halt_count, eval_fail_count, eval_pass_count,
-         round_completed_count, expected_limit_count, rollup_write_failures, halt_reasons, updated_at
+         round_completed_count, expected_limit_count, rollup_write_failures, halt_reasons, updated_at${input.subscription ? ", subscription_run_count" : ""}
        )
        VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10,
-         CASE WHEN $11::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object($11::text, $5::int) END, now())
+         CASE WHEN $11::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object($11::text, $5::int) END, now()${input.subscription ? ", 1" : ""})
        ON CONFLICT (kind, source_id, day) DO UPDATE SET
          cost_usd               = extract_rollup_7d.cost_usd               + EXCLUDED.cost_usd,
          halt_count             = extract_rollup_7d.halt_count             + EXCLUDED.halt_count,
@@ -218,7 +220,7 @@ export async function upsertExtractRollup(
          halt_reasons           = CASE WHEN $11::text IS NULL THEN extract_rollup_7d.halt_reasons
            ELSE jsonb_set(extract_rollup_7d.halt_reasons, ARRAY[$11::text],
              to_jsonb(COALESCE((extract_rollup_7d.halt_reasons->>$11::text)::int, 0) + $5::int)) END,
-         updated_at             = now()`,
+         updated_at             = now()${input.subscription ? ", subscription_run_count = extract_rollup_7d.subscription_run_count + 1" : ""}`,
       [input.kind, input.source_id, day, cost, halts, evalFails, evalPasses, completed, expectedLimits, failures, reason],
     );
     return { ok: true };
@@ -236,7 +238,7 @@ export async function upsertExtractRollup(
     // write (best-effort would swallow it), retry the pre-v141 statement —
     // the cap stop degrades to the old conflated halt accounting until the
     // migration runs.
-    if (/expected_limit_count/i.test(msg)) {
+    if (!input.subscription && /expected_limit_count/i.test(msg)) {
       try {
         await engine.executeRaw(
           `INSERT INTO extract_rollup_7d (

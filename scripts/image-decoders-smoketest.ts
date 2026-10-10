@@ -26,7 +26,7 @@ import { readFileSync } from 'node:fs';
 import heicDecode from 'heic-decode';
 import avifDecode, { init as initAvif } from '@jsquash/avif/decode.js';
 import { prepareCodexInput } from '../src/core/ai/providers/codex-input.ts';
-import { PNG_PIXEL, syntheticPng } from '../test/helpers/codex-image-fixtures.ts';
+import { PNG_PIXEL, JPEG_PIXELS, WEBP_PIXELS, WEBP_LOSSLESS_PIXELS, syntheticPng } from '../test/helpers/codex-image-fixtures.ts';
 
 interface DecodeResult {
   ok: boolean;
@@ -77,18 +77,21 @@ async function decodeAvif(): Promise<DecodeResult> {
 
 const heic = await decodeHeic();
 const avif = await decodeAvif();
-// Exercise production PNG preparation, including the embedded WASM, without
+// Exercise production image preparation, including the embedded WASM, without
 // calling a model or allowing a decoder to fetch a remote asset.
 globalThis.fetch = (() => { throw new Error('decoder network forbidden'); }) as unknown as typeof fetch;
 const pngInput = (bytes: Uint8Array) => ({ bin: '/synthetic/never-executed', model: 'fixture', prompt: 'fixture',
   schema: { type: 'object', properties: {}, required: [], additionalProperties: false },
   images: [{ mime: 'image/png' as const, bytes }], env: {} });
-let codexPng = false;
+let codexImages = false;
 try {
   await prepareCodexInput(pngInput(PNG_PIXEL));
+  for (const [mime, bytes] of [['image/jpeg', JPEG_PIXELS], ['image/webp', WEBP_PIXELS], ['image/webp', WEBP_LOSSLESS_PIXELS]] as const) {
+    await prepareCodexInput({ ...pngInput(bytes), images: [{ mime, bytes }] });
+  }
   try { await prepareCodexInput(pngInput(syntheticPng({ pixels: Uint8Array.of(0) }))); }
-  catch (error) { codexPng = (error as {reason?: string}).reason === 'invalid_input'; }
+  catch (error) { codexImages = (error as {reason?: string}).reason === 'invalid_input'; }
 } catch { /* Report a sanitized failure, never raw codec diagnostics. */ }
-const allOk = heic.ok && avif.ok && codexPng;
-console.log(JSON.stringify({ heic, avif, codex_png: { ok: codexPng }, ok: allOk }));
+const allOk = heic.ok && avif.ok && codexImages;
+console.log(JSON.stringify({ heic, avif, codex_images: { ok: codexImages }, ok: allOk }));
 process.exit(allOk ? 0 : 1);

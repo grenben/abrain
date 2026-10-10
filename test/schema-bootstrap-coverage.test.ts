@@ -1058,6 +1058,8 @@ const COLUMN_EXEMPTIONS = new Set<string>([
   // pre-v239 UPSERT shape, the doctor read returns no reasons so every halt
   // is `unknown`). Column-only, no bootstrap probe needed.
   'extract_rollup_7d.halt_reasons',
+  // v245: migration-only rollup table; no bootstrap forward reference.
+  'extract_rollup_7d.subscription_run_count',
   // #4069 (migration v143) — verdict TTL column. The PGLite half of this
   // exemption is correct: dream_verdicts is migration-created on PGLite
   // (v30, absent from PGLITE_SCHEMA_SQL), so no PGLite-blob forward

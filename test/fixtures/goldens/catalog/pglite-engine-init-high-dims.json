@@ -89,6 +89,7 @@
       "extract_atoms_page_state.extract_atoms_page_state_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
       "extract_atoms_transcript_state.extract_atoms_transcript_state_pkey": "p PRIMARY KEY (source_id, file_path, content_hash)",
       "extract_rollup_7d.extract_rollup_7d_pkey": "p PRIMARY KEY (kind, source_id, day)",
+      "extract_rollup_7d.extract_rollup_7d_subscription_run_count_check": "c CHECK ((subscription_run_count >= 0))",
       "fact_purges.fact_purges_pkey": "p PRIMARY KEY (source_id, visibility, subject, fact_hash)",
       "fact_purges.fact_purges_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "fact_purges.fact_purges_visibility_check": "c CHECK ((visibility = ANY (ARRAY['private'::text, 'world'::text])))",
@@ -1997,7 +1998,8 @@
           "9 rollup_write_failures integer/int4 NOT NULL DEFAULT 0",
           "10 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
           "11 expected_limit_count integer/int4 NOT NULL DEFAULT 0",
-          "12 halt_reasons jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb"
+          "12 halt_reasons jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb",
+          "13 subscription_run_count integer/int4 NOT NULL DEFAULT 0"
         ],
         "flags": "relkind=r rls=false force_rls=false"
       },

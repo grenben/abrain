@@ -86,7 +86,9 @@ import { slugifySegment } from '../sync.ts';
 import { resolveTierDefault } from '../model-config.ts';
 import { isUndefinedTableError, warnOncePerProcess } from '../utils.ts';
 import { utcDate } from './cycle-date.ts';
-import { normalizeForGrounding } from './synthesize-verify.ts';
+import { locateQuote } from './extract-atoms-grounding.ts';
+export { locateQuote } from './extract-atoms-grounding.ts';
+import { codexAtomsResponseSchema, privateAtomsFailure, privateAtomsAdmission } from './extract-atoms-codex.ts';
 import type { TranscriptPageIndex } from '../transcripts/discover.ts';
 import { managedAtomSession, readAtomOrigin, resumeManagedAtoms, publishManagedAtoms, MANAGED_ATOM_DISCOVERY_SQL, type AtomOrigin } from '../persistence/atom-maintenance.ts';
 import { effectiveVisibility } from '../search/private-visibility.ts';
@@ -97,7 +99,7 @@ import { AtomPageStateError, completeAtomReceipts, MAX_DETERMINISTIC_FAILURES, r
 import { maintenanceTransaction } from '../persistence/attribution.ts';
 import { deriveTrust, lowerDerivedPage } from '../trust/taint.ts';
 import { derivedGateInput } from '../trust/derived-gate.ts';
-import { ATOM_TYPES, ATOMS_RESPONSE_SCHEMA } from './extract-atoms-schema.ts';
+import { ATOM_TYPES } from './extract-atoms-schema.ts';
 import { parseAtomsOutcome } from './extract-atoms-parse.ts';
 export { parseAtomsOutcome, parseAtomsResponse, type AtomsParseOutcome } from './extract-atoms-parse.ts';
 
@@ -248,78 +250,6 @@ export interface ExtractAtomsOpts {
   stopSignal?: AbortSignal;
   /** #5856/#5854: one drain attempt's state shared by its batches: the first batch's BudgetTracker (one cap per attempt) and one publish wait. */
   attempt?: { budgetTracker?: BudgetTracker; writeWait?: MaintenanceWriteWait };
-}
-
-/**
- * #4706 — locate a model-returned quote inside the text it was extracted from.
- *
- * This is the provenance step, and it runs at EXTRACTION because the
- * alternative — matching a stored quote back to its source LATER — is not
- * solvable: a passage and its negation ("would not improve" vs "would
- * improve") are ~99% similar, so no after-the-fact matcher can tell which one
- * an atom came from, and picking wrong writes a reversed claim into the
- * brain. At extraction there is no such ambiguity: we know exactly which text
- * was sent to the model, so the question collapses to "is this string in the
- * text we just handed it?" — a fact rather than a guess.
- *
- * Folding rides `normalizeForGrounding` — the v0.47.8.0 quote-repair core in
- * synthesize-verify.ts (the "ONE folding core" invariant: this module must
- * mean the same thing by "normalized substring" as the repair ladder does).
- * Everything is decided in FOLDED space, including uniqueness: a typographic
- * twin ('“go now”' vs '"go now"') is only visible there, and returning an
- * offset that might name the wrong passage is worse than returning none.
- *
- * Fail-closed on ambiguity: candidates are validated by a round-trip re-fold
- * (folding is lossy and one-to-many — '…' → '...' — so a folded hit can land
- * part-way through one original character), THEN counted. Zero or 2+ valid
- * passages → null; a truncated scan (MAX_CANDIDATES exhausted with hits
- * pending) is UNPROVEN uniqueness → null.
- *
- * Returns ORIGINAL-text offsets, or null when the model paraphrased.
- */
-export function locateQuote(
-  content: string,
-  quote: string,
-): { start: number; end: number } | null {
-  if (!quote || !content) return null;
-  const c = normalizeForGrounding(content);
-  const q = normalizeForGrounding(quote);
-  if (!q.norm) return null;
-
-  // Enumerate every folded hit, keep those that survive the round-trip
-  // boundary check, THEN judge ambiguity. Order matters: rejecting on raw
-  // hit-count first would let an INVALID partial-character match veto a
-  // genuinely unique valid one ("No. First. No… not ever" has two folded
-  // hits for "no." but only the first is character-aligned).
-  const valid: Array<{ start: number; end: number }> = [];
-  const MAX_CANDIDATES = 8; // pathological input shouldn't scan a whole book
-  let at = c.norm.indexOf(q.norm);
-  let seen = 0;
-  while (at !== -1 && seen < MAX_CANDIDATES) {
-    seen++;
-    const start = c.map[at]!;
-    // map[] names the FIRST code unit of the original character; advance the
-    // end by the whole code point, not +1 — a bare +1 splits the surrogate
-    // pair when the quote ends with a non-BMP char ('ship it 🚀'), and the
-    // half-pair slice then fails the round-trip re-fold below.
-    const lastOrig = c.map[at + q.norm.length - 1]!;
-    const lastCp = content.codePointAt(lastOrig);
-    const end = lastOrig + (lastCp !== undefined && lastCp > 0xffff ? 2 : 1);
-    if (
-      normalizeForGrounding(content.slice(start, end)).norm === q.norm &&
-      !valid.some(v => v.start === start && v.end === end)
-    ) {
-      valid.push({ start, end });
-    }
-    // Step by one, not by length: overlapping hits are distinct passages
-    // for ambiguity purposes.
-    at = c.norm.indexOf(q.norm, at + 1);
-  }
-  // Cap exhausted with hits still pending: uniqueness UNPROVEN → fail closed.
-  if (at !== -1) return null;
-  // Exactly one surviving passage, or we cannot say which the atom used.
-  if (valid.length !== 1) return null;
-  return valid[0]!;
 }
 
 /** #5705: wrap the transcript as data (an inner closing tag is escaped) so a chat export is not read as a turn to answer. */
@@ -914,16 +844,14 @@ export async function runPhaseExtractAtoms(
       const n = Number(configuredPacing);
       if (Number.isFinite(n) && n > 0) pacingMs = Math.min(60_000, Math.floor(n));
     }
-  } catch {
+  } catch (error) {
+    if (privateAtomsFailure(error)) throw error;
     // Keep safe defaults on any config-read failure: key-aware utility-tier
     // model, $0.30 cap, default output cap.
   }
-  // A cap is enforceable only when the tracker can price every call under it:
-  // the extraction chat model AND the embed route importFromContent calls.
-  // A default cap is dropped for an unpriced route (warn and run); a cap the
-  // operator set refuses the run with no_pricing guidance (cost-gate module).
   const pricingOverrides = await loadPricingOverrides(engine);
-  const costGate = resolveExtractAtomsCostGate(extractModel, resolveEmbedModelForCostGate(), pricingOverrides, { explicitBudget });
+  const subscription = privateAtomsAdmission(extractModel);
+  const costGate = resolveExtractAtomsCostGate(extractModel, resolveEmbedModelForCostGate(), pricingOverrides, { explicitBudget, subscription });
   const refused = await settleExtractAtomsCostGate(engine, sourceId, costGate, { budgetCap, extractModel, dryRun: opts.dryRun ?? false });
   if (refused) return refused;
   const budgetTracker = opts.attempt?.budgetTracker ?? new BudgetTracker({
@@ -1047,6 +975,19 @@ export async function runPhaseExtractAtoms(
     }
   }
 
+  // A valid empty proposal completes only this content hash. Edited content remains
+  // eligible; failures never reach this path or acquire successful watermarks.
+  async function completeEmptyAtoms(item: typeof work[number], origin: AtomOrigin | null, truncated: boolean): Promise<void> {
+    if (!opts.dryRun) {
+      if (managed && origin) writeRequests.push(...await publishManagedAtoms(engine, managed, origin, []));
+      else if (truncated) await recordPartialDisposition(engine, sourceId, item, maxInputChars);
+      else if (item.kind === 'page') await stampAtomsScanHash(item);
+      else await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
+    }
+    if (item.kind === 'transcript') transcriptsProcessed++;
+    else pagesProcessed++;
+  }
+
   let stoppedEarly = false;
   await withBudgetTracker(budgetTracker, async () => {
   for (const item of work) {
@@ -1079,7 +1020,7 @@ export async function runPhaseExtractAtoms(
       const result = await chat({
         model: extractModel,
         ...atomsPrompt(dateGrounding, originLabel, promptContent),
-        maxTokens: maxOutputTokens, responseSchema: ATOMS_RESPONSE_SCHEMA,
+        maxTokens: maxOutputTokens, responseSchema: codexAtomsResponseSchema(promptContent),
         abortSignal: opts.signal,
       });
       // Post-await yield: closes the "long LLM call past TTL" hazard
@@ -1105,32 +1046,7 @@ export async function runPhaseExtractAtoms(
       }
       const atoms = parseOutcome.atoms;
       if (atoms.length === 0) {
-        // #2144: tombstone zero-yield pages so they stop being rediscovered.
-        // Idempotency is keyed on atom rows — a page that yields no atoms
-        // leaves no row, so pre-fix it re-entered the discovery window every
-        // run (wedging --drain with a false no_progress and re-spending
-        // nightly budget on the same pages). Stamp the content hash we
-        // scanned; discovery skips the page only while its content is
-        // unchanged (edits re-eligibilize, mirroring atom-row staleness).
-        // Only stamped after a SUCCESSFUL chat call — LLM failures take the
-        // catch path below and stay retryable, and malformed output is
-        // counted above (gbrain#4148), never stamped as success.
-        //
-        // v146: transcripts now stamp too, IMMEDIATELY, exactly as pages do —
-        // a zero-yield is a settled answer about this content, not a failure,
-        // so it needs no streak. Pre-fix transcripts were the one item kind
-        // with no zero-yield marker at all, so an honestly-empty transcript
-        // re-entered the pool and re-spent budget on every cycle forever. The
-        // row is (source_id, file_path, content_hash)-keyed, so editing the
-        // file re-eligibilizes it — which is what makes the permanence safe.
-        if (!opts.dryRun) {
-          if (managed && origin) writeRequests.push(...await publishManagedAtoms(engine, managed, origin, []));
-          else if (truncated) await recordPartialDisposition(engine, sourceId, item, maxInputChars);
-          else if (item.kind === 'page') await stampAtomsScanHash(item);
-          else await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
-        }
-        if (item.kind === 'transcript') transcriptsProcessed++;
-        else pagesProcessed++;
+        await completeEmptyAtoms(item, origin, truncated);
         continue;
       }
 
@@ -1310,6 +1226,11 @@ export async function runPhaseExtractAtoms(
       // outage check. Everything else gets a durable count for observability,
       // but an unknown error class must never permanently suppress a page's atoms.
       const message = err instanceof Error ? err.message : String(err);
+      if (privateAtomsFailure(err)) {
+        hardFailureCount++;
+        failures.push({ source: originLabel, error: message });
+        break; // Private proposal failures never charge content strikes/tombstones.
+      }
       const blockReason = providerContentBlockReason(err);
       if (blockReason) {
         llmHalt.reset();
@@ -1358,7 +1279,8 @@ export async function runPhaseExtractAtoms(
         round: 'single',
         extracted_at: new Date().toISOString(),
         total_rows: totalAtomsExtracted,
-        cost_usd: estimatedSpendUsd,
+        cost_usd: subscription ? null : estimatedSpendUsd,
+        ...(subscription ? { billing: 'subscription' as const, api_metered_cost_usd: estimatedSpendUsd } : {}),
         summary:
           `Extracted ${totalAtomsExtracted} atoms from ` +
           `${transcriptsProcessed} transcripts + ${pagesProcessed} pages.`,
@@ -1378,6 +1300,7 @@ export async function runPhaseExtractAtoms(
       kind: 'atoms',
       source_id: sourceId,
       cost_delta: estimatedSpendUsd,
+      subscription,
       ...classifyRunStop({ deadline_hit: stoppedEarly, error: hardFailureCount > 0 ? providerHaltReason(abortedGlobalError) ?? 'item_error' : false }),
     });
   }
@@ -1422,7 +1345,8 @@ export async function runPhaseExtractAtoms(
       malformed_outputs: malformedOutputs, stopped_outputs: stoppedOutputs,
       tombstoned_for_failures: tombstonedForFailures,
       tombstoned_transcripts: tombstonedTranscripts,
-      estimated_spend_usd: estimatedSpendUsd,
+      estimated_spend_usd: subscription ? null : estimatedSpendUsd,
+      ...(subscription ? { billing: 'subscription', api_metered_cost_usd: estimatedSpendUsd, remaining_quota: null } : {}),
       budget_usd: budgetCap,
       model: extractModel,
       budget_exhausted: budgetExhausted,

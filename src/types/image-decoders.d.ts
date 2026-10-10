@@ -37,3 +37,12 @@ declare module '@jsquash/png/codec/pkg/squoosh_png_bg.wasm' {
   const path: string;
   export default path;
 }
+
+declare module '@jsquash/jpeg/codec/dec/mozjpeg_dec.wasm' {
+  const path: string;
+  export default path;
+}
+declare module '@jsquash/webp/codec/dec/webp_dec.wasm' {
+  const path: string;
+  export default path;
+}

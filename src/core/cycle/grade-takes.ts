@@ -1,3 +1,4 @@
+import { resolveGradeIdentity, codexGradeSchema, sequentialJudges } from './grade-takes-codex.ts';
 import { formatCycleCost } from './budget-meter.ts';
 /**
  * v0.36.1.0 (T4) — grade_takes cycle phase.
@@ -40,9 +41,8 @@ import { BaseCyclePhase, effectivePhaseDeadlineMs, type ScopedReadOpts, type Bas
 import { hybridSearch } from '../search/hybrid.ts';
 import { INTERNAL_BREADTH_SEARCH_OPTS } from '../search/internal-breadth.ts';
 import type { SearchResult } from '../types.ts';
-import { chat as gatewayChat, getChatModel } from '../ai/gateway.ts';
+import { chat as gatewayChat } from '../ai/gateway.ts';
 import { createGlobalLlmHaltTracker, haltedClassOf, type GlobalLlmErrorClass } from '../ai/errors.ts';
-import { splitProviderModelId } from '../model-id.ts';
 import { GBrainError } from '../types.ts';
 import type { OperationContext } from '../operations.ts';
 import type { BrainEngine, Take, TakeResolution } from '../engine.ts';
@@ -438,6 +438,7 @@ export async function defaultJudge(input: {
     messages: [{ role: 'user', content: prompt }],
     ...(input.modelHint ? { model: input.modelHint } : {}),
     maxTokens: 600,
+    responseSchema: codexGradeSchema(input.evidence),
     allowFallback: false,
   });
   const parsed = parseJudgeOutput(result.text);
@@ -514,27 +515,14 @@ class GradeTakesPhase extends BaseCyclePhase {
     const evidenceRetriever: EvidenceRetrieverFn =
       opts.evidenceRetriever ??
       ((take: Take, takeScope: ScopedReadOpts) => defaultEvidenceRetriever(engine, take, takeScope));
-    const promptVersion = opts.promptVersion ?? GRADE_TAKES_PROMPT_VERSION;
     const minAgeMonths = opts.minAgeMonths ?? 6;
     const takeLimit = opts.takeLimit ?? 50;
     const autoResolve = opts.autoResolve ?? false; // D17 default OFF
     const autoResolveThreshold = opts.autoResolveThreshold ?? 0.95; // D12 conservative
     const resolvedByLabel = opts.resolvedByLabel ?? 'gbrain:grade_takes';
-    // One resolved string drives the judge call, the verdict-cache key, and
-    // the stored judge_model_id — the convention propose_takes adopted in
-    // v0.42.62. Previously the default judge call passed NO model hint (it
-    // rode the gateway's chat_model) while 'claude-sonnet-4-6' was hardcoded
-    // into judge_model_id, the evidence signature, and budget metering — on
-    // brains with a different chat_model, telemetry priced and recorded a
-    // model that never ran.
-    const judgeModelFull = opts.model ?? getChatModel();
-    // Bare tail for the stored judge_model_id + evidence signature
-    // (historical convention). Stock installs are unchanged: getChatModel()
-    // defaults to 'anthropic:claude-sonnet-4-6', whose tail equals the old
-    // hardcoded value — zero verdict-cache invalidation. A genuinely
-    // different chat_model invalidates, which is correct: the judge really
-    // changed.
-    const judgeModelId = splitProviderModelId(judgeModelFull).model || judgeModelFull;
+    const { judgeModelFull, judgeModelId, privateMode, promptVersion } = await resolveGradeIdentity(
+      engine, opts.model, opts.ensembleJudges, opts.promptVersion ?? GRADE_TAKES_PROMPT_VERSION,
+    );
 
     const useEnsemble = opts.useEnsemble ?? false;
     const ensembleThreshold = opts.ensembleThreshold ?? 0.85;
@@ -583,6 +571,7 @@ class GradeTakesPhase extends BaseCyclePhase {
 
     // Load unresolved active takes, oldest-first.
     const takes = await engine.listTakes({
+      ...scope,
       resolved: false,
       active: true,
       sortBy: 'since_date',
@@ -690,9 +679,13 @@ class GradeTakesPhase extends BaseCyclePhase {
 
       if (useEnsemble && inBorderlineBand && opts.ensembleJudges && opts.ensembleJudges.length > 0) {
         result.ensemble_invoked += 1;
-        const ensembleResults = await Promise.allSettled(
-          opts.ensembleJudges.map(j => j.fn({ take, evidence, modelHint: j.modelId })),
-        );
+        const calls = opts.ensembleJudges.map(j => () => j.fn({ take, evidence, modelHint: j.modelId }));
+        const ensembleResults = privateMode ? await sequentialJudges(calls) : await Promise.allSettled(calls.map(call => call()));
+        if (privateMode && ensembleResults.some(result => result.status === 'rejected')) {
+          result.judge_calls_failed += 1;
+          result.warnings.push(`ensemble proposal failed on take ${take.id}; no verdict cached`);
+          continue;
+        }
 
         // #3044: Promise.allSettled flattens judge rejections into null
         // verdicts below, so a whole-run condition (revoked key, exhausted

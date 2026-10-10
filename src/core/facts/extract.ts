@@ -33,6 +33,7 @@ import type { BrainEngine, NewFact, FactKind, FactAttribution } from '../engine.
 import { normalizeMetricLabel } from './extract-from-fence.ts';
 import { isNullLikeEntity } from './write-single.ts';
 import { isAIInvocationPolicyError } from '../ai/invocation-guard.ts';
+import { codexFactsResponseSchema, privateFactsMode } from './codex-proposals.ts';
 
 /**
  * v0.31 (D15): kill-switch for fact extraction.
@@ -645,7 +646,7 @@ export async function extractFactsFromTurnWithOutcome(
   const extractorSystem = promptAppendix
     ? `${buildExtractorSystem(admitsLow, variant)}\n\n${promptAppendix}`
     : buildExtractorSystem(admitsLow, variant);
-  const responseSchema = factsResponseSchema(variant);
+  const responseSchema = codexFactsResponseSchema(factsResponseSchema(variant), cleaned, cap);
   const dateLine = variant.dateGrounding ? `${observationDateLine(input.observationDate ?? null)}\n` : '';
   const userContent = `${dateLine}<turn>\n${cleaned}\n</turn>\n\nExtract up to ${cap} facts.${
     input.entityHints && input.entityHints.length
@@ -877,8 +878,11 @@ export function _resetExtractWrapperWarningsForTests(): void {
 
 /** Historical best-effort API retained for interactive callers. */
 export async function extractFactsFromTurn(input: ExtractInput): Promise<ExtractedFact[]> {
+  if (input.isDreamGenerated || !input.turnText?.trim()) return [];
+  const privateMode = privateFactsMode();
   const outcome = await extractFactsFromTurnWithOutcome(input);
   if (!outcome.ok) {
+    if (privateMode) throw new FactsExtractionError(outcome.reason, outcome.model, outcome.error);
     if (!_wrapperWarningsEmitted.has(outcome.reason)) {
       _wrapperWarningsEmitted.add(outcome.reason);
       process.stderr.write(

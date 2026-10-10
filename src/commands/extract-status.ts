@@ -1,3 +1,4 @@
+import { ROLLUP_COST_SELECT, rollupCost } from '../core/extract/rollup-cost.ts';
 /**
  * v0.42 Wave D1 — `gbrain extract status` dashboard CLI.
  *
@@ -23,7 +24,7 @@ import type { BrainEngine } from '../core/engine.ts';
 export interface ExtractStatusRow {
   kind: string;
   source_id: string;
-  cost_7d_usd: number;
+  cost_7d_usd: number | null; subscription_run_count?: number; api_metered_cost_7d_usd?: number | null;
   eval_pass_count: number;
   eval_fail_count: number;
   halt_count: number;
@@ -48,7 +49,7 @@ export function buildStatusReport(
   rollupRows: Array<{
     kind: string;
     source_id: string;
-    cost_7d_usd: number | string | null;
+    cost_7d_usd: number | string | null; subscription_run_count?: number | string | null;
     eval_pass_count: number | string | null;
     eval_fail_count: number | string | null;
     halt_count: number | string | null;
@@ -64,7 +65,7 @@ export function buildStatusReport(
     return {
       kind: r.kind,
       source_id: r.source_id,
-      cost_7d_usd: Number(r.cost_7d_usd) || 0,
+      ...rollupCost(r),
       eval_pass_count: Number(r.eval_pass_count) || 0,
       eval_fail_count: Number(r.eval_fail_count) || 0,
       halt_count: halts,
@@ -80,7 +81,7 @@ export function buildStatusReport(
   // most-troubled kinds first.
   rows.sort((a, b) => {
     if (b.halt_rate !== a.halt_rate) return b.halt_rate - a.halt_rate;
-    return b.cost_7d_usd - a.cost_7d_usd;
+    return (b.cost_7d_usd ?? b.api_metered_cost_7d_usd ?? 0) - (a.cost_7d_usd ?? a.api_metered_cost_7d_usd ?? 0);
   });
 
   return { schema_version: 1, rows, filters };
@@ -121,7 +122,7 @@ export function formatStatusTable(report: ExtractStatusReport, verbose: boolean)
     lines.push(
       `${r.kind.padEnd(KIND)}  ` +
       `${r.source_id.padEnd(SOURCE)}  ` +
-      `${('$' + r.cost_7d_usd.toFixed(4)).padStart(11)}  ` +
+      `${(r.cost_7d_usd === null ? 'unknown' : '$' + r.cost_7d_usd.toFixed(4)).padStart(11)}  ` +
       `${String(r.round_completed_count).padStart(9)}  ` +
       `${String(r.halt_count).padStart(5)}  ` +
       `${(r.halt_rate * 100).toFixed(1).padStart(8) + '%'}  ` +
@@ -166,7 +167,7 @@ export async function runExtractStatus(
   type Row = {
     kind: string;
     source_id: string;
-    cost_7d_usd: number | string | null;
+    cost_7d_usd: number | string | null; subscription_run_count?: number | string | null;
     eval_pass_count: number | string | null;
     eval_fail_count: number | string | null;
     halt_count: number | string | null;
@@ -180,7 +181,7 @@ export async function runExtractStatus(
       `SELECT
          kind,
          source_id,
-         SUM(cost_usd) AS cost_7d_usd,
+         ${ROLLUP_COST_SELECT},
          SUM(eval_pass_count) AS eval_pass_count,
          SUM(eval_fail_count) AS eval_fail_count,
          SUM(halt_count) AS halt_count,

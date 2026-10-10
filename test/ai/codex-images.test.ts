@@ -2,7 +2,8 @@ import { test, expect } from 'bun:test';
 import { deflateSync } from 'node:zlib';
 import { prepareCodexInput } from '../../src/core/ai/providers/codex-input.ts';
 import { CODEX_PROPOSAL_LIMITS } from '../../src/core/ai/providers/codex-contract.ts';
-import { PNG_PIXEL, pngChunk, syntheticPng } from '../helpers/codex-image-fixtures.ts';
+import { PNG_PIXEL, JPEG_PIXELS, WEBP_PIXELS, WEBP_LOSSLESS_PIXELS, pngChunk, syntheticPng } from '../helpers/codex-image-fixtures.ts';
+import type { CodexImage } from '../../src/core/ai/providers/codex-images.ts';
 
 const input = (bytes: Uint8Array = PNG_PIXEL) => ({ bin: '/synthetic/never-executed', model: 'fixture', prompt: 'synthetic',
   schema: { type: 'object', properties: {}, required: [], additionalProperties: false }, images: [{ mime: 'image/png' as const, bytes }], env: {} });
@@ -58,4 +59,37 @@ test('cancellation during preparation prevents admission', async () => {
   const pending = prepareCodexInput({ ...input(), signal: controller.signal });
   controller.abort();
   await expect(pending).rejects.toMatchObject({ reason: 'aborted' });
+});
+
+const imageInput = (mime: CodexImage['mime'], bytes: Buffer) => ({ ...input(), images: [{ mime, bytes }] });
+test.each([
+  ['image/jpeg', JPEG_PIXELS], ['image/webp', WEBP_PIXELS], ['image/webp', WEBP_LOSSLESS_PIXELS],
+] as const)('fully decodes %s pixels and preserves bytes', async (mime, bytes) => {
+  const prepared = await prepareCodexInput(imageInput(mime, bytes));
+  expect(prepared.input.images[0]!.bytes).toEqual(bytes);
+});
+
+const cutJpeg = Buffer.concat([JPEG_PIXELS.subarray(0, -12), Buffer.from([255, 217])]);
+const bigJpeg = Buffer.from(JPEG_PIXELS), frameAt = bigJpeg.indexOf(Buffer.from([255, 194]));
+bigJpeg.writeUInt16BE(65535, frameAt + 5); bigJpeg.writeUInt16BE(65535, frameAt + 7);
+const duplicateFrame = Buffer.concat([JPEG_PIXELS.subarray(0, frameAt), JPEG_PIXELS.subarray(frameAt, frameAt + 19), JPEG_PIXELS.subarray(frameAt)]);
+function extendedWebp(flags = 0, width = 2): Buffer {
+  const header = Buffer.alloc(18); header.write('VP8X'); header.writeUInt32LE(10, 4);
+  header[8] = flags; header.writeUIntLE(width - 1, 12, 3); header.writeUIntLE(1, 15, 3);
+  const out = Buffer.concat([WEBP_PIXELS.subarray(0, 12), header, WEBP_PIXELS.subarray(12)]);
+  out.writeUInt32LE(out.length - 8, 4); return out;
+}
+const brokenWebp = Buffer.from(WEBP_PIXELS); brokenWebp[20] = 0xf0; brokenWebp[21] = 255; brokenWebp[22] = 255;
+const cutWebp = Buffer.from(WEBP_PIXELS.subarray(0, -10)); cutWebp.writeUInt32LE(cutWebp.length - 8, 4); cutWebp.writeUInt32LE(cutWebp.length - 20, 16);
+test.each([
+  ['image/jpeg', cutJpeg], ['image/jpeg', bigJpeg], ['image/jpeg', duplicateFrame],
+  ['image/jpeg', Buffer.concat([JPEG_PIXELS, Buffer.from('trailing')])],
+  ['image/webp', brokenWebp], ['image/webp', cutWebp], ['image/webp', extendedWebp(2)],
+  ['image/webp', extendedWebp(0, 1)], ['image/webp', extendedWebp(0, 16_000_001)],
+  ['image/jpeg', WEBP_PIXELS], ['image/webp', JPEG_PIXELS],
+] as const)('rejects malformed or oversized %s without dispatch', async (mime, bytes) => {
+  await expect(prepareCodexInput(imageInput(mime, bytes))).rejects.toMatchObject({ reason: 'invalid_input' });
+});
+test('extended still WebP has matching bounded canvas and encoded frame', async () => {
+  expect((await prepareCodexInput(imageInput('image/webp', extendedWebp()))).input.images).toHaveLength(1);
 });

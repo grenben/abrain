@@ -70,7 +70,9 @@ export interface ExtractReceiptInput {
   /** Rows committed to the target store this round. */
   total_rows: number;
   /** Cumulative cost across the round in USD. 0 for deterministic extractors. */
-  cost_usd: number;
+  cost_usd: number | null;
+  billing?: 'subscription';
+  api_metered_cost_usd?: number;
   /** LLM model id (optional; only for LLM-backed extractors). */
   model_id?: string;
   /** Eval gate verdict (optional; only when a gate fired). */
@@ -143,6 +145,7 @@ function buildReceiptBody(input: ExtractReceiptInput): string {
   lines.push(`Extracted at: ${input.extracted_at}`);
   lines.push('');
   lines.push(`Rows extracted: **${input.total_rows}**`);
+  if (input.billing === 'subscription') lines.push(`Cost: unknown (subscription); metered API subtotal: ${input.api_metered_cost_usd == null ? 'unknown' : `$${input.api_metered_cost_usd.toFixed(4)}`}`);
   if (typeof input.cost_usd === 'number' && input.cost_usd > 0) {
     lines.push(`Cost: $${input.cost_usd.toFixed(4)}`);
   }
@@ -180,6 +183,7 @@ function buildReceiptFrontmatter(input: ExtractReceiptInput): Record<string, unk
     extracted_at: input.extracted_at,
     total_rows: input.total_rows,
     cost_usd: input.cost_usd,
+    ...(input.billing === 'subscription' ? { billing: input.billing, api_metered_cost_usd: input.api_metered_cost_usd ?? null } : {}),
   };
   if (input.model_id) fm.model_id = input.model_id;
   if (typeof input.eval_pass === 'boolean') fm.eval_pass = input.eval_pass;

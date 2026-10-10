@@ -55,8 +55,8 @@ if ! echo "$OUTPUT" | grep -q '"avif":{"ok":true'; then
 fi
 
 # Final guard: top-level "ok":true.
-if ! echo "$OUTPUT" | grep -q '"codex_png":{"ok":true'; then
-  echo "[check-image-decoders-embedded] FAIL: production Codex PNG preparation failed in compiled binary." >&2
+if ! echo "$OUTPUT" | grep -q '"codex_images":{"ok":true'; then
+  echo "[check-image-decoders-embedded] FAIL: production Codex PNG/JPEG/WebP preparation failed in compiled binary." >&2
   echo "$OUTPUT" >&2
   exit 1
 fi
@@ -67,4 +67,4 @@ if ! echo "$OUTPUT" | grep -q '"ok":true}$'; then
   exit 1
 fi
 
-echo "[check-image-decoders-embedded] HEIC + AVIF + Codex PNG decoders embed and decode correctly in compiled binary."
+echo "[check-image-decoders-embedded] HEIC + AVIF + Codex PNG/JPEG/WebP decoders embed and decode correctly in compiled binary."

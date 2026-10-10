@@ -1,3 +1,5 @@
+import { readPrivateCodexConfig } from './ai/private-policy.ts';
+import { codexSynopsis } from './ai/codex-synopsis.ts';
 /**
  * v0.40.3.0 — per-chunk synopsis generator.
  *
@@ -187,6 +189,9 @@ export async function generatePerChunkSynopsis(
     abortSignal: args.abortSignal,
     cacheSystem: true,
   };
+
+  // Private failures remain typed errors: they cannot trigger title-only publication.
+  if (readPrivateCodexConfig()) return codexSynopsis(chatOpts, args.chunkText);
 
   let result: ChatResult;
   try {

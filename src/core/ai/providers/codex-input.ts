@@ -4,7 +4,7 @@ import { prepareCodexSchema } from './codex-schema.ts';
 import { validateCodexImages } from './codex-images.ts';
 import { codexEnvironment } from './codex-process.ts';
 import type { CodexProposalInput } from './codex-proposal.ts';
-import { decodePngPixels } from './codex-png.ts';
+import { decodeCodexImage } from './codex-image-decode.ts';
 
 /** Validate and snapshot before admission/hashing or any await. */
 export async function prepareCodexInput(input: CodexProposalInput) {
@@ -24,7 +24,7 @@ export async function prepareCodexInput(input: CodexProposalInput) {
     env:codexEnvironment(input.env ?? process.env) };
   for (const image of images) {
     if (snapshot.signal?.aborted) throw new CodexProposalError('aborted');
-    if (image.mime === 'image/png') await decodePngPixels(image.bytes);
+    await decodeCodexImage(image);
   }
   if (snapshot.signal?.aborted) throw new CodexProposalError('aborted');
   return { prepared, input: snapshot };

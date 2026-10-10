@@ -1,3 +1,4 @@
+import { CODEX_SYNOPSIS_VERSION } from './ai/codex-versions.ts';
 /**
  * v0.40.3.0 — contextual retrieval service (D27 P1-1 + D26 P0-2 +
  * D26 P0-3 + D27 P1-3 + D27 P2-2).
@@ -153,7 +154,7 @@ export function computeCorpusGeneration(args: ComputeCorpusGenerationArgs): stri
   const h = createHash('sha256')
     .update(args.crMode)
     .update('|')
-    .update(String(SYNOPSIS_PROMPT_VERSION))
+    .update(synopsisModel.startsWith('codex-cli:') ? CODEX_SYNOPSIS_VERSION : String(SYNOPSIS_PROMPT_VERSION))
     .update('|')
     .update(synopsisModel)
     .update('|')
@@ -542,7 +543,7 @@ async function tryBuildPhase1(opts: {
 
   const poolResult = await runSlidingPool({
     items: chunks,
-    workers: chunkConcurrency,
+    workers: synopsisModel.startsWith('codex-cli:') ? 1 : chunkConcurrency,
     signal: args.abortSignal,
     onError: 'abort',
     failureLabel: (c) => String(c.chunk_index),
