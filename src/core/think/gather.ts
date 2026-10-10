@@ -15,6 +15,8 @@
  * step can render them into distinct <pages> / <takes> blocks for the prompt.
  */
 
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { rethrowPrivateThinkFailure } from './codex.ts';
 import type { BrainEngine, TakeHit, Take } from '../engine.ts';
 import type { TrustTier } from '../trust/tier.ts';
 import { EXTERNAL_DATA_RULE, needsDataEnvelope, trustAttributes } from '../eligibility/labels.ts';
@@ -124,6 +126,7 @@ export async function runGather(
   engine: BrainEngine,
   opts: ThinkGatherOpts,
 ): Promise<ThinkGatherResult> {
+  const privateMode = !!readPrivateCodexConfig();
   const gatherLimit = opts.gatherLimit ?? 40;
   const takesLimit = opts.takesLimit ?? 30;
   const graphDepth = opts.graphDepth ?? 2;
@@ -173,6 +176,7 @@ export async function runGather(
       ...(window.endMs !== null ? { effective_before: new Date(window.endMs).toISOString() } : {}),
       limit: 50, ...pageScope,
     }).then(pages => pages.map(toSearchResult)).catch((e) => {
+      rethrowPrivateThinkFailure(e);
       warnings.push('GATHER_WINDOW_FLOOR_FAILED');
       process.stderr.write(`[think.gather] window floor failed: ${(e as Error).message}\n`);
       return [] as SearchResult[];
@@ -190,6 +194,7 @@ export async function runGather(
     ...pageScope,
     decide,
   })).catch((e) => {
+    rethrowPrivateThinkFailure(e);
     warnings.push('GATHER_HYBRID_FAILED');
     process.stderr.write(`[think.gather] hybrid stream failed: ${(e as Error).message}\n`);
     return [] as SearchResult[];
@@ -201,6 +206,7 @@ export async function runGather(
     ...pageScope,
     eligibility: {},
   }).catch((e) => {
+    rethrowPrivateThinkFailure(e);
     warnings.push('GATHER_TAKES_KEYWORD_FAILED');
     process.stderr.write(`[think.gather] takes-keyword stream failed: ${(e as Error).message}\n`);
     return [] as TakeHit[];
@@ -213,6 +219,7 @@ export async function runGather(
         ...pageScope,
         eligibility: {},
       }).catch((e) => {
+        rethrowPrivateThinkFailure(e);
         warnings.push('GATHER_TAKES_VECTOR_FAILED');
         process.stderr.write(`[think.gather] takes-vector stream failed: ${(e as Error).message}\n`);
         return [] as TakeHit[];
@@ -231,6 +238,7 @@ export async function runGather(
           return Array.from(slugs);
         })
         .catch((e) => {
+          rethrowPrivateThinkFailure(e);
           warnings.push('GATHER_GRAPH_FAILED');
           process.stderr.write(`[think.gather] graph stream failed: ${(e as Error).message}\n`);
           return [] as string[];
@@ -245,6 +253,7 @@ export async function runGather(
   let anchorHydrateFailed = false;
   const anchorPagePromise: Promise<Page | null> = opts.anchor
     ? engine.getPage(opts.anchor, pageScope).catch((e) => {
+        rethrowPrivateThinkFailure(e);
         anchorHydrateFailed = true;
         warnings.push('GATHER_ANCHOR_HYDRATE_FAILED');
         process.stderr.write(`[think.gather] anchor hydrate failed: ${(e as Error).message}\n`);
@@ -287,7 +296,7 @@ export async function runGather(
   // Fuse takes streams (keyword + vector). Key by (page_slug, row_num).
   const fusedTakes = fuseRanked(
     takesKw, takesVec,
-    (h: TakeHit) => `${h.page_slug}#${h.row_num}`,
+    (h: TakeHit) => `${privateMode ? h.page_id : h.page_slug}#${h.row_num}`,
   ).slice(0, takesLimit);
 
   return {

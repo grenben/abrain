@@ -436,6 +436,7 @@ export const CODES = {
   split_unparseable: { class: 'caller', summary: "Split unparseable." },
   stale_unavailable: { class: 'unavailable', summary: "No complete, current authorized shared-skills view is available; cached shared skills stay unused.", docs: 'docs/guides/shared-brain-skills.md#troubleshoot-leave-and-recover' },
   state_mismatch: { class: 'caller', summary: "Google connect credential error: state mismatch.", docs: 'docs/guides/google-connect.md#troubleshooting' },
+  retrieval_failed: { class: 'server', summary: "Required evidence retrieval failed; synthesis was not completed.", suggestion: "Resolve the retrieval failure and retry within a valid inference allowance." },
   storage_error: { class: 'server', summary: "Reading or writing durable storage failed.",
     why: "Usually a dropped connection or a failed statement; the same error after a rerun is not transient. `detail: persistence_mode_unknown` (#6482): the persistence_brain singleton is missing, duplicated or carries a non-boolean `enabled`, so gbrain cannot tell whether the brain is managed and refuses every write, sync, connector run and activation step that depends on it rather than route a managed brain through the unmanaged writer; only a well-formed `enabled: false` row selects the unmanaged path.",
     suggestion: 'For persistence_mode_unknown: run gbrain sources writer status --probe --json on the brain host (it reports the malformed state instead of refusing), fix the persistence_brain row it names, then gbrain doctor --json.' },

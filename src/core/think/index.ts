@@ -17,11 +17,13 @@
  * for those flags per Codex P1 #7.
  */
 
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { withPrivateThink, proposeCodexThink, rethrowPrivateThinkFailure } from './codex.ts';
 import type Anthropic from '@anthropic-ai/sdk';
 import { OperationTimeoutError, withTimeout } from '../timeout.ts';
 import type { BrainEngine, SynthesisEvidenceInput } from '../engine.ts';
 import type { SearchResult } from '../types.ts';
-import { runGather, renderPagesBlockDetailed, pagesBlockExcerptLen, takesHitToTakeForPrompt, selectRelevantExcerpt } from './gather.ts';
+import { type ThinkGatherResult, runGather, renderPagesBlockDetailed, pagesBlockExcerptLen, takesHitToTakeForPrompt, selectRelevantExcerpt } from './gather.ts';
 import { readThinkPagesBudget } from './pages-budget.ts';
 import { stampPageTrust, stampRowTrust } from '../eligibility/stamp.ts';
 import { renderTakesBlock } from './sanitize.ts';
@@ -585,6 +587,7 @@ async function embedThinkQuestion(engine: BrainEngine, opts: RunThinkOpts, warni
   try {
     return (await opts.embedQuestion(opts.question)) ?? undefined;
   } catch (e) {
+    rethrowPrivateThinkFailure(e);
     warnings.push('QUESTION_EMBED_FAILED');
     process.stderr.write(`[think] question embed failed: ${e instanceof Error ? e.message : String(e)}\n`);
     return undefined;
@@ -598,6 +601,11 @@ export async function runThink(
   engine: BrainEngine,
   opts: RunThinkOpts,
 ): Promise<ThinkResult> {
+  return withPrivateThink(engine, opts, () => runThinkPipeline(engine, opts));
+}
+
+async function runThinkPipeline(engine: BrainEngine, opts: RunThinkOpts): Promise<ThinkResult> {
+  const privateMode = !!readPrivateCodexConfig();
   const rounds = Math.max(1, opts.rounds ?? 1);
   const warnings: string[] = [];
   // PR #5086: caller bounds are authoritative; with none, the one explicit date the question names bounds the synthesis.
@@ -680,6 +688,7 @@ export async function runThink(
     try {
       const { getLatestProfile } = await import('../../commands/calibration.ts');
       const profile = await getLatestProfile(engine, {
+        ...(privateMode ? { sourceId: opts.sourceId, sourceIds: opts.allowedSources, requirePublished: opts.remote !== false } : {}),
         holder: resolveOwnerHolder({
           override: opts.calibrationHolder,
           configValue: await engine.getConfig('emotional_weight.user_holder'),
@@ -696,6 +705,7 @@ export async function runThink(
         warnings.push('NO_CALIBRATION_PROFILE');
       }
     } catch (err) {
+      rethrowPrivateThinkFailure(err);
       // D6: code-only on the wire; raw exception text goes to server logs.
       warnings.push('CALIBRATION_FETCH_FAILED');
       process.stderr.write(`[think] calibration fetch failed: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -755,6 +765,7 @@ export async function runThink(
                   5000,
                   'findTrajectory',
                 ).catch((err: unknown) => {
+                  rethrowPrivateThinkFailure(err);
                   if (err instanceof OperationTimeoutError) return [];
                   throw err;
                 });
@@ -775,6 +786,7 @@ export async function runThink(
               }),
             );
             for (const s of settled) {
+              if (s.status === 'rejected') rethrowPrivateThinkFailure(s.reason);
               if (s.status !== 'fulfilled' || s.value === null) continue;
               allBlocks.push(s.value.rendered);
               totalPoints += s.value.points;
@@ -787,6 +799,7 @@ export async function runThink(
         }
       }
     } catch (err) {
+      rethrowPrivateThinkFailure(err);
       // Defensive: trajectory injection is best-effort. Any unexpected
       // error degrades to "no trajectory block" + a warning. The think
       // call itself never fails because of trajectory wiring.
@@ -816,6 +829,89 @@ export async function runThink(
     ...(trajectoryBlock.length > 0 ? { trajectoryBlock } : {}),
   });
 
+  const generated = await synthesizeThink({ opts, modelUsed, systemPrompt, userMessage, gather, warnings, privateMode, windowMeta });
+  if ('question' in generated) return generated;
+  const { response, synthesisOk, usage } = generated;
+  let { synthesisStatus } = generated;
+
+  // Resolve citations: prefer structured, fall back to inline-marker regex scan.
+  const resolved = resolveCitations(response.citations, response.answer);
+  if (resolved.warnings.length > 0) {
+    for (const w of resolved.warnings) warnings.push(w);
+  }
+
+  // #4376: close resolved citations against the gathered evidence — a cited
+  // slug absent from every gather stream is unverifiable provenance. Warn-only;
+  // the never-fail synthesis contract (cite-render.ts) stays intact.
+  const gatheredSlugs = new Set<string>([
+    ...gather.pages.map(p => p.slug),
+    ...gather.takes.map(t => t.page_slug),
+    ...gather.graphSlugs,
+  ]);
+  for (const slug of new Set(resolved.citations.map(c => c.page_slug))) {
+    if (!gatheredSlugs.has(slug)) warnings.push(`CITATION_NOT_IN_GATHER:${slug}`);
+  }
+  stampCitationSources(resolved.citations, gather.pages);
+
+  // Round-loop scaffolding (rounds > 1 currently re-runs without gap-driven retrieval).
+  // The loop is in place so the v0.29 gap-fill heuristic doesn't change the call site.
+  for (let r = 1; r < rounds; r++) {
+    warnings.push(`ROUNDS_GT_1_NOT_GAP_DRIVEN_IN_V028`);
+    break;  // v0.28: single-pass only
+  }
+
+  // [WP2/T5] parsed-but-empty answer gets its own status; branches that
+  // already flagged a more specific failure keep theirs.
+  if (synthesisStatus === 'ok' && response.answer.trim().length === 0) {
+    synthesisStatus = 'empty_answer';
+    warnings.push('SYNTHESIS_EMPTY_ANSWER');
+  }
+  // [WP2/E2] compose failed + non-empty gather → attach extractive material
+  // (callers decide whether to surface it; null on empty gather — ENG-19).
+  const extractive = synthesisStatus !== 'ok'
+    ? composeExtractiveFallback(gather.pages, opts.question)
+    : null;
+
+  return {
+    question: opts.question,
+    answer: response.answer, ...(synthesisStatus === 'ok' ? await groundThinkAnswer(engine, response.answer, [...(privateMode ? [] : [opts.question]), pagesBlock, takesBlock, graphBlock ?? '', trajectoryBlock], warnings) : {}),
+    citations: resolved.citations,
+    gaps: response.gaps,
+    pagesGathered: gather.pages.length,
+    takesGathered: gather.takes.length,
+    graphHits: gather.graphSlugs.length,
+    modelUsed,
+    rounds: 1,
+    warnings,
+    // #1698: persistable only when a real synthesis produced a non-empty answer.
+    // ANDs the not-JSON/sentinel flag with a content check (catches valid-but-empty JSON).
+    synthesisOk: synthesisOk && response.answer.trim().length > 0,
+    synthesis_status: synthesisStatus,
+    evidence_truncated: evidenceTruncated,
+    feedback_evidence: gather.pages.map(pg => ({ source_id: pg.source_id ?? 'default', slug: pg.slug, content_hash: pg.content_hash ?? null })),
+    taint_refs: [...gather.pages.map(pg => ({ table: 'pages' as const, sourceId: pg.source_id ?? 'default', slug: pg.slug })),
+      ...gather.takes.map(t => ({ table: 'takes' as const, id: t.take_id })), ...trajectoryFactIds.map(id => ({ table: 'facts' as const, id }))],
+    ...(extractive ? { extractive } : {}),
+    usage, ...(evidenceDelivery ? { evidence_delivery: evidenceDelivery } : {}),
+    diagnostics: {
+      pagesFromHybrid: gather.diagnostics.pagesFromHybrid,
+      takesFromKeyword: gather.diagnostics.takesFromKeyword,
+      takesFromVector: gather.diagnostics.takesFromVector,
+      graphHits: gather.diagnostics.graphHits,
+    },
+    temporal: { reference_date: temporal.referenceDate, time_zone: temporal.timeZone },
+    ...windowMeta,
+  };
+}
+
+interface ThinkSynthesis {
+  response: ThinkResponse; synthesisOk: boolean; synthesisStatus: ThinkSynthesisStatus;
+  usage: { input_tokens: number; output_tokens: number } | null;
+}
+/** Provider dispatch and legacy parsing, separate from retrieval and evidence assembly. */
+async function synthesizeThink(input: { opts: RunThinkOpts; modelUsed: string; systemPrompt: string; userMessage: string;
+  gather: ThinkGatherResult; warnings: string[]; privateMode: boolean; windowMeta: { window_source?: 'caller' | 'question' } }): Promise<ThinkSynthesis | ThinkResult> {
+  const { opts, modelUsed, systemPrompt, userMessage, gather, warnings, privateMode, windowMeta } = input;
   // #1698: true only when an actual synthesis produced a non-empty answer. Set false
   // on the not-JSON branch (covers malformed output AND the buildGracefulMessage
   // sentinel, which is non-JSON) and on the no-client early return below; the final
@@ -830,7 +926,10 @@ export async function runThink(
   let usage: { input_tokens: number; output_tokens: number } | null = null;
   // Initialized to the llm_error shape; every non-throwing branch overwrites it.
   let response: ThinkResponse = { answer: '', citations: [], gaps: [] };
-  if (opts.stubResponse) {
+  if (privateMode) {
+    const proposed = await proposeCodexThink({ model: modelUsed, system: systemPrompt, prompt: userMessage, gather });
+    response = proposed.response; usage = proposed.usage;
+  } else if (opts.stubResponse) {
     response = opts.stubResponse;
   } else {
     // Build a ThinkLLMClient. Three sources, in priority order:
@@ -975,74 +1074,7 @@ export async function runThink(
     }
   }
 
-  // Resolve citations: prefer structured, fall back to inline-marker regex scan.
-  const resolved = resolveCitations(response.citations, response.answer);
-  if (resolved.warnings.length > 0) {
-    for (const w of resolved.warnings) warnings.push(w);
-  }
-
-  // #4376: close resolved citations against the gathered evidence — a cited
-  // slug absent from every gather stream is unverifiable provenance. Warn-only;
-  // the never-fail synthesis contract (cite-render.ts) stays intact.
-  const gatheredSlugs = new Set<string>([
-    ...gather.pages.map(p => p.slug),
-    ...gather.takes.map(t => t.page_slug),
-    ...gather.graphSlugs,
-  ]);
-  for (const slug of new Set(resolved.citations.map(c => c.page_slug))) {
-    if (!gatheredSlugs.has(slug)) warnings.push(`CITATION_NOT_IN_GATHER:${slug}`);
-  }
-  stampCitationSources(resolved.citations, gather.pages);
-
-  // Round-loop scaffolding (rounds > 1 currently re-runs without gap-driven retrieval).
-  // The loop is in place so the v0.29 gap-fill heuristic doesn't change the call site.
-  for (let r = 1; r < rounds; r++) {
-    warnings.push(`ROUNDS_GT_1_NOT_GAP_DRIVEN_IN_V028`);
-    break;  // v0.28: single-pass only
-  }
-
-  // [WP2/T5] parsed-but-empty answer gets its own status; branches that
-  // already flagged a more specific failure keep theirs.
-  if (synthesisStatus === 'ok' && response.answer.trim().length === 0) {
-    synthesisStatus = 'empty_answer';
-    warnings.push('SYNTHESIS_EMPTY_ANSWER');
-  }
-  // [WP2/E2] compose failed + non-empty gather → attach extractive material
-  // (callers decide whether to surface it; null on empty gather — ENG-19).
-  const extractive = synthesisStatus !== 'ok'
-    ? composeExtractiveFallback(gather.pages, opts.question)
-    : null;
-
-  return {
-    question: opts.question,
-    answer: response.answer, ...(synthesisStatus === 'ok' ? await groundThinkAnswer(engine, response.answer, [opts.question, pagesBlock, takesBlock, graphBlock ?? '', trajectoryBlock], warnings) : {}),
-    citations: resolved.citations,
-    gaps: response.gaps,
-    pagesGathered: gather.pages.length,
-    takesGathered: gather.takes.length,
-    graphHits: gather.graphSlugs.length,
-    modelUsed,
-    rounds: 1,
-    warnings,
-    // #1698: persistable only when a real synthesis produced a non-empty answer.
-    // ANDs the not-JSON/sentinel flag with a content check (catches valid-but-empty JSON).
-    synthesisOk: synthesisOk && response.answer.trim().length > 0,
-    synthesis_status: synthesisStatus,
-    evidence_truncated: evidenceTruncated,
-    feedback_evidence: gather.pages.map(pg => ({ source_id: pg.source_id ?? 'default', slug: pg.slug, content_hash: pg.content_hash ?? null })),
-    taint_refs: [...gather.pages.map(pg => ({ table: 'pages' as const, sourceId: pg.source_id ?? 'default', slug: pg.slug })),
-      ...gather.takes.map(t => ({ table: 'takes' as const, id: t.take_id })), ...trajectoryFactIds.map(id => ({ table: 'facts' as const, id }))],
-    ...(extractive ? { extractive } : {}),
-    usage, ...(evidenceDelivery ? { evidence_delivery: evidenceDelivery } : {}),
-    diagnostics: {
-      pagesFromHybrid: gather.diagnostics.pagesFromHybrid,
-      takesFromKeyword: gather.diagnostics.takesFromKeyword,
-      takesFromVector: gather.diagnostics.takesFromVector,
-      graphHits: gather.diagnostics.graphHits,
-    },
-    temporal: { reference_date: temporal.referenceDate, time_zone: temporal.timeZone },
-    ...windowMeta,
-  };
+  return { response, synthesisOk, synthesisStatus, usage };
 }
 
 /** Normalizes the model's parsed JSON envelope. */

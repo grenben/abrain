@@ -49,7 +49,7 @@ export interface CalibrationProfileRow {
 /** Source-scoped read of the latest profile row for a holder. */
 export async function getLatestProfile(
   engine: BrainEngine,
-  opts: { holder: string; sourceId?: string; sourceIds?: string[] },
+  opts: { holder: string; sourceId?: string; sourceIds?: string[]; requirePublished?: boolean },
 ): Promise<CalibrationProfileRow | null> {
   let sql = `SELECT id, source_id, holder, wave_version, generated_at, published,
             total_resolved, brier, accuracy, partial_rate, grade_completion,
@@ -67,6 +67,7 @@ export async function getLatestProfile(
     params.push(opts.sourceId);
   }
 
+  if (opts.requirePublished) sql += ` AND published=true`;
   sql += ` ORDER BY generated_at DESC LIMIT 1`;
 
   const rows = await engine.executeRaw<CalibrationProfileRow>(sql, params);

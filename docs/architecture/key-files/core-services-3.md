@@ -27,3 +27,5 @@ Current behavior and load-bearing invariants; history belongs in Git and CHANGEL
 
 - `src/core/ops/feedback.ts` — the `rate_answer` op (scope `write`, CLI `gbrain rate <answer_id> <rating>`), delegating to `feedback/rate.ts`. Answers carry `answer_id` from `ops/search.ts` (`search`, `query` via `buildRetrievalResponseMeta`), `ops/takes.ts` (`think`), `verbs.ts` (`synthesize`) and `ops/facts.ts` (`recall` page arm on the hybrid path).
 
+
+- `src/core/think/codex.ts` — strict private think admission wrapper and native evidence-hash-bound schema, citation closure, source ambiguity rejection, bounds and redacted failures. `runThinkPipeline` separates retrieval/formatting from `synthesizeThink` provider dispatch; the old oversized-function exception is removed. Private gather uses page-ID/row take identity and propagates required stream failures. Calibration lookup carries source scope and requires published profiles for remote callers. Tests: `test/helpers/codex-think-contract.ts`, via PGLite and PostgreSQL wrappers. Publication/CLI/A/B gaps: `docs/development/private-codex-think.md`.

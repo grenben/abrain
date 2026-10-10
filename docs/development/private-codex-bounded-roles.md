@@ -6,6 +6,11 @@ qualification registry. Tests register only synthetic executable hashes.
 
 ## Implemented paths
 
+- **Think synthesis:** native evidence-bound schemas, citation closure, explicit
+  failures, independent auxiliary admission and scoped calibration context.
+  Auto-think publication, direct CLI grants and A/B trials remain partial; see
+  the [think checkpoint](private-codex-think.md).
+
 - **Calibration voice review:** native candidate-bound style judgments with
   bounded text, strict utility routing and at most one shared content repair.
   Failed judgments stay failures; template fallback cannot hide inference errors.

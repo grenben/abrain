@@ -346,3 +346,13 @@ metrics, native patterns/tags, explicit CLI allowances and v251 retained receipt
 with authority/revision checks. Broader calibration remains partial: think A/B,
 full scheduled dispatch and live runtime qualification are unverified. Supported
 judge modes are not proof of wired product surfaces. Installed status is unchanged.
+
+## Think synthesis follow-up
+
+The [think checkpoint](private-codex-think.md) adds native schema transport,
+citation closure, scoped calibration context and explicit private failures to
+`runThink`. Synthetic tests exercise the real retrieval/gateway/adapter/ledger on
+PGLite and PostgreSQL. This is a synthesis checkpoint: direct CLI subscription
+grants, auto-think persistence/cooldowns, private A/B trial receipts, optional
+System One decisions and live runtime qualification remain incomplete. Installed
+GBrain and activation are unchanged.
