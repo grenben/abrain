@@ -273,6 +273,10 @@ export async function preparePageAdmission(ctx: OperationContext,
     throw new OperationError('source_changed', 'The write source is not active.',
       `Source ${sourceId} is archived or not registered, so nothing was written. Write to an active source (sources_list shows them).`);
   }
+  if (p.expected_source_incarnation !== undefined && p.expected_source_incarnation !== source.incarnation) {
+    throw new OperationError('source_changed', 'The requested source incarnation changed before admission.',
+      'Review the current source; do not replay a proposal against a replacement source.');
+  }
   let slug = typeof p.slug === 'string' ? p.slug.toLowerCase() : '';
   const intent = ['takes_add','takes_update','takes_supersede','takes_resolve','takes_remove'].includes(input.operation)
     ? await (await import('./takes-prepare.ts')).normalizeTakesIntent(ctx,p) : { ...p };

@@ -50,8 +50,48 @@ source identity and host claim inside their own transaction. Receipt failure
 cannot undo proposals or pretend they never committed; it produces a warning.
 Receipts and rollups are grouped by source. Receipts use unknown/null subscription
 USD, and rollups distinguish failed rounds from completed rounds. Managed brains
-keep their existing receipt-page omission. Canonical take acceptance and its
-prepared-write recovery remain a separate path requiring further acceptance.
+keep their existing receipt-page omission. Canonical acceptance uses the separate
+operator-reviewed path described below.
+
+## Canonical acceptance and recovery
+
+`acceptProposal` recognizes private proposal metadata even if private inference
+has since been disabled. Acceptance itself makes no model call. It requires the
+retained quotation, content hash, revision and source incarnation; missing legacy
+private evidence refuses instead of silently using the legacy acceptance path.
+The original proposal remains unchanged when the reviewer edits claim, kind,
+holder or weight. Canonical provenance names the proposal and marks edits.
+
+`take-proposal-codex-plan.ts` freezes reviewer inputs and a host-generated request
+UUID, together with a fingerprint of the original proposal and evidence. The plan
+lives in v230's existing JSONB evidence column; no additional migration is needed.
+`take-proposal-codex-accept.ts` uses the existing page preparation, authorization,
+journal admission and coordinated publication. A locked transaction commits the
+proposal claim, frozen plan and journal request together. This also serializes
+acceptance by distinct local writer identities. An insertion failure rolls back
+all three; no canonical effect has been authorized yet.
+
+A retry reconciles the retained receipt before checking an old page revision:
+its own successful write changes that revision. Omitted edits reuse the frozen
+review; conflicting explicit edits or changed proposal evidence fail. Receipt
+identity and intent digest must match, including after receipt compaction and
+when a different currently authorized writer resumes. Only a committed receipt
+with an actual canonical row number permits the completion stamp. The final
+transaction locks and revalidates the proposal again, so a concurrent proposal
+change leaves its committed receipt intact without stamping changed inputs. A failure
+between effect commit and that stamp resumes the same receipt without appending
+another take. Pending, failed, missing or ambiguous receipts never cause fresh
+admission under a new principal or request ID.
+
+Before new admission, the source must still be active and the body hash, exact
+quote and page revision must match. Admission checks expected source incarnation;
+the existing journal locks/rechecks source and authority, and the consumer checks
+the expected revision before effects. Changed pages need fresh reviewed proposals,
+including other proposals from a batch after one acceptance changed their page.
+Historical stranded private claims without a retained plan require explicit
+reconciliation. An admitted failed write stays retained for inspection; acceptance
+does not implicitly regenerate proposals or blindly retry it. Non-private
+proposal behavior remains on its existing path.
 
 ## Verification and limitations
 
@@ -94,6 +134,40 @@ stalled; only that identified synthetic process was stopped, and the fixture
 now uses its transaction handle. The legacy tombstone assertion now checks the
 bound status value instead of looking for a SQL string literal.
 
-Native process-crash injection, live subscription quality and canonical proposal
-acceptance are not established by these fixtures. The repository's admin UI and
+Native process termination and live subscription quality are not established by
+these fixtures. Canonical acceptance has additional deterministic checks below. The repository's admin UI and
 PgBouncer checks remain unavailable here; neither is counted as passed.
+
+### Canonical acceptance checkpoint
+
+`test/codex-take-accept.serial.test.ts` starts with the real private proposal
+persistence seam and publishes through a fresh managed brain. The PostgreSQL
+wrapper exercises the same contract. All content, registrations and subscription
+allowances are synthetic. A network tripwire is active and no inference CLI is
+on the scrubbed executable path.
+
+Coverage includes reviewed edits, source quotations, stale revisions, source
+identity checks, writer revocation, concurrent distinct writers, real receipt
+compaction and writer rotation, proposal changes before locked admission, extra
+retained fields, and missing/ambiguous receipts. SQL triggers inject journal
+insertion failure and completion-stamp failure. A transaction wrapper injects an
+exception immediately after committed admission, before waiting for effects;
+the queued request is then recovered through the real consumer. These are
+controlled fault injections, not a claim of OS-level process-crash coverage.
+
+| Command | Result |
+|---|---|
+| `bun test --timeout=60000 test/codex-take-accept.serial.test.ts` | 19 passed, 82 assertions |
+| `bun test --timeout=240000 test/e2e/codex-take-accept.test.ts test/e2e/takes-propose-accept-managed.test.ts` | 23 passed, 99 assertions; fresh PostgreSQL cluster stopped afterwards |
+| `bun test --timeout=60000 test/take-proposals.test.ts test/takes-propose-accept-managed.test.ts` | 24 passed, 84 assertions |
+| `bash scripts/check-test-discriminates.sh test/codex-take-accept.serial.test.ts src/core/take-proposals.ts src/core/persistence/page-mutations.ts` | At the 18-case checkpoint: pre-change source `1fb3a92` gave 6 passed / 12 failed. Restored source passed all 19 final cases, including the added completion-race case. |
+| `GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 75 passed, 0 failed, 1 admin build skip; includes final typecheck, architecture, size, registry and documentation checks |
+| `bun run build` | Passed, 3,620 modules |
+| `git diff --check` | Passed |
+
+The first fixture run exposed two fixture errors: a missing revision on an update
+and a synthetic writer rewrite inconsistent with compaction counters. The corrected
+fixtures use a conditional page update and real local writer rotation. An initial
+test-only fetch cast failed typecheck and was corrected. Admin UI, PgBouncer,
+full CI and live runtime acceptance are not established by this checkpoint.
+The installed executable, production database and activation remain unchanged.

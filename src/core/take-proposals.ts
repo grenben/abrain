@@ -29,12 +29,17 @@
 import { createHash } from 'node:crypto';
 import type { BrainEngine, TakeKind } from './engine.ts';
 import type { GBrainConfig } from './config.ts';
-import type { OperationContext } from './ops/contract.ts';
+import { OperationError, type OperationContext } from './ops/contract.ts';
 import { submitPageMutation } from './persistence/page-mutations.ts';
 import { waitForWrite } from './persistence/service.ts';
 import type { WriteRequest } from './persistence/model.ts';
+import { codexTakeAcceptance } from './take-proposal-codex-plan.ts';
+import { acceptCodexTakeProposal } from './take-proposal-codex-accept.ts';
 
 export interface TakeProposalRow {
+  content_hash?: string;
+  prompt_version?: string;
+  codex_evidence?: Record<string, unknown> | null;
   id: number;
   source_id: string;
   page_slug: string;
@@ -84,7 +89,7 @@ export function coerceProposalKind(raw: string): TakeKind {
 }
 
 const PROPOSAL_COLUMNS =
-  'id, source_id, page_slug, claim_text, kind, holder, weight, domain, status, proposed_at, model_id, promoted_row_num';
+  'id, source_id, page_slug, claim_text, kind, holder, weight, domain, status, proposed_at, model_id, promoted_row_num, content_hash, prompt_version, codex_evidence';
 
 export interface ListPendingOpts {
   /** Scope to one source (the CLI always provides one). Omit = all sources (trusted local only). */
@@ -261,6 +266,15 @@ export async function acceptProposal(
       'not_found',
       'Accept requires a brain directory (takes are markdown-canonical). Pass --dir or configure sync.repo_path.',
     );
+  }
+  const privatePlan = codexTakeAcceptance(target, proposal, edits);
+  if (privatePlan) {
+    try { return await acceptCodexTakeProposal(target, proposal, privatePlan); }
+    catch (error) {
+      if (error instanceof OperationError) throw error;
+      throw new OperationError('storage_error', 'Private proposal acceptance did not finish.',
+        'Inspect the retained proposal and write receipt, then retry the same acceptance inputs. Committed effects were not undone.');
+    }
   }
   // Claim-first CAS: exactly one caller wins the pending row. A claim that is
   // already held without a recorded take resumes under its own request id.

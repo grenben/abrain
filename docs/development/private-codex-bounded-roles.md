@@ -8,7 +8,9 @@ qualification registry. Tests register only synthetic executable hashes.
 
 - **Take proposals:** bounded native schemas and whole-batch quote validation,
   a distinct cache identity, source/revision/permission checks and atomic private
-  proposal insertion. Valid empty output remains distinct from failure. See the
+  proposal insertion. Reviewed acceptance atomically retains its plan and admits
+  the canonical write; retries use the original receipt and reject changed inputs.
+  Valid empty output remains distinct from failure. See the
   [take-proposal checkpoint](private-codex-take-proposals.md).
 
 - **Drift:** native, source-scoped advisory judgments require host take identity

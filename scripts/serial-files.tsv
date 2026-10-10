@@ -79,6 +79,7 @@ test/cli-help-no-side-effects.serial.test.ts	global-state	global-state: spawns a
 test/code-callers-pin.serial.test.ts	global-state	global-state: spyOn console.log, console.error, process.exit; process.chdir changes the shared cwd
 test/code-def-refs-pin.serial.test.ts	global-state	global-state: spyOn console.log, console.error, process.exit; process.chdir changes the shared cwd
 test/codex-rollout-0154.serial.test.ts	R1	R1: mutates GBRAIN_HOME/CODEX_HOME for in-process session-end hook runs
+test/codex-take-accept.serial.test.ts	R1	R1: managed acceptance fixtures serialize isolated homes and a global network tripwire; real coordinated writes own engine cleanup
 test/company-brain-connect-cli.serial.test.ts	global-state	global-state: R3: constructs PGLiteEngine outside beforeAll; R4: PGLiteEngine without an afterAll disconnect
 test/company-brain-recovery.serial.test.ts	global-state	global-state: R3: constructs PGLiteEngine outside beforeAll
 test/compile-context-core.serial.test.ts	R1	R1: mutates process.env (HOME, GBRAIN_HOME, CODEX_HOME) around the compile-context runs
