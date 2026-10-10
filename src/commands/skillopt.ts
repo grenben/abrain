@@ -350,7 +350,7 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
     } else {
       process.stderr.write(formatRunSummary(result.outcome, result.receipt, skillsDir));
       process.stderr.write(`[skillopt] Best sel-score: ${(result.receipt.best_sel_score ?? 0).toFixed(3)}\n`);
-      process.stderr.write(`[skillopt] Final cost: $${(result.receipt.final_cost_usd ?? 0).toFixed(2)}\n`);
+      process.stderr.write(result.receipt.subscription ? '[skillopt] Subscription monetary cost: unknown.\n' : `[skillopt] Final cost: $${(result.receipt.final_cost_usd ?? 0).toFixed(2)}\n`);
       if (result.mutatedSkillFile) {
         process.stderr.write(`[skillopt] SKILL.md rewritten with ${result.receipt.total_steps ?? 0} optimization steps.\n`);
       } else if (result.proposedPath) {

@@ -62,6 +62,11 @@ export function loadBenchmark(
     });
   }
 
+  return parseBenchmark(content, path, opts);
+}
+
+/** Parse an already bounded host snapshot without reopening a mutable file. */
+export function parseBenchmark(content: string, path: string, opts: { bootstrapReviewed?: boolean } = {}): Benchmark {
   if (content.trim().length === 0) {
     throw errorFor({
       class: 'BenchmarkEmpty',

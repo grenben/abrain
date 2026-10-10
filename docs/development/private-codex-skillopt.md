@@ -69,7 +69,7 @@ No partial candidate is returned if either call fails. A deliberate empty edits
 array is a usable result. A body rewrite requires a complete nonempty body and
 sufficient requested output headroom; transport truncation is still an error.
 
-`codex-skillopt-reflect-v1` binds retained proposals to the host run, model, mode,
+`codex-skillopt-reflect-v2` (including complete Markdown validation) binds retained proposals to the host run, model, mode,
 full captured inputs and prior edits. Accepted failure reflection survives a
 later success-reflection failure, so retry reuses it without a second charge.
 Every retained proposal passes schema and semantic validation again. Reports

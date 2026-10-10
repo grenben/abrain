@@ -3,10 +3,11 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [durable optimizer read rollouts](private-codex-skillopt-rollouts.md)
-connect real validation gates to child jobs and aggregate admission, with
-migration 241 and shared PGLite/PostgreSQL recovery tests. Whole-run optimizer
-production and broader read-tool coverage remain incomplete.
+Latest source checkpoint: [native optimizer workflow](private-codex-skillopt-workflow.md)
+connects the real optimizer entry to durable child evaluations, validated
+reflection, acceptance gates and recoverable unmanaged file publication.
+Migration 242 retains whole-run progress. CLI/worker/batch/remote admission,
+shared canonical publication recovery and broader read tools remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 

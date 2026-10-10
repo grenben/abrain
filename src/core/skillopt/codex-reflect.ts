@@ -8,8 +8,9 @@ import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { assertPrivateRoute } from '../ai/private-policy.ts';
 import { resolveModel } from '../model-config.ts';
 import { digest } from '../persistence/digest.ts';
+import { lintCandidate } from './candidate.ts';
 
-const VERSION = 'codex-skillopt-reflect-v1';
+const VERSION = 'codex-skillopt-reflect-v2';
 const MAX_BODY = 64000;
 function fail(reason: 'invalid_input' | 'invalid_output'): never { throw new CodexProposalError(reason); }
 const clean = (s: unknown, max: number, empty = false): s is string => typeof s === 'string' &&
@@ -58,6 +59,7 @@ function validateEdits(body: string, edits: EditOp[]): void {
     if (applied.outcome !== 'applied' || !bodyValid(applied.newText)) fail('invalid_output');
     candidate = applied.newText;
   }
+  try { lintCandidate(body, candidate); } catch { fail('invalid_output'); }
 }
 
 async function prepare(opts: ReflectOpts) {
@@ -83,7 +85,7 @@ async function propose(context: Awaited<ReturnType<typeof prepare>>, mode: 'fail
     messages: [{ role: 'user', content: JSON.stringify({ ...snapshot, priorEdits, mode }) }],
     responseSchema: { name: `${VERSION}-${mode}`, schema: objectSchema(properties), validateCodexProposal: text => {
       const value = JSON.parse(text);
-      if (rewrite) { if (!bodyValid(value.newBody)) fail('invalid_output'); }
+      if (rewrite) { if (!bodyValid(value.newBody)) fail('invalid_output'); try { lintCandidate(snapshot.skillBodyText, value.newBody); } catch { fail('invalid_output'); } }
       else validateEdits(snapshot.skillBodyText, [...priorEdits, ...value.edits]);
     } },
   }));

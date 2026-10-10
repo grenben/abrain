@@ -22,6 +22,7 @@ import { noteChildSubscriptionEnforcement } from '../../src/core/minions/subscri
 import { disposePersistenceConsumer } from '../../src/core/persistence/service.ts';
 import { codexActionWritesContract } from './codex-action-writes-contract.ts';
 import { codexSkilloptRolloutContract } from './codex-skillopt-rollout-contract.ts';
+import { codexSkilloptRunContract } from './codex-skillopt-run-contract.ts';
 
 export function codexActionsContract(factory: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
   const root = mkdtempSync(join(tmpdir(), 'codex-actions-')), bin = join(root, 'fake.mjs'), control = join(root, 'replies.json'), capture = join(root, 'calls.jsonl');
@@ -52,7 +53,8 @@ export function codexActionsContract(factory: () => Promise<{ engine: BrainEngin
 import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const a=process.argv.slice(2),arg=n=>a[a.indexOf(n)+1],schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8')),prompt=readFileSync(0,'utf8');
 const count=readFileSync(${JSON.stringify(capture)},'utf8').split('\\n').filter(Boolean).length;
-const values=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8')),value=values[Math.min(count,values.length-1)];
+const values=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));let value=values[Math.min(count,values.length-1)];
+if(value.autoOptimizer){const data=JSON.parse(JSON.parse(prompt).messages[0].content);if(schema.properties.response){const request=JSON.parse(data[0].content[0].text),improved=request.candidate_skill.includes('Always cite evidence.');value={response:{kind:'final',answer:(value.heldOutFail&&request.task.includes('held-out')?!improved:improved)?'Use evidence.':'Prefer brevity.'}};}else if(schema.properties.newBody){value={evidence_hash:schema.properties.evidence_hash.enum[0],newBody:data.skillBodyText.replace('Prefer brevity.','Always cite evidence.')}}else{value={evidence_hash:schema.properties.evidence_hash.enum[0],edits:value.noEdits?[]:[{op:'replace',target:'Prefer brevity.',replacement:value.badCandidate?String.fromCharCode(96).repeat(3)+'\\nAlways cite evidence.':'Always cite evidence.',reason:'Ground the answer.'}]};}}
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({schema,prompt,argv:a})+'\\n');
 const text=JSON.stringify(value);writeFileSync(arg('--output-last-message'),text);
 for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:30,cached_input_tokens:2,output_tokens:15}}])console.log(JSON.stringify(e));
@@ -68,6 +70,8 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   beforeEach(async () => {
     await disposePersistenceConsumer(engine);
     await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
+    await engine.executeRaw('DELETE FROM codex_skillopt_runs');
+    await engine.executeRaw('DELETE FROM codex_proposal_cache');
     await engine.executeRaw('DELETE FROM codex_skillopt_rollouts');
     await engine.executeRaw('DELETE FROM codex_subscription_attempts'); await engine.executeRaw('DELETE FROM codex_subscription_runs'); await engine.executeRaw('DELETE FROM minion_jobs');
     writeFileSync(capture, ''); replies(get(), final); resetGateway(); configureGateway({ env: {} });
@@ -253,4 +257,5 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   });
   codexActionWritesContract({ engine: () => engine, root, claim, run, replies, calls, get, final });
   codexSkilloptRolloutContract({ engine: () => engine, replies, calls, get, final });
+  codexSkilloptRunContract({ engine: () => engine, root, replies, calls });
 }

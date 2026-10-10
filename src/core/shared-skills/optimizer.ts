@@ -12,7 +12,8 @@ import { requireUuid, sha256 } from '../persistence/digest.ts';
 import { getWorktreeBinding } from '../persistence/ownership.ts';
 import { localHostId } from '../persistence/identity.ts';
 import { hasScope } from '../scope.ts';
-import { getWorkingTreeStatusForFile, splitFrontmatter } from '../skillopt/apply-edits.ts';
+import { getWorkingTreeStatusForFile } from '../skillopt/apply-edits.ts';
+import { lintCandidate } from '../skillopt/candidate.ts';
 import { assertBundledMutationHeldOut, getBundledSkillContext, shouldMutateSkillFile } from '../skillopt/bundled-skill-gate.ts';
 import { loadHeldOut } from '../skillopt/held-out.ts';
 import type { SkillOptOpts } from '../skillopt/types.ts';
@@ -69,24 +70,6 @@ async function authorize(ctx: OperationContext, opts: SkillOptOpts): Promise<voi
   await assertStoredSkillCapability(ctx.engine, authority, 'skill_editor');
 }
 
-function lintCandidate(before: string, after: string): void {
-  const original = splitFrontmatter(before), candidate = splitFrontmatter(after);
-  if (!candidate.body.trim() || after.includes('\0') || before.slice(0, original.bodyStart) !== after.slice(0, candidate.bodyStart)) {
-    throw opError('skill_candidate_invalid', 'The optimized candidate changed protected frontmatter or has an empty/invalid body.',
-      'The optimizer\'s candidate was not published; the retained proposal (named in detail) shows what it produced. Ask the user before running the paid optimization again.');
-  }
-  let fence: { character: string; length: number } | null = null;
-  for (const line of candidate.body.split('\n')) {
-    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!match) continue;
-    if (!fence) fence = { character: match[1][0], length: match[1].length };
-    else if (match[1][0] === fence.character && match[1].length >= fence.length && !match[2].trim()) fence = null;
-  }
-  if (fence) {
-    throw opError('skill_candidate_invalid', 'The optimized candidate contains an unclosed Markdown code fence.',
-      'The optimizer\'s candidate was not published; the retained proposal (named in detail) shows the unclosed fence. Ask the user before running the paid optimization again.');
-  }
-}
 
 export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillOptOpts) => Promise<RunSkillOptResult>): Promise<RunSkillOptResult> {
   const target = opts.sharedSkill;

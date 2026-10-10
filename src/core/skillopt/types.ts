@@ -133,6 +133,8 @@ export interface ScoredRollout {
 // ─── Run state + receipts ─────────────────────────────────────────────────
 
 export interface SkillOptOpts {
+  /** Explicit host scope for native evaluations; never inferred from candidate skill content. */
+  codex?: { allowedTools: string[]; allowedSlugPrefixes: string[] };
   operationContext?: OperationContext;
   sharedSkill?: {
     source_id: string;
@@ -255,7 +257,9 @@ export interface RunReceipt {
   best_sel_score?: number;
   baseline_test_score?: number;
   test_score?: number;
-  final_cost_usd?: number;
+  final_cost_usd?: number | null;
+  subscription?: { cost_usd: null; remaining_quota: null; attempts: number; accepted_turns: number; max_attempts: number; max_turns: number;
+    measured_input_tokens: number; measured_cached_input_tokens: number; measured_output_tokens: number; unmeasured_attempts: number };
   total_steps?: number;
   epochs_completed?: number;
   // #3516: present when outcome is 'aborted' | 'errored' — machine-readable

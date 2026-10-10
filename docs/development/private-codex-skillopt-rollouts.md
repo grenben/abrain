@@ -3,6 +3,9 @@
 Implemented in source; installed GBrain is unchanged. This checkpoint adds
 durable scoped read evaluations. Whole-optimizer activation remains incomplete.
 
+The later [workflow checkpoint](private-codex-skillopt-workflow.md) adds the native
+optimizer algorithm, durable progress and unmanaged file-publication recovery.
+
 ## Production path
 
 `runRollout` selects `runCodexRollout` in strict private mode. It requires a

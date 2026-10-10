@@ -252,6 +252,13 @@ async function recordRefusal(engine: BrainEngine, job: MinionJob, error: SpendGr
 }
 
 async function logSpendBasis(engine: BrainEngine, job: MinionJob, record: SpendAuthorization | null): Promise<void> {
+  const subscription = codexSubscriptionContext();
+  if (subscription?.engine === engine && subscription.runId.startsWith(`codex-job:${job.id}:`)) {
+    console.log(`[minions] job_spend_basis ${JSON.stringify({ job_id: job.id, name: job.name, basis: 'subscription', cost_usd: null,
+      remaining_quota: null, auxiliary_cap_usd: record?.cap_usd ?? null,
+      why: 'Generative calls use a durable subscription allowance; paid auxiliary calls require independent admission.' })}`);
+    return;
+  }
   const { basis, why } = spendBasis(job);
   if (!record) {
     const { paidJobNames } = await import('../../commands/jobs/shared.ts');
