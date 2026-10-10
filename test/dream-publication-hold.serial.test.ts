@@ -17,6 +17,8 @@ import { OperationError } from '../src/core/ops/contract.ts';
 import { retryWriteAdmission } from '../src/core/persistence/admission-retry.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
+import * as maintenanceExports from '../src/core/persistence/prepared-maintenance.ts';
+import * as gatewayExports from '../src/core/ai/gateway.ts';
 
 const PATTERN_A = 'wiki/personal/patterns/acme-example-rhythm';
 const PATTERN_B = 'wiki/personal/patterns/acme-example-drift';
@@ -33,7 +35,8 @@ const failFor = (slug: string) => {
   if (error !== undefined) throw error;
 };
 
-mock.module('../src/core/ai/gateway.ts', () => ({ probeChatModel: () => ({ ok: true }) }));
+const maintenanceModule = { ...maintenanceExports }, gatewayModule = { ...gatewayExports };
+mock.module('../src/core/ai/gateway.ts', () => ({ ...gatewayModule, probeChatModel: () => ({ ok: true }) }));
 mock.module('../src/core/cycle/synthesize-concepts.ts', () => ({ resolveSynthMaxOutputTokens: () => 2048 }));
 mock.module('../src/core/cycle/synthesize.ts', () => ({
   loadAllowedSlugPrefixes: async () => ['wiki/personal/patterns/*'],
@@ -41,6 +44,7 @@ mock.module('../src/core/cycle/synthesize.ts', () => ({
   runSubagentsInline: async () => undefined,
 }));
 mock.module('../src/core/persistence/prepared-maintenance.ts', () => ({
+  ...maintenanceModule,
   maintenancePreflight: async () => ({ writer: { sourceId: 'default' } }),
   publishMaintenancePage: async (_engine: unknown, _authority: unknown, slug: string) => { calls.publish.push(slug); failFor(slug); return {}; },
   stampMaintenancePage: async (_engine: unknown, _authority: unknown, slug: string) => { calls.stamp.push(slug); failFor(slug); },

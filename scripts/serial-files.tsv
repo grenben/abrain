@@ -17,6 +17,7 @@ test/agent-journey.serial.test.ts	global-state	global-state: R3: constructs PGLi
 test/agent-operator-gate-fixes.serial.test.ts	global-state	global-state: binds local servers/ports
 test/agent-recovery-consent-journeys.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME)
 test/ai/codex-actions.serial.test.ts	R1	R1: shared action contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-drift.serial.test.ts	R1	R1: shared drift contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification; engine lifecycle is in shared hooks
 test/ai/codex-pins.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME), global fetch, atomic-write and output spies
 test/ai/codex-upgrade-jobs.serial.test.ts	R1	R1: shared upgrade contract mutates GBRAIN_HOME, global fetch and CLI output spies
 test/ai/codex-publication.serial.test.ts	R1	R1: shared publication contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification

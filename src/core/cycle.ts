@@ -2772,26 +2772,14 @@ export async function runCycle(
         });
       } else {
         progress.start('cycle.drift');
-        const { runPhaseDrift } = await import('./cycle/drift.ts');
-        const { result, duration_ms } = await timePhase(async (): Promise<PhaseResult> => {
-          const r = await runPhaseDrift(engine, {
+        const { runCycleDrift } = await import('./cycle/drift.ts');
+        const { result, duration_ms } = await timePhase(() => runCycleDrift(engine, {
+            sourceId: cycleSourceId,
             dryRun,
             brainDir: brainDir ?? undefined,
             forceEnabled: opts.onceForPhase === 'drift',
             cycleDate,
-          });
-          const status: PhaseStatus =
-            r.status === 'complete' ? 'ok' :
-            r.status === 'partial' ? 'warn' :
-            r.status === 'failed' ? 'fail' : 'skipped';
-          return {
-            phase: 'drift',
-            status,
-            duration_ms: 0,
-            summary: r.detail,
-            details: { ...(r.totals ?? {}) },
-          };
-        }, 'drift');
+          }), 'drift');
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();

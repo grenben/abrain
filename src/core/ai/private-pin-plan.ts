@@ -8,7 +8,7 @@ export const DB_GENERATIVE_PINS = [...new Set<string>([
   'models.default', ...['utility','reasoning','deep','subagent'].map(t => `models.tier.${t}`),
   'models.dream.synthesize_verdict', 'models.brainstorm.judge',
   ...['a','b','c'].map(t => `models.eval.cross_modal.slot_${t}`),
-  'dream.synthesize.model', 'dream.patterns.model', 'dream.synthesize.verdict_model',
+  'dream.synthesize.model', 'dream.patterns.model', 'dream.synthesize.verdict_model', 'dream.drift.model',
 ])].sort();
 export const GENERATIVE_PIN_ENV = ['GBRAIN_MODEL', 'GBRAIN_CHAT_MODEL', 'GBRAIN_EXPANSION_MODEL', 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', 'GBRAIN_EMBEDDING_IMAGE_OCR_MODEL', 'GBRAIN_CHAT_FALLBACK_CHAIN'] as const;
 export interface PinChange { key: string; before: string | string[]; after: string | string[] }

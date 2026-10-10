@@ -6,6 +6,11 @@ qualification registry. Tests register only synthetic executable hashes.
 
 ## Implemented paths
 
+- **Drift:** native, source-scoped advisory judgments require host take identity
+  and exact evidence quotations. Invalid output cannot become a stable finding;
+  private reports preserve source identity and failed-judgment counts. See the
+  [drift checkpoint](private-codex-drift.md) for limits and storage evidence.
+
 - **Facts:** the actual extractor sends a bounded native schema, verifies exact
   source quotations, confidence, dates, metric pairs and duplicate claims before
   accepted-turn accounting. Host source/session provenance is retained. Valid
