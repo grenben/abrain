@@ -1,3 +1,4 @@
+import type { BatchAllResult } from '../core/skillopt/batch.ts';
 /**
  * `gbrain skillopt <skill> [flags]` CLI dispatcher.
  *
@@ -84,7 +85,7 @@ interface ParsedFlags {
 export async function runSkillOptCommand(engine: BrainEngine | null, args: string[]): Promise<void> {
   if (engine && args.length && !args.includes('--help') && !args.includes('-h')) {
     try { return await withSkillOptAllowance(engine, args, (remaining, scope) => runSkillOptCommandBody(engine, remaining, scope)); }
-    catch (error) { handleErrorAndExit(error, args.includes('--json'), 2); }
+    catch (error) { handleErrorAndExit(error, args.includes('--json'), 2); return; }
   }
   return runSkillOptCommandBody(engine, args, {});
 }
@@ -174,6 +175,11 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
       const result = await runBatchAll({
         engine,
         skillsDir,
+        ...scope,
+        maxRuntimeMin: parsed.maxRuntimeMin,
+        mode: parsed.mode,
+        bootstrapReviewed: parsed.bootstrapReviewed,
+        heldOutPath: parsed.heldOutPath,
         perSkillMaxCostUsd: parsed.maxCostUsd,
         maxCostSource: parsed.maxCostSource === 'user' || parsed.brainWideMaxCostUsd !== undefined ? 'user' : 'default',
         brainWideMaxCostUsd: parsed.brainWideMaxCostUsd ?? 10.0,
@@ -194,21 +200,11 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
         allowMutateBundled: parsed.allowMutateBundled,
         force: parsed.force,
       });
-      if (parsed.json) {
-        process.stdout.write(JSON.stringify({ schema_version: 1, ...result }) + '\n');
-      } else {
-        process.stderr.write(`[skillopt --all] Scanned ${result.skills_scanned} skills, ran ${result.skills_run}\n`);
-        process.stderr.write(`[skillopt --all] Accepted: ${result.accepted}, no_improvement: ${result.no_improvement}, errored: ${result.errored}\n`);
-        process.stderr.write(`[skillopt --all] Total cost: $${result.cumulative_cost_usd.toFixed(2)} (cap $${(parsed.brainWideMaxCostUsd ?? 10).toFixed(2)})\n`);
-      }
-      // Exit code: 0 if at least one accepted, 1 if scanned but none accepted, 2 if errored.
-      const exitCode = result.errored > 0 && result.accepted === 0 ? 2
-        : result.accepted === 0 ? 1
-        : 0;
-      process.exit(exitCode);
+      process.exit(reportBatchAllResult(result, parsed));
     } catch (err) {
       handleErrorAndExit(err, parsed.json, 2);
     }
+    return;
   }
 
   // ── F5: --target-models fleet mode ──────────────────────────────────────
@@ -447,6 +443,23 @@ export function formatRunSummary(outcome: RunSkillOptOutcome, receipt: RunReceip
     lines.push(`[skillopt] Resume: ${receipt.resume_command}`);
   }
   return lines.join('\n') + '\n';
+}
+
+/** Keep subscription accounting explicit in both human and machine reports. */
+function reportBatchAllResult(result: BatchAllResult, parsed: Pick<ParsedFlags, 'json' | 'brainWideMaxCostUsd'>): number {
+  if (parsed.json) {
+    process.stdout.write(JSON.stringify({ schema_version: 1, ...result }) + '\n');
+  } else {
+    process.stderr.write(`[skillopt --all] Scanned ${result.skills_scanned} skills, ran ${result.skills_run}\n`);
+    process.stderr.write(`[skillopt --all] Accepted: ${result.accepted}, no_improvement: ${result.no_improvement}, errored: ${result.errored}\n`);
+    if (result.cumulative_cost_usd === null) process.stderr.write('[skillopt --all] Subscription monetary cost and remaining quota are unknown.\n');
+    else process.stderr.write(`[skillopt --all] Total cost: $${result.cumulative_cost_usd.toFixed(2)} (cap $${(parsed.brainWideMaxCostUsd ?? 10).toFixed(2)})\n`);
+  }
+  // Exit code: 0 if at least one accepted, 1 if scanned but none accepted, 2 if errored.
+  const exitCode = result.dry_run ? 0 : result.errored > 0 && result.accepted === 0 ? 2
+    : result.accepted === 0 ? 1
+    : 0;
+  return exitCode;
 }
 
 /** Exported for unit tests (CLI flag parsing, --bootstrap-tasks cap, mutual exclusion). */

@@ -1,3 +1,4 @@
+import { assertOptimizerBatchMember } from './codex-batch-context.ts';
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 import type { CodexSubscriptionContext } from '../ai/subscription-context.ts';
@@ -34,7 +35,8 @@ export async function claimOptimizerRun(host: CodexSubscriptionContext, input: R
     await declareDurablePersistence(tx); await host.checkAuthorityInTransaction?.(tx);
     await ensureLocalOptimizerGrant(tx, host.runId);
     const [grant] = await tx.executeRaw<{ account_lane: string; parent_run_id: string | null; deadline: Date | string }>('SELECT account_lane,parent_run_id,deadline FROM codex_subscription_runs WHERE run_id=$1 FOR UPDATE', [host.runId]);
-    if (!grant || grant.parent_run_id || grant.account_lane !== CODEX_JOB_ACCOUNT_LANE) throw new SubscriptionAdmissionError('subscription_required');
+    if (!grant || grant.account_lane !== CODEX_JOB_ACCOUNT_LANE) throw new SubscriptionAdmissionError('subscription_required');
+    if (grant.parent_run_id) await assertOptimizerBatchMember(tx, host.runId, grant.parent_run_id, inputHash);
     const initial: OptimizerCheckpoint = { bestText: skillText, bestScore: null, baselineScore: null, nextStep: 0, acceptedSteps: 0, rejected: [], decisions: [] };
     await tx.executeRaw(`INSERT INTO codex_skillopt_runs(run_id,protocol,input_hash,input,checkpoint,checkpoint_hash,deadline,state)
       VALUES($1,1,$2,$3::text::jsonb,$4::text::jsonb,$5,$6,'idle') ON CONFLICT DO NOTHING`,

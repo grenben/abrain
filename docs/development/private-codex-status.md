@@ -3,13 +3,12 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [bounded subscription trees](private-codex-subscription-groups.md)
-adds atomic root → optimizer → rollout accounting with a maximum of three levels,
-consistent lock order, migration preservation and independent worker tests.
-Schema head is 266. This is the accounting prerequisite for batch/cycle producers;
-their durable orchestration remains incomplete. Optimizer authority checks still
-require root grants. Hybrid query/graph tools, remote producers, full dispatch
-coverage and production runtime qualification remain incomplete.
+Latest source checkpoint: [durable optimizer batches](private-codex-skillopt-batches.md)
+connects foreground `skillopt --all` and trusted SDK batches to retained manifests,
+canonical child grants, sequential optimizer recovery and honest subscription
+reports. Schema head is 267. Scheduled cycles, queued batches, fleet and remote
+producers, broader query/graph tools, full dispatch coverage and production
+runtime qualification remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 
@@ -577,3 +576,60 @@ standalone admission tests also passed (8 cases).
 This checkpoint does not deploy GBrain, apply production migrations, activate
 private mode, prove live subscription behavior, or qualify a production Codex
 runtime. Full container CI, admin UI and PgBouncer remain unverified here.
+
+## Durable optimizer batch checkpoint
+
+`runBatchAll` now dispatches strict private mode to the native batch coordinator.
+The CLI admits foreground `--all` with explicit subscription and read scope.
+Migration v267 retains the validated manifest, canonical members and owner lease
+before effects. Child optimizers require persisted membership and host authority;
+their existing checkpoints, rollout ledgers and publication receipts remain the
+recovery mechanism. Batch completion verifies actual member results and receipt
+hashes. Paid auxiliary admission remains separate; monetary cost and remaining
+quota remain null.
+
+All checks used credential-free homes, discovery disabled, fake Codex and
+isolated databases. Current deterministic evidence:
+
+| Command | Result |
+| --- | --- |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-actions.serial.test.ts -t 'durable Codex optimizer batch'` | Initial 9 batch cases passed, 50 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-actions.serial.test.ts -t 'aggregate exhaustion retains\|cancellation between members\|lost terminal acknowledgement'` | 3 added recovery cases passed, 17 assertions |
+| `python3 /tmp/maxbrain-test-postgres-batch.py` | All 12 initial batch cases passed on PostgreSQL, 67 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-actions.serial.test.ts -t 'actual CLI runs two skills\|valid empty selection\|CLI dry-run checks\|lost terminal acknowledgement'` | Final manifest/receipt checks and new empty-selection case passed; dry-run fixture had an undersized selection split and was corrected separately |
+| `python3 /tmp/maxbrain-test-postgres-batch-final.py` | Same final subset: 3 passed; same dry-run fixture correction required |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-actions.serial.test.ts -t 'CLI dry-run checks'` | Corrected fixture and extracted CLI report: 1 passed, 3 assertions |
+| `python3 /tmp/maxbrain-test-postgres-batch-dry.py` | Corrected PostgreSQL dry-run: 1 passed, 3 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-actions.serial.test.ts -t 'competing SDK batch\|actual CLI runs two skills\|local CLI runs the real optimizer'` | Final root-purpose race and affected CLI regressions: 3 passed, 22 assertions |
+| `python3 /tmp/maxbrain-test-postgres-batch-identity.py` | Same final identity and CLI contracts: 3 passed, 22 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/ai/codex-actions.serial.test.ts -t 'local preflight\|local recovery refuses\|local grant identity\|local USD-only\|durable Codex optimizer rollouts\|local CLI runs the real optimizer\|real worker completes a permanently\|actual worker publishes the bound shared'` | 26 existing optimizer/worker/authority regression cases passed, 142 assertions |
+| `python3 /tmp/maxbrain-test-postgres-read-regression.py` | Existing rollout, local CLI, worker and shared publication: 22 passed, 117 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/skillopt/models-four-paths.serial.test.ts` | 8 passed, 31 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=180000 test/skillopt/batch.test.ts` | Existing discovery/slug helpers: 5 passed, 5 assertions; this suite alone does not prove batch execution |
+| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | Catalog/replay/parity: 12 passed, 31 assertions; PgBouncer skipped (not provisioned) |
+
+The installed executable and database retain their original capabilities.
+This checkout still requires the remaining producer integrations and runtime
+qualification before a separately authorized deployment and activation. Full
+container CI, admin UI, PgBouncer and live subscription checks remain unverified.
+
+Final review found and fixed concurrent SDK adoption of one root as both a batch
+and a standalone optimizer. Purpose checks now hold the root allowance lock.
+All 15 distinct batch cases are covered across the full and focused runs on
+both storage engines; final targeted reruns cover the changed claims and CLI
+reporting path. Every disposable PostgreSQL cluster was stopped.
+
+Final repository gates:
+
+| Command | Result |
+| --- | --- |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 73 passed; admin build skipped; caught two type errors and a 303-line CLI function |
+| `python3 /tmp/maxbrain-stream-check.py bun run check:function-size` | Passed after extracting batch result reporting; no ceiling increased |
+| `python3 /tmp/maxbrain-stream-check.py bun run typecheck` | Passed after final source and fixture fixes |
+| `python3 /tmp/maxbrain-stream-check.py bun run check:regen-all` | All 12 generated artifacts fresh |
+| `python3 /tmp/maxbrain-stream-check.py bun run build` | Passed on final source; 3,739 modules compiled |
+| `git diff --check` | Passed |
+
+The failed verify checks were rerun individually after correction; the complete
+battery was not redundantly rerun. Final inference and lease checks cover the
+root-lock change, and the no-call CLI contract covers the reporting extraction.

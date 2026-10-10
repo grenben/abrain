@@ -1,3 +1,4 @@
+import { assertOptimizerBatchMember } from './codex-batch-context.ts';
 import type { CodexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import type { BrainEngine } from '../engine.ts';
@@ -21,7 +22,9 @@ export async function bindRollout(host: CodexSubscriptionContext, invocationId: 
     await fenceRolloutParent(tx, host);
     const [grant] = await tx.executeRaw<{ account_lane: string; parent_run_id: string | null; max_attempts: number; max_turns: number; deadline: Date | string }>(
       'SELECT account_lane,parent_run_id,max_attempts,max_turns,deadline FROM codex_subscription_runs WHERE run_id=$1 FOR UPDATE', [host.runId]);
-    if (!grant || grant.parent_run_id || grant.account_lane !== CODEX_JOB_ACCOUNT_LANE) rolloutConflict();
+    if (!grant || grant.account_lane !== CODEX_JOB_ACCOUNT_LANE) rolloutConflict();
+    if (grant!.parent_run_id) await assertOptimizerBatchMember(tx, host.runId, grant!.parent_run_id);
+    else if ((await tx.executeRaw('SELECT run_id FROM codex_skillopt_batches WHERE run_id=$1', [host.runId])).length) rolloutConflict();
     const [prior] = await tx.executeRaw<RolloutBinding>('SELECT * FROM codex_skillopt_rollouts WHERE run_id=$1 AND invocation_id=$2 FOR UPDATE', [host.runId, invocationId]);
     if (prior) {
       if (prior.protocol !== 1 || prior.input_hash !== inputHash || prior.trajectory && digest(prior.trajectory) !== prior.trajectory_hash) rolloutConflict();

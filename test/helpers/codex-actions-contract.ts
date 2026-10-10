@@ -23,6 +23,7 @@ import { noteChildSubscriptionEnforcement } from '../../src/core/minions/subscri
 import { disposePersistenceConsumer } from '../../src/core/persistence/service.ts';
 import { codexActionWritesContract } from './codex-action-writes-contract.ts';
 import { codexSkilloptRolloutContract } from './codex-skillopt-rollout-contract.ts';
+import { codexSkilloptBatchContract } from './codex-skillopt-batch-contract.ts';
 import { codexSkilloptRunContract } from './codex-skillopt-run-contract.ts';
 import { codexSkilloptJobContract } from './codex-skillopt-job-contract.ts';
 import { codexSharedOptimizerContract } from './codex-shared-optimizer-contract.ts';
@@ -73,6 +74,8 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   beforeEach(async () => {
     await disposePersistenceConsumer(engine);
     await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
+    await engine.executeRaw('DELETE FROM codex_skillopt_batch_members');
+    await engine.executeRaw('DELETE FROM codex_skillopt_batches');
     await engine.executeRaw('DELETE FROM codex_skillopt_runs');
     await engine.executeRaw('DELETE FROM codex_shared_skill_optimizations');
     await engine.executeRaw('DELETE FROM codex_skillopt_submissions');
@@ -263,6 +266,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   codexDiscoveryContract({ engine: () => engine, claim, run, replies, calls, final });
   codexActionWritesContract({ engine: () => engine, root, claim, run, replies, calls, get, final });
   codexSkilloptRolloutContract({ engine: () => engine, replies, calls, get, final });
+  codexSkilloptBatchContract({ engine: () => engine, root, replies, calls });
   codexSkilloptRunContract({ engine: () => engine, root, replies, calls });
   codexSkilloptJobContract({ engine: () => engine, root, replies, calls });
   codexSharedOptimizerContract({ engine: () => engine, root, replies, calls });

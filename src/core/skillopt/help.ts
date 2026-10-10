@@ -70,7 +70,7 @@ Modes:
   --json                        Machine-readable stdout
 
 Safety:
-  Private single runs (foreground or --background) require explicit admission:
+  Private single runs and foreground --all batches require explicit admission:
   --codex-max-attempts N        Native attempts, including failed calls (1–1000)
   --codex-max-turns N           Accepted turns (at most the attempt limit)
   --codex-deadline UTC          Absolute ISO UTC deadline (new grants: within 24h)
@@ -82,7 +82,7 @@ Safety:
                                 Default read tool: get_page. Discovery requires explicit tools.
                                 Cost and remaining subscription quota are unknown.
                                 --max-usd never authorizes subscription calls.
-                                Batch/fleet grants are pending; bootstrap creates review drafts.
+                                Batches share one allowance (at most 20 skills); fleet grants are pending.
 
   --max-usd N|off               Hard cap. Default 5.00. Preflight refuses
                                 if estimate exceeds. A model with no price
@@ -99,8 +99,8 @@ Safety:
 
 Batch + fleet + background:
   --all                         Optimize every skill with a benchmark
-                                (per-skill cap = --max-usd; brain-wide
-                                cap = --brain-wide-max-cost-usd, default $10)
+                                Private mode: shared Codex allowance, at most 20 skills.
+                                API mode: --max-usd per skill; brain-wide USD cap below.
   --brain-wide-max-cost-usd N   Cumulative ceiling for --all (default 10.00)
   --target-models a,b,c         Fleet mode: optimize ONCE per model. Always
                                 runs no-mutate; per-model receipts under

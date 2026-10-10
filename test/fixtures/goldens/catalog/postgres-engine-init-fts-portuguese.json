@@ -94,6 +94,23 @@
       "codex_shared_skill_optimizations.codex_shared_skill_optimizations_protocol_check": "c CHECK ((protocol = 1))",
       "codex_shared_skill_optimizations.codex_shared_skill_optimizations_request_id_key": "u UNIQUE (request_id)",
       "codex_shared_skill_optimizations.codex_shared_skill_optimizations_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_batch_run_id_fkey": "f FOREIGN KEY (batch_run_id) REFERENCES codex_skillopt_batches(run_id)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_ordinal_check": "c CHECK (((ordinal >= 0) AND (ordinal <= 19)))",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_pkey": "p PRIMARY KEY (batch_run_id, ordinal)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_run_id_key": "u UNIQUE (run_id)",
+      "codex_skillopt_batches.codex_skillopt_batches_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_skillopt_batches.codex_skillopt_batches_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_skillopt_batches.codex_skillopt_batches_check2": "c CHECK (((state <> 'complete'::text) OR (result IS NOT NULL)))",
+      "codex_skillopt_batches.codex_skillopt_batches_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 8388608)))",
+      "codex_skillopt_batches.codex_skillopt_batches_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batches.codex_skillopt_batches_pkey": "p PRIMARY KEY (run_id)",
+      "codex_skillopt_batches.codex_skillopt_batches_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_batches.codex_skillopt_batches_result_check": "c CHECK (((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 2097152)))",
+      "codex_skillopt_batches.codex_skillopt_batches_result_hash_check": "c CHECK ((result_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batches.codex_skillopt_batches_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_batches.codex_skillopt_batches_state_check": "c CHECK ((state = ANY (ARRAY['idle'::text, 'running'::text, 'complete'::text, 'needs_reconciliation'::text])))",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check2": "c CHECK (((NOT completed) OR (result IS NOT NULL)))",
@@ -667,6 +684,12 @@
       "codex_shared_skill_optimizations": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_skillopt_batch_members": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_batches": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "codex_skillopt_bootstraps": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -1106,6 +1129,9 @@
       "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
       "codex_shared_skill_optimizations_pkey": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_pkey ON public.codex_shared_skill_optimizations USING btree (run_id)",
       "codex_shared_skill_optimizations_request_id_key": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_request_id_key ON public.codex_shared_skill_optimizations USING btree (request_id)",
+      "codex_skillopt_batch_members_pkey": "CREATE UNIQUE INDEX codex_skillopt_batch_members_pkey ON public.codex_skillopt_batch_members USING btree (batch_run_id, ordinal)",
+      "codex_skillopt_batch_members_run_id_key": "CREATE UNIQUE INDEX codex_skillopt_batch_members_run_id_key ON public.codex_skillopt_batch_members USING btree (run_id)",
+      "codex_skillopt_batches_pkey": "CREATE UNIQUE INDEX codex_skillopt_batches_pkey ON public.codex_skillopt_batches USING btree (run_id)",
       "codex_skillopt_bootstraps_pkey": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_pkey ON public.codex_skillopt_bootstraps USING btree (run_id)",
       "codex_skillopt_rollouts_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_rollouts_job_id_key ON public.codex_skillopt_rollouts USING btree (job_id)",
       "codex_skillopt_rollouts_pkey": "CREATE UNIQUE INDEX codex_skillopt_rollouts_pkey ON public.codex_skillopt_rollouts USING btree (run_id, invocation_id)",
@@ -1863,6 +1889,30 @@
           "13 response jsonb/jsonb NULL",
           "14 response_hash text/text NULL",
           "15 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_batch_members": {
+        "columns": [
+          "1 batch_run_id text/text NOT NULL",
+          "2 ordinal integer/int4 NOT NULL",
+          "3 run_id text/text NOT NULL",
+          "4 input_hash text/text NOT NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_batches": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 input jsonb/jsonb NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 owner_token uuid/uuid NULL",
+          "6 lease_until timestamp with time zone/timestamptz NULL",
+          "7 state text/text NOT NULL",
+          "8 result jsonb/jsonb NULL",
+          "9 result_hash text/text NULL",
+          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },

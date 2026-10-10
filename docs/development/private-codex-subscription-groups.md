@@ -7,7 +7,7 @@ while enforcing one aggregate subscription allowance.”*
 
 The [optimizer workflow](private-codex-skillopt-workflow.md) uses distinct
 rollout grants under its root allowance. The ledger also supports the bounded
-hierarchy needed by a future batch coordinator:
+hierarchy used by the [batch coordinator](private-codex-skillopt-batches.md):
 
 ```text
 batch allowance
@@ -48,17 +48,15 @@ OpenAI's remaining subscription quota or reset it.
 
 Root counters already include descendant consumption: do not sum the counters
 across levels. Token measurements remain on actual attempt rows, one record per
-call. A future batch report must include all descendant attempts once and
-preserve missing measurements. Existing optimizer reports still cover their
+call. Batch reports include all descendant attempts once and preserve missing measurements. Existing optimizer reports still cover their
 root and direct rollout children. Monetary cost and remaining quota remain null.
 
 ## Integration and activation limits
 
-The tree is the admission prerequisite for native batch/cycle optimization.
-Those producers are not integrated by this change. Existing optimizer grants
-remain restricted to roots until a durable batch manifest binds each skill's
-identity, source, scope and recovery state. No root-only optimizer authority
-check was relaxed.
+Foreground native batches use this tree through a durable manifest binding each
+skill's identity, source, scope and recovery state. Child optimizers require that
+persisted membership and a live batch owner scope; a child grant alone is
+insufficient. Scheduled cycle and queued batch producers remain incomplete.
 
 Trusted queue submissions can bind a distinct job allowance to a parent; real
 worker handlers charge the shared total while retaining separate action ledgers.

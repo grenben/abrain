@@ -13,6 +13,8 @@
  * target-models.
  */
 
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexSkillOptBatch } from './codex-batch.ts';
 import { assertLegacySkillFilesystemWrite, assertLegacySkillWriter } from '../skillpack/writer-guard.ts';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -22,6 +24,13 @@ import { runSkillOpt } from './orchestrator.ts';
 import type { RunReceipt, SkillOptOpts } from './types.ts';
 
 export interface BatchAllOpts {
+  operationContext?: SkillOptOpts['operationContext'];
+  codex?: SkillOptOpts['codex'];
+  mode?: SkillOptOpts['mode'];
+  bootstrapReviewed?: boolean;
+  heldOutPath?: string;
+  codexPerSkill?: { maxAttempts: number; maxTurns: number };
+  maxRuntimeMin?: number;
   engine: BrainEngine;
   skillsDir: string;
   /** Per-skill budget (each skill gets its own tracker). */
@@ -62,21 +71,26 @@ export interface BatchAllResult {
   no_improvement: number;
   errored: number;
   brain_wide_cap_reached: boolean;
-  cumulative_cost_usd: number;
+  cumulative_cost_usd: number | null;
+  billing?: 'subscription';
+  remaining_quota?: null;
+  dry_run?: boolean;
+  subscription?: Record<string, number>;
   per_skill: Array<{
     skill: string;
     outcome: 'accepted' | 'no_improvement' | 'aborted' | 'errored' | 'skipped_cap';
-    cost_usd: number;
+    cost_usd: number | null;
     receipt?: RunReceipt;
     reason?: string;
   }>;
 }
 
 export async function runBatchAll(opts: BatchAllOpts): Promise<BatchAllResult> {
+  if (readPrivateCodexConfig()) return runCodexSkillOptBatch(opts);
   const skills = collectSkillsWithBenchmarks(opts.skillsDir).filter(
     (s) => !opts.filter || opts.filter(s),
   );
-  const out: BatchAllResult = {
+  const out: BatchAllResult & { cumulative_cost_usd: number } = {
     skills_scanned: skills.length,
     skills_run: 0,
     accepted: 0,
@@ -312,7 +326,7 @@ function slugifyModel(model: string): string {
   return model.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
 }
 
-function collectSkillsWithBenchmarks(skillsDir: string): string[] {
+export function collectSkillsWithBenchmarks(skillsDir: string): string[] {
   if (!fs.existsSync(skillsDir)) return [];
   const out: string[] = [];
   for (const entry of fs.readdirSync(skillsDir)) {

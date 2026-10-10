@@ -14,9 +14,9 @@ import { splitEvalAllowance, type EvalAllowance } from '../../eval/longmemeval/c
 import { splitSharedOptimizerFlags } from './codex-shared-cli.ts';
 import { usageError } from '../../cli/cli-error.ts';
 
-const pending = new AsyncLocalStorage<Readonly<EvalAllowance>>();
+const pending = new AsyncLocalStorage<Readonly<EvalAllowance> | undefined>();
 export type LocalOptimizerScope = Pick<SkillOptOpts, 'operationContext' | 'codex' | 'sharedSkill'> & { backgroundAllowance?: Readonly<EvalAllowance> };
-const bad = (message: string): never => { throw usageError(message, 'Use explicit Codex limits, --source ID and one or more --read-prefix slug-or-prefix/* flags for a single optimizer run.'); };
+const bad = (message: string): never => { throw usageError(message, 'Use explicit Codex limits, --source ID and one or more --read-prefix slug-or-prefix/* flags for an optimizer run or foreground batch.'); };
 
 /** Local CLI authority only. No grant is persisted until all workflow inputs pass validation. */
 export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string[], run: (args: string[], scope: LocalOptimizerScope) => Promise<T>): Promise<T> {
@@ -41,8 +41,10 @@ export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string
   const discovery = tools.some(t => t !== 'get_page');
   const registry: Pick<NonNullable<SkillOptOpts['codex']>, 'readRegistry'> = discovery ? { readRegistry: CODEX_DISCOVERY_REGISTRY } : {};
   // These producers have separate material-input/recovery requirements; never reinterpret a grant.
-  if (rest.some(a => ['--all', '--target-models', '--resume'].includes(a)))
-    bad('This private CLI grant currently supports a single optimizer run.');
+  if (rest.some(a => ['--target-models', '--resume'].includes(a)))
+    bad('Fleet mode and legacy --resume are not supported by this grant; recover by repeating the unchanged Codex request UUID.');
+  if (rest.includes('--all') && (shared.target || rest.some(a => ['--background', '--follow', '--bootstrap-from-skill', '--bootstrap-from-routing'].includes(a)))) bad('Private batch mode is foreground and uses individual local skill files.');
+  if (rest.includes('--all') && rest.some(a => ['--benchmark', '--brain-wide-max-cost-usd'].includes(a))) bad('Private batches use per-skill benchmark files and a shared Codex allowance; use --aux-max-usd for paid auxiliary calls.');
   if (shared.target && rest.some(a => ['--bootstrap-from-skill', '--bootstrap-from-routing'].includes(a))) bad('Shared benchmark publication requires a separate reviewed bundle.');
   if (rest.includes('--follow') && !rest.includes('--background')) bad('--follow requires --background.');
   if (!source || !prefixes.length || new Set(prefixes).size !== prefixes.length) bad('Private optimizer reads need an explicit source and distinct read prefixes.');
@@ -66,6 +68,9 @@ export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string
   } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
 }
 
+/** Batch members use persisted child grants; they must not recreate the CLI root. */
+export function withoutLocalOptimizerAllowance<T>(run: () => Promise<T>): Promise<T> { return pending.run(undefined, run); }
+
 /** Part of the immutable workflow input, including the independent auxiliary cap. */
 export function localOptimizerAllowance() {
   const grant = pending.getStore();
@@ -74,14 +79,24 @@ export function localOptimizerAllowance() {
 }
 
 /** Same transaction as the optimizer input binding; failed preflight cannot leave an orphan grant. */
-export async function ensureLocalOptimizerGrant(tx: BrainEngine, runId: string, kind: 'optimizer' | 'bootstrap' = 'optimizer'): Promise<void> {
-  const grant = pending.getStore(); if (!grant) return;
-  if (runId !== `codex-skillopt:${grant.requestId}`) throw new SubscriptionAdmissionError('subscription_identity_conflict');
-  await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
-  await declareDurablePersistence(tx);
+export async function ensureLocalOptimizerGrant(tx: BrainEngine, runId: string, kind: 'optimizer' | 'bootstrap' | 'batch' = 'optimizer'): Promise<void> {
+  const grant = pending.getStore();
+  if (grant) {
+    if (runId !== `codex-skillopt:${grant.requestId}`) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
+    await declareDurablePersistence(tx);
+  }
+  // SDK callers already have a grant. Serialize purpose checks under its root
+  // lock too, so batch and standalone claims cannot both adopt the same run.
+  await tx.executeRaw('SELECT gbrain_codex_subscription_lock_path($1)', [runId]);
+  if (kind !== 'batch' && (await tx.executeRaw('SELECT run_id FROM codex_skillopt_batches WHERE run_id=$1', [runId])).length)
+    throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  if (!grant) return;
   if ((await tx.executeRaw('SELECT request_id FROM codex_skillopt_submissions WHERE request_id=$1::uuid', [grant.requestId])).length)
     throw new SubscriptionAdmissionError('subscription_identity_conflict');
-  const incompatible = kind === 'optimizer'
+  const incompatible = kind === 'batch'
+    ? await tx.executeRaw('SELECT run_id FROM codex_skillopt_runs WHERE run_id=$1 UNION SELECT run_id FROM codex_skillopt_bootstraps WHERE run_id=$1 UNION SELECT run_id FROM codex_shared_skill_optimizations WHERE run_id=$1', [runId])
+    : kind === 'optimizer'
     ? await tx.executeRaw('SELECT run_id FROM codex_skillopt_bootstraps WHERE run_id=$1', [runId])
     : await tx.executeRaw('SELECT run_id FROM codex_skillopt_runs WHERE run_id=$1 UNION SELECT run_id FROM codex_shared_skill_optimizations WHERE run_id=$1', [runId]);
   if (incompatible.length) throw new SubscriptionAdmissionError('subscription_identity_conflict');
