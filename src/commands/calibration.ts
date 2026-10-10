@@ -19,7 +19,7 @@
  */
 
 import type { BrainEngine } from '../core/engine.ts';
-import { runPhaseCalibrationProfile } from '../core/cycle/calibration-profile.ts';
+import { regenerateCalibration } from './calibration-subscription.ts';
 import { sourceScopeOpts, type OperationContext } from '../core/operations.ts';
 import type { GBrainConfig } from '../core/config.ts';
 import { GBrainError } from '../core/types.ts';
@@ -230,9 +230,9 @@ export async function runCalibration(
   if (opts.regenerate) {
     process.stderr.write(`[calibration] regenerating profile for holder=${holder}...\n`);
     const ctx = ctxFromCli(engine, config, sourceId);
-    const result = await runPhaseCalibrationProfile(ctx, { holder });
+    const result = await regenerateCalibration(ctx, args, holder);
     if (result.status === 'fail') {
-      process.stderr.write(`[calibration] regenerate failed: ${result.error?.message ?? 'unknown'}\n`);
+      process.stderr.write(`[calibration] regenerate failed: ${result.error?.message ?? result.details?.error_code ?? result.summary}\n`);
       process.exit(1);
     }
     process.stderr.write(`[calibration] ${result.summary}\n`);

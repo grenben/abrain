@@ -341,6 +341,8 @@ installation, live verification and activation are different states.**
 The [calibration checkpoint](private-codex-calibration.md) adds native structured
 voice judgments and explicit failure handling with one shared content-repair
 allowance. The inventory separates profile generation, voice review and the
-think A/B harness. Full calibration profile generation/publication remains
-partial: source scoping, grounded patterns/tags and retained input evidence are
-still required. Supported judge modes are not proof of wired product surfaces.
+think A/B harness. Private profile generation now implements source-scoped
+metrics, native patterns/tags, explicit CLI allowances and v251 retained receipts
+with authority/revision checks. Broader calibration remains partial: think A/B,
+full scheduled dispatch and live runtime qualification are unverified. Supported
+judge modes are not proof of wired product surfaces. Installed status is unchanged.

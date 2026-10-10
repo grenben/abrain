@@ -55,11 +55,12 @@ export async function aggregateDomainScorecards(
   holder: string,
   domains: CalibrationDomain[],
   sourceId: string,
+  activePagesOnly = false,
 ): Promise<DomainScorecards> {
   const out: DomainScorecards = {};
   for (const domain of domains) {
     try {
-      const scorecard = await aggregateOneDomain(engine, holder, domain, sourceId);
+      const scorecard = await aggregateOneDomain(engine, holder, domain, sourceId, activePagesOnly);
       out[domain.name] = scorecard;
     } catch (err) {
       out[domain.name] = {
@@ -80,14 +81,15 @@ async function aggregateOneDomain(
   holder: string,
   domain: CalibrationDomain,
   sourceId: string,
+  activePagesOnly = false,
 ): Promise<DomainScorecard> {
   switch (domain.aggregator) {
     case 'scalar_brier':
-      return aggregateScalarBrier(engine, holder, domain, sourceId);
+      return aggregateScalarBrier(engine, holder, domain, sourceId, activePagesOnly);
     case 'weighted_brier':
-      return aggregateWeightedBrier(engine, holder, domain, sourceId);
+      return aggregateWeightedBrier(engine, holder, domain, sourceId, activePagesOnly);
     case 'count_based':
-      return aggregateCountBased(engine, holder, domain, sourceId);
+      return aggregateCountBased(engine, holder, domain, sourceId, activePagesOnly);
     case 'cluster_summary':
       return aggregateClusterSummary(engine, holder, domain, sourceId);
   }
@@ -103,6 +105,7 @@ async function aggregateScalarBrier(
   holder: string,
   domain: CalibrationDomain,
   sourceId: string,
+  activePagesOnly = false,
 ): Promise<DomainScorecard> {
   const rows = await engine.executeRaw<{
     n: number;
@@ -122,7 +125,7 @@ async function aggregateScalarBrier(
        AND t.active = TRUE
        AND t.resolved_outcome IS NOT NULL
        AND p.type = ANY($3::text[])
-       AND p.source_id = $4`,
+       AND p.source_id = $4${activePagesOnly ? '\n       AND p.deleted_at IS NULL' : ''}`,
     [domain.name, holder, domain.page_types, sourceId],
   );
   const row = rows[0] ?? { n: 0, brier: null, accuracy: null };
@@ -146,6 +149,7 @@ async function aggregateWeightedBrier(
   holder: string,
   domain: CalibrationDomain,
   sourceId: string,
+  activePagesOnly = false,
 ): Promise<DomainScorecard> {
   const rows = await engine.executeRaw<{
     n: number;
@@ -165,7 +169,7 @@ async function aggregateWeightedBrier(
          AND t.active = TRUE
          AND t.resolved_outcome IS NOT NULL
          AND p.type = ANY($3::text[])
-         AND p.source_id = $4
+         AND p.source_id = $4${activePagesOnly ? '\n         AND p.deleted_at IS NULL' : ''}
      )
      SELECT
        COUNT(*)::int AS n,
@@ -194,6 +198,7 @@ async function aggregateCountBased(
   holder: string,
   domain: CalibrationDomain,
   sourceId: string,
+  activePagesOnly = false,
 ): Promise<DomainScorecard> {
   const rows = await engine.executeRaw<{ n: number; accuracy: number | null }>(
     `SELECT
@@ -208,7 +213,7 @@ async function aggregateCountBased(
        AND t.active = TRUE
        AND t.resolved_outcome IS NOT NULL
        AND p.type = ANY($3::text[])
-       AND p.source_id = $4`,
+       AND p.source_id = $4${activePagesOnly ? '\n       AND p.deleted_at IS NULL' : ''}`,
     [domain.name, holder, domain.page_types, sourceId],
   );
   const row = rows[0] ?? { n: 0, accuracy: null };

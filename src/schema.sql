@@ -1615,8 +1615,11 @@ CREATE TABLE IF NOT EXISTS calibration_profiles (
   active_bias_tags        TEXT[]       NOT NULL,
   model_id                TEXT         NOT NULL,
   cost_usd                NUMERIC(10,4),
-  judge_model_agreement   REAL
+  judge_model_agreement   REAL,
+  codex_evidence          JSONB
 );
+CREATE UNIQUE INDEX IF NOT EXISTS calibration_profiles_codex_request
+  ON calibration_profiles(source_id,holder,(codex_evidence->>'subscription_run_id')) WHERE codex_evidence IS NOT NULL;
 CREATE INDEX IF NOT EXISTS calibration_profiles_holder_recent_idx
   ON calibration_profiles (source_id, holder, generated_at DESC);
 CREATE INDEX IF NOT EXISTS calibration_profiles_bias_tags_gin

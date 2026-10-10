@@ -44,14 +44,55 @@ caption and morning pulse. Tests establish the judge contract for all five;
 source inspection currently finds the profile producer as the actual gate caller.
 A list of supported modes does not establish five wired product surfaces.
 
-Calibration is **partial**. Its profile producer still needs native structured
-pattern/bias proposals, grounded metric checks, strict model selection across its
-calls and source-bound persistence. The current legacy scorecard call omits its
-source scope. Profile storage needs retained input/protocol provenance and
-revalidation before persistence. Failure-aware private publication must replace
-best-effort bias-tag failure handling. Domain aggregations, grade completion and
-operator review must be preserved. The A/B harness depends on unfinished private
-`think` acceptance and is not proven by these voice tests.
+## Private profile producer
+
+The private `calibration_profile` dispatcher now uses native pattern/bias proposals
+through the gateway and the existing voice gate. The legacy producer remains for
+non-private callers. The private producer rejects remote authority, conflicting
+reasoning/utility pins and missing subscription admission before inference.
+Each source gets its own holder-scoped scorecard, domain pack and evidence hash.
+Deleted-page takes are excluded. Cold sources (fewer than five resolved takes)
+skip without inference or a success row. Existing grade completion and all four
+domain aggregators remain available.
+
+The host supplies metric IDs, exact metric phrases and allowable confidence-bias
+tags. Responses require two to four distinct statements, the matching metric
+quote/domain, fewer than 25 words, no extra numeric claims and only an allowed
+bias tag. These checks establish metric binding; they do not prove all
+natural-language implications. One negative voice judgment permits one repair
+shared across layers. Invalid proposals and failed judgments stop explicitly.
+
+Bounds: at most 20 sources, 32 domains per source, 80 supplied facts, 2,048 output
+tokens for each proposal, 120 seconds per call, and a ten-minute phase bound
+shortened by its enclosing deadline. Subscription attempts/accepted turns and
+account-lane ownership still apply. USD cost remains null. No auxiliary paid
+inference is authorized by the direct command.
+
+Migration **v251** adds retained profile evidence and a unique source/holder/run
+receipt key, identically on PostgreSQL and PGLite. The sole profile insert is
+transactional and unpublished. Evidence stores protocol/version, source
+incarnation, principal, pack identity, snapshot hash, aggregate metrics, supplied
+facts and the accepted proposal. It does not archive every underlying take.
+Before insertion, source/writer/job authority, pack identity and the evidence
+fingerprint are rechecked. Failed insertion creates no success row; loss of the
+acknowledgement after commit reconciles the same retained receipt without another
+model call. Changed request inputs refuse reuse. Earlier sources' committed
+profiles survive a later source failure, with a partial outcome.
+
+Direct private regeneration requires explicit `--codex-max-attempts`,
+`--codex-max-turns` and `--codex-deadline` flags. Optional
+`--codex-request-id <UUID>` binds retries to the same source incarnation, holder,
+model and executable selection. Reuse the identical allowance/deadline; changed
+inputs are refused, including simultaneous requests. The command prints the ID
+and non-secret allowance summary. It shares workers' `codex-subscription` lane.
+Ordinary `gbrain calibration` reads remain model-free. These flags are source
+interfaces; they are not instructions to activate the installed executable.
+
+Calibration as a whole remains **partial**: the A/B harness depends on unfinished
+private `think` acceptance. Full scheduled-worker dispatch, real process crashes,
+native runtime isolation and live subscription behavior are not established by
+these focused tests. Aggregate hashes represent observed input snapshots; they
+are not a historical corpus archive or a general serializable database snapshot.
 
 ## Deterministic checks
 
@@ -90,3 +131,38 @@ model-pin key. Corrected fixtures use `created_at` and `models.tier.utility` and
 then passed on both engines. Full CI, admin UI, PgBouncer, real runtime isolation
 and live subscription acceptance remain unverified here. No installed binary,
 production migration, database target, model pin or service was changed.
+
+## Profile verification checkpoint
+
+The profile contract uses the real phase, gateway, adapter, durable admission,
+CLI dispatcher and database insertion with synthetic data and a hash-qualified
+fake executable. No real inference or production database was used.
+
+- PostgreSQL: 26 profile contract cases, 95 assertions passed, including changed
+  inputs racing on one CLI request and acknowledgement loss after commit.
+- Existing profile/CLI/domain/voice regressions: 85 cases, 189 assertions passed.
+- The first native concurrency run exposed two simultaneous shared-to-exclusive
+  lock upgrades. Admission now takes the exclusive brain lock before declaring
+  the shared persistence protocol; the corrected native contract passes.
+- Schema goldens also incorporate the previously implemented v230 take-proposal
+  column, whose migration-record golden was stale. No prior migration changed.
+
+| Final command (isolated harness) | Result |
+|---|---|
+| `bun test --timeout=60000 test/ai/codex-calibration.serial.test.ts` | 26 passed, 95 assertions |
+| `bun test --timeout=240000 test/e2e/codex-calibration.test.ts` | 26 passed, 95 assertions; disposable cluster stopped |
+| `bun test --timeout=60000 test/calibration-profile.test.ts test/calibration-cli.test.ts test/domain-aggregators.test.ts test/voice-gate.test.ts test/voice-gate-judge-tier.test.ts` | 85 passed, 189 assertions |
+| `bun test --timeout=240000 test/schema-catalog-golden.test.ts test/schema-bootstrap-coverage.test.ts test/schema-migrations-replay.test.ts test/migrations-fresh-install.test.ts test/migrations-golden.test.ts` | 41 passed, 222 assertions; goldens fixed after reviewed regeneration |
+| `bun test --timeout=240000 test/e2e/schema-catalog-golden.test.ts test/e2e/schema-migrations-replay.test.ts` | 12 passed, 31 assertions; 1 PgBouncer skip; disposable cluster stopped |
+| `GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 75 passed, 0 failed, 1 admin build skip; typecheck, architecture, size, registries and docs included |
+| `bun run build` | Passed, 3,627 modules |
+| `bash scripts/check-test-discriminates.sh test/ai/codex-calibration.serial.test.ts src/core/cycle/calibration-profile.ts` | Dispatcher reverted to `95d7fc0`: 4 passed / 22 failed; restored: 26 passed |
+| `git diff --check` | Passed |
+
+The first negative-control attempt exposed a test-harness issue: the CLI exit
+ended the test runner before its summary. The fixture now intercepts that exit,
+allowing all failures to be counted and cleanup to run.
+
+The admin build would require an external dependency fetch and was skipped.
+PgBouncer is unavailable. Full CI and live checks remain unverified. No production
+migration has been applied.

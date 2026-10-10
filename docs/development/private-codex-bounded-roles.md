@@ -9,7 +9,8 @@ qualification registry. Tests register only synthetic executable hashes.
 - **Calibration voice review:** native candidate-bound style judgments with
   bounded text, strict utility routing and at most one shared content repair.
   Failed judgments stay failures; template fallback cannot hide inference errors.
-  Full profile publication remains partial. See the
+  Private profiles now retain source-scoped metrics, native proposals and canonical
+  receipts; the broader calibration A/B workflow remains partial. See the
   [calibration checkpoint](private-codex-calibration.md).
 
 - **Take proposals:** bounded native schemas and whole-batch quote validation,

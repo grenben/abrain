@@ -682,6 +682,7 @@
       "access_tokens_pkey": "CREATE UNIQUE INDEX access_tokens_pkey ON public.access_tokens USING btree (id)",
       "access_tokens_token_hash_key": "CREATE UNIQUE INDEX access_tokens_token_hash_key ON public.access_tokens USING btree (token_hash)",
       "calibration_profiles_bias_tags_gin": "CREATE INDEX calibration_profiles_bias_tags_gin ON public.calibration_profiles USING gin (active_bias_tags)",
+      "calibration_profiles_codex_request": "CREATE UNIQUE INDEX calibration_profiles_codex_request ON public.calibration_profiles USING btree (source_id, holder, ((codex_evidence ->> 'subscription_run_id'::text))) WHERE (codex_evidence IS NOT NULL)",
       "calibration_profiles_holder_recent_idx": "CREATE INDEX calibration_profiles_holder_recent_idx ON public.calibration_profiles USING btree (source_id, holder, generated_at DESC)",
       "calibration_profiles_pkey": "CREATE UNIQUE INDEX calibration_profiles_pkey ON public.calibration_profiles USING btree (id)",
       "calibration_profiles_published_idx": "CREATE INDEX calibration_profiles_published_idx ON public.calibration_profiles USING btree (source_id, published, holder) WHERE (published = true)",
@@ -1056,7 +1057,8 @@
           "16 active_bias_tags ARRAY/_text NOT NULL",
           "17 model_id text/text NOT NULL",
           "18 cost_usd numeric/numeric NULL",
-          "19 judge_model_agreement real/float4 NULL"
+          "19 judge_model_agreement real/float4 NULL",
+          "20 codex_evidence jsonb/jsonb NULL"
         ],
         "flags": "relkind=r rls=false force_rls=false"
       },
