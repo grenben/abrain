@@ -6,7 +6,7 @@
  * is implemented in validate-gate.ts; this module is just the
  * per-trajectory scoring primitives.
  *
- * `judge: llm` uses gateway.chat with the v0.40+ 4-strategy JSON repair
+ * Outside private mode, `judge: llm` uses gateway.chat with the v0.40+ 4-strategy JSON repair
  * (parseModelJSON from cross-modal-eval). On parse failure the scorer
  * returns score=0 (pessimistic fallback) AND records the error string on
  * `ScoredRollout.judge_error` so the audit trail can surface it
@@ -14,10 +14,15 @@
  * SIGINT aborts are rethrown, never scored 0. Thinking judges get
  * `skilloptOutputCap` headroom over the 200-token site cap.
  *
+ * Strict private judging uses codex-score.ts: native schemas and explicit
+ * failures, never the legacy zero-score fallback.
+ *
  * `judge: qrels` reuses src/core/search/eval.ts IR metrics. Score is
  * nDCG@k (more discriminating than P@k for the optimization signal).
  */
 
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { scoreCodexTrajectory } from './codex-score.ts';
 import { chat as gatewayChat } from '../ai/gateway.ts';
 import { ndcgAtK } from '../search/eval.ts';
 import { isSkilloptMustAbort } from './must-abort.ts';
@@ -30,6 +35,7 @@ export async function scoreTrajectory(
   judge: Judge,
   opts: {
     judgeModel?: string;
+    abortSignal?: AbortSignal;
     /** Test seam — substitute for gateway.chat. */
     chatFn?: typeof gatewayChat;
     /** Test seam — substitute clock for cache invalidation. */
@@ -40,6 +46,7 @@ export async function scoreTrajectory(
     case 'rule':
       return { trajectory, score: scoreRule(trajectory, judge.checks) };
     case 'llm':
+      if(readPrivateCodexConfig())return scoreCodexTrajectory(trajectory,judge,opts);
       return scoreLlm(trajectory, judge.rubric, judge.model ?? opts.judgeModel, opts);
     case 'qrels':
       return { trajectory, score: scoreQrels(trajectory, judge.expected_slugs, judge.k) };

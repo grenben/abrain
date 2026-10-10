@@ -8,6 +8,9 @@
  * run ends `aborted` with its real reason instead of a fabricated measurement.
  */
 
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { PrivateRoutingError } from '../ai/private-policy.ts';
 import { isAIInvocationPolicyError } from '../ai/invocation-guard.ts';
 import { isMustAbortError } from '../worker-pool.ts';
 
@@ -15,6 +18,7 @@ import { isMustAbortError } from '../worker-pool.ts';
 export const SKILLOPT_RUNTIME_EXCEEDED = 'skillopt_runtime_exceeded';
 
 export function isSkilloptMustAbort(err: unknown): boolean {
+  if (err instanceof CodexProposalError || err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError) return true;
   if (isMustAbortError(err) || isAIInvocationPolicyError(err)) return true;
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes(SKILLOPT_RUNTIME_EXCEEDED) || msg.includes('SIGINT');

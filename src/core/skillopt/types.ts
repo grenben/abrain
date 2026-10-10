@@ -115,6 +115,10 @@ export interface Trajectory {
 }
 
 export interface ScoredRollout {
+  judge_evidence_quote?: string | null;
+  judge_cache_hit?: boolean;
+  judge_usage?: {input_tokens:number;output_tokens:number;cache_read_tokens:number;cache_creation_tokens:number};
+  judge_billing?: {kind:'subscription';costUsd:null;remainingQuota:null};
   trajectory: Trajectory;
   /** 0..1 score from the judge. */
   score: number;

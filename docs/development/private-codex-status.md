@@ -493,3 +493,12 @@ aggregate subscription allowance, retained fixture identities and fenced batch
 receipts. Failed fixtures cannot become grades or passing partial reports.
 Details and verification: [brainstorm evaluations](private-codex-brainstorm-eval.md).
 Installed services and production database remain unchanged.
+
+## Skill-optimization judge checkpoint
+
+Private LLM scoring now uses native bounded schemas and validated output quotes.
+The actual candidate-validation gate is sequential, preflights all explicit
+pins and model tiers, propagates cancellation, and cannot score failures as zero
+or accept a partial task set. Deterministic rule/qrels scorers remain model-free.
+Native rollout/action history, optimizer proposals, aggregate admission and
+prepared skill publication remain incomplete; [details and evidence](private-codex-skillopt.md).

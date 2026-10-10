@@ -20,6 +20,11 @@
  * which is cached (D11), so the effective cost ~1.3x not 3x.
  */
 
+import { resolveModel } from '../model-config.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { runWithLimit } from '../worker-pool.ts';
 import { isSkilloptMustAbort, SKILLOPT_RUNTIME_EXCEEDED } from './must-abort.ts';
 import { runRollout, type RolloutOpts } from './rollout.ts';
@@ -80,11 +85,22 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 export async function runValidationGate(opts: ValidateGateOpts): Promise<GateResult> {
   const rolloutFn = opts.rolloutFn ?? runRollout;
   const scoreFn = opts.scoreFn ?? scoreTrajectory;
-  const concurrency = opts.concurrency ?? 4;
+  const privateMode=!!readPrivateCodexConfig();
+  const concurrency = privateMode ? 1 : opts.concurrency ?? 4;
   // Forward pass uses 1; sel/baseline use VALIDATION_RUNS_PER_TASK (3). Floor
   // at 1 (a runsPerTask of 0 would silently produce an empty median).
   const runsPerTask = Math.max(1, opts.runsPerTask ?? VALIDATION_RUNS_PER_TASK);
 
+  if(privateMode){
+    if(!codexSubscriptionContext())throw new SubscriptionAdmissionError('subscription_required');
+    if(!opts.selSet.length||opts.selSet.length>1000||!Number.isSafeInteger(runsPerTask)||runsPerTask>9||
+      opts.runsPerTask!==undefined&&opts.runsPerTask<1)throw new CodexProposalError('invalid_input');
+    assertPrivateRoute(opts.targetModel,'skillopt:target_model');
+    if(opts.judgeModel)assertPrivateRoute(opts.judgeModel,'skillopt:judge_model');
+    for(const task of opts.selSet)if(task.judge.kind==='llm'&&task.judge.model)assertPrivateRoute(task.judge.model,'skillopt:task.judge.model');
+    await resolveModel(opts.engine,{cliFlag:opts.targetModel,tier:'subagent',fallback:'sonnet'});
+    if(opts.selSet.some(t=>t.judge.kind==='llm'))await resolveModel(opts.engine,{cliFlag:opts.judgeModel,tier:'reasoning',fallback:'sonnet'});
+  }
   interface PerTask {
     task_id: string;
     median: number;
@@ -92,36 +108,42 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
     rollouts: ScoredRollout[];
   }
 
+  const privateAbort=new AbortController();
+  const signal=privateMode?AbortSignal.any([privateAbort.signal,...opts.abortSignal?[opts.abortSignal]:[]]):opts.abortSignal;
   // Per sel-task, run N rollouts + N judges, take median.
   const settled = await runWithLimit({
     items: opts.selSet,
     limit: concurrency,
     fn: async (task: BenchmarkTask): Promise<PerTask> => {
-      const runs: number[] = [];
-      const rollouts: ScoredRollout[] = [];
-      for (let i = 0; i < runsPerTask; i++) {
-        // #4119: in-rollout-loop deadline — see ValidateGateOpts.deadlineMs.
-        if (opts.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
-          throw new Error(SKILLOPT_RUNTIME_EXCEEDED);
+      try {
+        const runs: number[] = [];
+        const rollouts: ScoredRollout[] = [];
+        for (let i = 0; i < runsPerTask; i++) {
+          // #4119: in-rollout-loop deadline — see ValidateGateOpts.deadlineMs.
+          if (opts.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
+            throw new Error(SKILLOPT_RUNTIME_EXCEEDED);
+          }
+          const rolloutOpts: RolloutOpts = {
+            operationContext: opts.operationContext,
+            engine: opts.engine,
+            skillText: opts.candidateSkillText,
+            task,
+            targetModel: opts.targetModel,
+            abortSignal: signal,
+          };
+          const trajectory = await rolloutFn(rolloutOpts);
+          if(privateMode&&trajectory.stop_reason!=='end')throw new CodexProposalError('invalid_output');
+          const scored: ScoredRollout = await scoreFn(trajectory, task.judge, {
+            judgeModel: opts.judgeModel, abortSignal: signal,
+          });
+          if(privateMode&&(scored.judge_error||!Number.isFinite(scored.score)||scored.score<0||scored.score>1))throw new CodexProposalError('invalid_output');
+          runs.push(scored.score);
+          rollouts.push(scored);
         }
-        const rolloutOpts: RolloutOpts = {
-          operationContext: opts.operationContext,
-          engine: opts.engine,
-          skillText: opts.candidateSkillText,
-          task,
-          targetModel: opts.targetModel,
-          abortSignal: opts.abortSignal,
-        };
-        const trajectory = await rolloutFn(rolloutOpts);
-        const scored: ScoredRollout = await scoreFn(trajectory, task.judge, {
-          judgeModel: opts.judgeModel,
-        });
-        runs.push(scored.score);
-        rollouts.push(scored);
-      }
-      return { task_id: task.task_id, median: median(runs), runs, rollouts };
+        return { task_id: task.task_id, median: median(runs), runs, rollouts };
+      } catch(error) {if(privateMode)privateAbort.abort();throw error;}
     },
-    signal: opts.abortSignal,
+    signal,
   });
 
   // MUST-ABORT errors (budget exhaustion / no-pricing / spend-policy refusals) are NOT scoring noise —
@@ -142,6 +164,8 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
   // finish the whole run as a plausible `no_improvement` / 0.000. Partial
   // failure below keeps the pessimistic per-task 0 (scoring noise).
   const failed = settled.filter((s) => s && !s.ok);
+  if(privateMode&&failed.length)throw new CodexProposalError('invalid_output');
+  if(privateMode&&(signal?.aborted||settled.filter(Boolean).length!==opts.selSet.length))throw new CodexProposalError('aborted');
   if (settled.length > 0 && failed.length === settled.length) {
     const first = failed[0]!.ok ? undefined : failed[0]!.error;
     throw new Error(

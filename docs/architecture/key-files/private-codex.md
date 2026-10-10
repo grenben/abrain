@@ -39,3 +39,7 @@ See [private Codex status and acceptance gaps](../../development/private-codex-s
 - `src/core/brainstorm/codex-{run,selection,cross,store,local-grant}.ts` — native brainstorm/LSD entrypoint, source-scoped retained retrieval, quote-grounded crosses, fenced run/result recovery and explicit local subscription allowance. `codex-schema.ts` and registered migration v258 add the bounded immutable run table. `codex-publication{,-guard,-prepare}.ts` validates complete plans and uses prepared protocol-5 requests for canonical publication, provenance and lost-acknowledgment recovery. Shared fake-executable fixtures: `test/helpers/codex-brainstorm-run-contract.ts`. CLI source scope uses the normal resolver; paid retrieval has separate durable admission. Legacy file checkpoints are not private receipts.
 
 - `src/core/brainstorm/codex-fixture{,-schema}.ts` — host-derived per-fixture invocation IDs under one unchanged subscription grant; migration v259 preserves single-run protocol 1 and fences evaluation fixture protocol 2 from older readers. `codex-store.ts` checks the grant binding while `src/eval/brainstorm/codex.ts` reuses the existing evaluation batch lease and accepted-result store. No child grants or multiplied admission limits.
+
+The [skills index](skills.md) owns the native skill-optimization judge entry.
+See the [private skill-optimization checkpoint](../../development/private-codex-skillopt.md)
+for its validation gate and remaining rollout/publication work.
