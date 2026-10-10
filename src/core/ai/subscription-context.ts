@@ -6,6 +6,8 @@ export interface CodexSubscriptionContext {
   engine: BrainEngine; runId: string; repair?: boolean;
   /** Host worker fencing, refreshed before dispatch and acceptance. Never supplied by the model. */
   checkAuthority?: () => Promise<void>;
+  /** Lock the current job claim while accepting a durable publication. */
+  checkAuthorityInTransaction?: (tx: BrainEngine) => Promise<void>;
   signal?: AbortSignal;
 }
 const contexts = new AsyncLocalStorage<CodexSubscriptionContext>();

@@ -1,3 +1,4 @@
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { realpathSync } from 'node:fs';
 import { enterClaimStep, type ClaimPhaseClock } from './claim-phase.ts';
 import { boundedReads } from './bounded-reads.ts';
@@ -118,7 +119,7 @@ export async function maintenancePreflight(engine: BrainEngine, sourceId: string
   return { writer, binding: writeThrough ? binding : null, wait: new MaintenanceWriteWait(opts.deadlineAtMs) };
 }
 
-async function validateMaintenance(engine: BrainEngine, authority: MaintenanceAuthority, slug: string): Promise<void> {
+export async function validateMaintenance(engine: BrainEngine, authority: MaintenanceAuthority, slug: string): Promise<void> {
   const [source] = await engine.executeRaw<{ incarnation: string; archived: boolean }>(
     'SELECT incarnation,archived FROM sources WHERE id=$1', [authority.writer.sourceId]);
   if (!source || source.archived || source.incarnation !== authority.writer.sourceIncarnation) {
@@ -168,10 +169,11 @@ async function submitMaintenance(engine: BrainEngine, authority: MaintenanceAuth
     const scan = scanCanonicalFences(parseMarkdown(intent.content, slug));
     if (scan.defects.length) throw fenceOperationError(scan.defects[0]!, slug, authority.writer.sourceId);
   }
+  const fence = codexSubscriptionContext()?.checkAuthorityInTransaction;
   const row = await admitWrite(engine, { principal: authority.writer.principal, requestId, operation: 'submit_job',
     sourceId: authority.writer.sourceId, sourceIncarnation: authority.writer.sourceIncarnation, slug,
     pageId: snapshot?.page.id ?? null, authority: authority.writer, callerIntent: intent, intent,
-    worktreeId: file ? authority.binding?.worktree_id : null, topologyGeneration: file ? authority.binding?.topology_generation : null });
+    worktreeId: file ? authority.binding?.worktree_id : null, topologyGeneration: file ? authority.binding?.topology_generation : null }, undefined, undefined, fence);
   return writeResponse(wait.observe(await waitForWrite(engine, row, loadConfig() ?? { engine: engine.kind }, wait.ms())));
 }
 
@@ -435,6 +437,7 @@ async function prepareMaintenanceKind(engine: BrainEngine, row: WriteRequest, co
   if (row.intent?.kind === 'managed_maintenance_take_reproject') return (await import('../repair/take-supersession.ts')).prepareTakeReprojection(engine, row);
   if (row.intent?.kind === 'managed_maintenance_timeline_extract') return (await import('../../commands/extract-timeline-db.ts')).prepareTimelineExtract(engine, row);
   if (row.intent?.kind === 'managed_maintenance_meeting_timeline') return (await import('../extract-timeline-from-meetings.ts')).prepareMeetingTimeline(engine, row);
+  if (row.intent?.kind === 'managed_maintenance_codex_page') return (await import('../cycle/codex-publication-prepare.ts')).prepareCodexPublication(engine, row, config, clock);
   if (row.intent?.kind === 'managed_maintenance_page') {
     const prepared = await preparePageMutation(engine, row.intent.expected_revision === null
       ? { ...row, intent: { ...row.intent, expected_revision: undefined } } : row, config, undefined, undefined, { clock });

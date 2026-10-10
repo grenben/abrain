@@ -155,7 +155,8 @@ export function assertReplayIntent(row: WriteRequest, expectedDigest: string): W
   return row;
 }
 export async function admitWrite(engine: BrainEngine, input: WriteAdmission, overrides?: Partial<JournalLimits>,
-  transaction: <T>(fn: (tx: BrainEngine) => Promise<T>) => Promise<T> = fn => engine.transaction(fn)): Promise<WriteRequest> {
+  transaction: <T>(fn: (tx: BrainEngine) => Promise<T>) => Promise<T> = fn => engine.transaction(fn),
+  beforeAdmission?: (tx: BrainEngine) => Promise<void>): Promise<WriteRequest> {
   const { requestId, apply } = await prepareAdmission(engine, input, overrides);
   // #6355: a lent connection (the consumer's warm lane) whose session dropped is dead for every later attempt, so the
   // re-run takes a transaction from the engine's pool after the pool itself is rebuilt.
@@ -163,6 +164,7 @@ export async function admitWrite(engine: BrainEngine, input: WriteAdmission, ove
   return retryWriteAdmission(requestId, remaining => run(async tx => {
     const brain = await declareDurablePersistence(tx, `${Math.min(100, remaining)}ms`, `${remaining}ms`);
     if (input.brainId !== undefined && brain !== input.brainId) throw new PreadmitBrainChanged();
+    await beforeAdmission?.(tx);
     return apply(tx);
   }), undefined, async error => { run = fn => engine.transaction(fn); await engine.reconnect({ error }); });
 }

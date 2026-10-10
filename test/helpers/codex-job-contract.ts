@@ -18,6 +18,7 @@ import { SOURCE_FRESHNESS_PHASES } from '../../src/core/cycle/phase-scope.ts';
 import { dispatchGlobalMaintenance } from '../../src/commands/autopilot-fanout.ts';
 import { scheduledCodexSubmit } from '../../src/core/minions/subscription-schedules.ts';
 import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
+import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { BudgetMeter } from '../../src/core/cycle/budget-meter.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
@@ -154,6 +155,18 @@ test('lease loss between admission and runtime refuses execution and settles the
   expect(count()).toBe(0);
   const [row] = await engine.executeRaw('SELECT state FROM codex_subscription_attempts');
   expect(row).toMatchObject({ state: 'failed' });
+});
+test('transactional publication fence rejects a second worker ownership change', async () => {
+  const job=await claimed();
+  await expect(runWithJobSpend(engine,job,ctxFor(job),async()=>{
+    const fence=codexSubscriptionContext()!.checkAuthorityInTransaction!;
+    await engine.transaction(tx=>fence(tx));
+    await engine.executeRaw("UPDATE minion_jobs SET lock_token='second-worker',codex_claim_token=claim_generation+1,claim_generation=claim_generation+1 WHERE id=$1",[job.id]);
+    await expect(engine.transaction(async tx=>{
+      await fence(tx);await tx.setConfig('synthetic.publication_fence','wrong');
+    })).rejects.toMatchObject({code:'subscription_owner_lost'});
+    expect(await engine.getConfig('synthetic.publication_fence')).toBeNull();
+  })).rejects.toMatchObject({code:'subscription_owner_lost'});
 });
 test('cancelled jobs cannot dispatch even when the caller omits a gateway abort signal', async () => {
   const job = await claimed(); const controller = new AbortController();

@@ -1,3 +1,5 @@
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivatePatterns } from './patterns-codex.ts';
 import { maintenancePreflight, stampMaintenancePage, verifyMaintenanceOutputs, type MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
 import { digest } from '../persistence/digest.ts';
 import { managedPersistenceEnabled } from '../persistence/ownership.ts';
@@ -159,6 +161,8 @@ export async function runPhasePatterns(
         '--phase patterns --once forces this run (config untouched)\n',
       );
     }
+
+    if (readPrivateCodexConfig()) return await runPrivatePatterns(engine, opts, config);
 
     const [source] = await managedPersistenceEnabled(engine)
       ? await engine.executeRaw<{ incarnation: string }>('SELECT incarnation FROM sources WHERE id=$1', [opts.sourceId ?? 'default']) : [];
@@ -457,31 +461,35 @@ async function runPatternsPass(engine: BrainEngine, opts: PatternsPhaseOpts, con
     return failed(makeError('InternalError', 'PATTERNS_PHASE_FAIL',
       e instanceof Error ? (e.message || 'patterns phase threw') : String(e)));
   } finally {
-    if (ownedPrivateQueue) {
-      try {
-        const cancelled = await ownedPrivateQueue.queue.reconcilePrivateQueue(
-          ownedPrivateQueue.name,
-          'private queue owner terminalized: patterns phase ended',
-        );
-        if (cancelled.length > 0) {
-          process.stderr.write(
-            `[dream] patterns reconciled ${cancelled.length} non-terminal child job(s) from ${ownedPrivateQueue.name}\n`,
-          );
-        }
-      } catch (cleanupError) {
+    await reconcilePatternsPrivateQueue(ownedPrivateQueue);
+    void start;
+  }
+}
+
+async function reconcilePatternsPrivateQueue(ownedPrivateQueue: { queue: MinionQueue; name: string } | null): Promise<void> {
+  if (ownedPrivateQueue) {
+    try {
+      const cancelled = await ownedPrivateQueue.queue.reconcilePrivateQueue(
+        ownedPrivateQueue.name,
+        'private queue owner terminalized: patterns phase ended',
+      );
+      if (cancelled.length > 0) {
         process.stderr.write(
-          `[dream] patterns private-queue cleanup failed for ${ownedPrivateQueue.name}: ` +
-          `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}\n`,
+          `[dream] patterns reconciled ${cancelled.length} non-terminal child job(s) from ${ownedPrivateQueue.name}\n`,
         );
       }
+    } catch (cleanupError) {
+      process.stderr.write(
+        `[dream] patterns private-queue cleanup failed for ${ownedPrivateQueue.name}: ` +
+        `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}\n`,
+      );
     }
-    void start;
   }
 }
 
 // ── Config ────────────────────────────────────────────────────────────
 
-interface PatternsConfig {
+export interface PatternsConfig {
   enabled: boolean;
   lookbackDays: number;
   minEvidence: number;

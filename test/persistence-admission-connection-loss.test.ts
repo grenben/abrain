@@ -98,7 +98,11 @@ test('forced probe: admitWrite whose COMMIT acknowledgment is lost returns the a
   let drops = 0;
   // The transaction body runs and commits; the socket closes before the client hears about it.
   const lossy = <T>(fn: (tx: BrainEngine) => Promise<T>): Promise<T> => engine.transaction(fn).then(value => { if (drops++ === 0) throw dropped(); return value; });
-  const row = await admitWrite(engine, input, undefined, lossy);
+  let fenced = 0;
+  const row = await admitWrite(engine, input, undefined, lossy, async tx => {
+    fenced++; await tx.executeRaw('SELECT 1');
+  });
+  expect(fenced).toBe(2); // The host fence survives replacement of a dead transaction lane.
   // The lent transaction is tried once; the re-run that found the admitted row ran on the engine's pool.
   expect(drops).toBe(1);
   expect(row.request_id).toBe(input.requestId!);

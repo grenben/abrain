@@ -81,19 +81,19 @@ export async function runWithJobSubscription<T>(engine: BrainEngine, job: Minion
   if (!policy || rows.length !== 1) throw new SubscriptionAdmissionError('subscription_required');
   const runId = await runIdentity(engine, job);
   if (rows[0]!.run_id !== runId) throw new SubscriptionAdmissionError('subscription_identity_conflict');
-  const checkAuthority = async () => {
+  const checkAuthority = async (tx = engine, lock = false) => {
     if (ctx.signal?.aborted || ctx.shutdownSignal?.aborted) throw new SubscriptionAdmissionError('subscription_owner_lost');
-    const [row] = await engine.executeRaw<Record<string, unknown>>(
-      `SELECT * FROM minion_jobs WHERE id=$1 AND lock_token=$2 AND status='active' AND lock_until>now()`, [job.id, job.lock_token]);
+    const [row] = await tx.executeRaw<Record<string, unknown>>(
+      `SELECT * FROM minion_jobs WHERE id=$1 AND lock_token=$2 AND status='active' AND lock_until>now()${lock ? ' FOR UPDATE' : ''}`, [job.id, job.lock_token]);
     if (!row) throw new SubscriptionAdmissionError('subscription_owner_lost');
     const current = rowToMinionJob(row);
-    if (await runIdentity(engine, current) !== runId) throw new SubscriptionAdmissionError('subscription_identity_conflict');
-    await authorizeJobExecution(engine, current);
-    await preflightSubscriptionJob(engine, current.name, current.data ?? {});
+    if (await runIdentity(tx, current) !== runId) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    await authorizeJobExecution(tx, current);
+    await preflightSubscriptionJob(tx, current.name, current.data ?? {});
   };
   await checkAuthority();
   const signals = [ctx.signal, ctx.shutdownSignal].filter((s): s is AbortSignal => s !== undefined);
-  return withCodexSubscription({ engine, runId, checkAuthority, signal: signals.length ? AbortSignal.any(signals) : undefined }, async () => {
+  return withCodexSubscription({ engine, runId, checkAuthority, checkAuthorityInTransaction: tx => checkAuthority(tx, true), signal: signals.length ? AbortSignal.any(signals) : undefined }, async () => {
     const result = await withAIInvocationGuard(async call => {
       if (!hasAdmittedCodexAttempt(call.model) && !job.spend_authorization) {
         throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
