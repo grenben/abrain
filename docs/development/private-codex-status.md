@@ -42,7 +42,7 @@ The installed artifact has not changed. Private activation and live verification
 | D. Bounded feature coverage | absent | absent | partial | Actual gateway chat/expansion/OCR use the proposal path; schema/image transport and valid empty outcomes tested. `private-roles` inventories roles without claiming feature acceptance. Facts/classifiers, atoms, grading and chunk synopses now have native schemas and semantic checks; see the bounded-role follow-up. Other roles and full publication recovery still require fixtures and fixes. |
 | E. Synthesis/pattern publication | absent | unverified | partial | Private patterns now use native proposals, v226 retained plans, stable prepared-write receipts, evidence revision checks, source-scoped provenance and partial-commit recovery. PGLite/PostgreSQL fixtures cover the pattern path. Bounded private synthesis now shares the retained-plan path, with multi-chunk completion, required summary receipts and transcript-to-pattern fixtures on both engines. Existing-page edits, full worker/crash acceptance and operator reconciliation tooling remain open; see the synthesis checkpoint. |
 | F. Host-owned action loop | absent | absent | partial | Explicit `codex-host-read-v1` and `codex-host-actions-v1` jobs use sequential native proposals, scoped page reads and receipt-backed page writes. Migration v227 retains host authority; page protocol 3 preserves untrusted write semantics and fences publication against stale jobs/revisions. Fake-executable PGLite/PostgreSQL fixtures cover 41 action cases. Native tools remain false; broader reads, operator reconciliation and complete process-crash acceptance remain open. See `private-codex-actions.md`. |
-| G. Diagnostics/migration | absent | absent | partial | `private-codex audit --json` is a new engine-free, no-call source command, always incomplete until coverage closes. No pin preview/apply/rollback or queued-job drain/park/resubmit tooling is implemented yet. |
+| G. Diagnostics/migration | absent | absent | partial | `private-codex audit --json` is an engine-free, no-call source command, always incomplete until coverage closes. File/database pin preview, apply, receipts, crash recovery and rollback are implemented with migration v248 and deterministic fixtures on both engines. File migration requires other config writers stopped. Queued-job drain/park/resubmit and full worker/pin inventory remain incomplete. See `private-codex-pins.md`. |
 
 ## Changes developed
 
@@ -276,6 +276,14 @@ rejects changed inputs and reconciles unfinished reads before further inference.
 Legacy jobs are not reinterpreted. Writes, broader tools and remote delegation
 remain incomplete. Installed capabilities, runtime qualification and activation
 are unchanged.
+
+## Pin migration follow-up
+
+The [pin migration checkpoint](private-codex-pins.md) adds explicit per-plane
+preview/apply/rollback, durable receipts and drift refusal. File/env route checks
+now also reject shadowed conflicting generative pins before dispatch. Synthetic
+tests cover the actual CLI, file effects and both storage engines. No installed
+configuration, database, worker or queued job was changed.
 
 ## Upgrade handoff and remaining acceptance
 

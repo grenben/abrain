@@ -33,9 +33,17 @@ describe('strict private routing', () => {
     const engine = { getConfig: async (key:string) => key==='models.default' ? 'anthropic:fixture' : null };
     await expect(resolveModelDetailed(engine,{cliFlag:'codex-cli:gpt-test',fallback:'unused'})).rejects.toMatchObject({source:'db:models.default'});
   });
+  test('a Codex CLI model cannot hide a forbidden file pin on another generative role', async () => {
+    save({ ...privateConfig, embedding_image_ocr_model: 'anthropic:fixture' });
+    await expect(resolveModelDetailed(null, { cliFlag: 'codex-cli:gpt-test', fallback: 'unused' })).rejects.toMatchObject({ source: 'file:embedding_image_ocr_model' });
+    let calls = 0;
+    await expect(invokeAI({ operation: 'fixture', kind: 'chat', model: 'codex-cli:gpt-test' }, async () => { calls++; }, () => null)).rejects.toMatchObject({ source: 'file:embedding_image_ocr_model' });
+    expect(calls).toBe(0);
+  });
   test('rejects environment pins and file pins with their source', async () => {
     process.env.GBRAIN_MODEL='openai:fixture';
     await expect(resolveModelDetailed(null,{fallback:'unused'})).rejects.toMatchObject({source:'env:GBRAIN_MODEL'});
+    delete process.env.GBRAIN_MODEL;
     expect(()=>configureGateway({env:{},chat_model:'anthropic:fixture'})).toThrow('config:chat_model');
   });
   test('forbidden gateway route never reaches even a transport; legacy client is not constructed', async () => {

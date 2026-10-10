@@ -4,6 +4,7 @@ import { configPath } from '../config-path.ts';
 import type { ConfigReader } from '../config-snapshot.ts';
 import type { ResolveModelOpts, ResolvedModel } from '../model-config.ts';
 import { validatePrivateSchedules, type PrivateSchedules } from './private-schedules.ts';
+import { FILE_GENERATIVE_PINS, GENERATIVE_PIN_ENV } from './private-pin-plan.ts';
 
 /** Local operator configuration only. A mounted brain/job cannot activate this. */
 export interface PrivateCodexConfig {
@@ -32,21 +33,45 @@ export function validatePrivateCodexConfig(value: unknown): PrivateCodexConfig |
 }
 
 /** Parse failure is not permission to resume paid inference. No env/token reads. */
-export function readPrivateCodexConfig(): PrivateCodexConfig | undefined {
+function readPrivateConfigFile(): Record<string, unknown> {
   let text: string;
   try { text = readFileSync(configPath(), 'utf8'); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw new PrivateRoutingError('file:config', 'private_config_invalid');
   }
   let config: Record<string, unknown>;
   try { config = JSON.parse(text); } catch { throw new PrivateRoutingError('file:config', 'private_config_invalid'); }
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new PrivateRoutingError('file:config', 'private_config_invalid');
-  return validatePrivateCodexConfig(config.private_codex);
+  return config;
+}
+export function readPrivateCodexConfig(): PrivateCodexConfig | undefined {
+  return validatePrivateCodexConfig(readPrivateConfigFile().private_codex);
+}
+/** Inspect explicit file and environment pins independently, including shadowed values. */
+export function privatePinConflicts(policy: PrivateCodexConfig): string[] {
+  const file = readPrivateConfigFile(), conflicts: string[] = [];
+  const check = (value: unknown, source: string) => {
+    if (value === undefined || value === null || value === '') return;
+    if (typeof value !== 'string' || value.trim() !== policy.model) conflicts.push(source);
+  };
+  for (const key of FILE_GENERATIVE_PINS) {
+    if (key !== 'chat_fallback_chain') check(file[key], `file:${key}`);
+    else if (file[key] !== undefined) {
+      if (!Array.isArray(file[key])) conflicts.push(`file:${key}`);
+      else for (const value of file[key]) check(value, `file:${key}`);
+    }
+  }
+  for (const key of GENERATIVE_PIN_ENV) {
+    if (key === 'GBRAIN_CHAT_FALLBACK_CHAIN') for (const value of (process.env[key] ?? '').split(',').filter(v => v.trim())) check(value, `env:${key}`);
+    else check(process.env[key], `env:${key}`);
+  }
+  return [...new Set(conflicts)];
 }
 
 /** Explicit routes must equal the operator's configured model; aliases cannot evade this. */
 export function assertPrivateRoute(model: string, source: string, policy = readPrivateCodexConfig()): void {
+  if (policy) { const [conflict] = privatePinConflicts(policy); if (conflict) throw new PrivateRoutingError(conflict); }
   if (policy && model !== policy.model) throw new PrivateRoutingError(source);
 }
 export function assertPrivateNativeLoopAllowed(source: string): void {
@@ -55,6 +80,7 @@ export function assertPrivateNativeLoopAllowed(source: string): void {
 
 /** Inspect EVERY applicable explicit pin, including shadowed pins. Never discover models. */
 export async function resolvePrivateModel(engine: ConfigReader | null, opts: ResolveModelOpts, policy: PrivateCodexConfig): Promise<ResolvedModel> {
+  const [conflict] = privatePinConflicts(policy); if (conflict) throw new PrivateRoutingError(conflict);
   const pins: Array<{ value: string | undefined | null; source: ResolvedModel['source']; label: string }> = [
     { value: opts.cliFlag, source: 'cli_flag', label: 'cli:model' },
   ];

@@ -26,6 +26,10 @@
       "codex_subscription_runs.codex_subscription_runs_max_turns_check": "c CHECK (((max_turns >= 1) AND (max_turns <= 1000)))",
       "codex_subscription_runs.codex_subscription_runs_pkey": "p PRIMARY KEY (run_id)",
       "codex_subscription_runs.codex_subscription_runs_repairs_check": "c CHECK (((repairs >= 0) AND (repairs <= 1)))",
+      "codex_upgrade_receipts.codex_upgrade_receipts_kind_check": "c CHECK ((kind = ANY (ARRAY['pins'::text, 'jobs'::text])))",
+      "codex_upgrade_receipts.codex_upgrade_receipts_pkey": "p PRIMARY KEY (id)",
+      "codex_upgrade_receipts.codex_upgrade_receipts_sequence_key": "u UNIQUE (sequence)",
+      "codex_upgrade_receipts.codex_upgrade_receipts_state_check": "c CHECK ((state = ANY (ARRAY['applied'::text, 'rolled_back'::text])))",
       "config.config_pkey": "p PRIMARY KEY (key)",
       "content_chunks.content_chunks_page_id_fkey": "f FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE",
       "content_chunks.content_chunks_pkey": "p PRIMARY KEY (id)",
@@ -362,6 +366,9 @@
       "codex_subscription_runs": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_upgrade_receipts": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "config": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -679,6 +686,9 @@
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
       "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
       "codex_subscription_runs_pkey": "CREATE UNIQUE INDEX codex_subscription_runs_pkey ON public.codex_subscription_runs USING btree (run_id)",
+      "codex_upgrade_plan_hash": "CREATE INDEX codex_upgrade_plan_hash ON public.codex_upgrade_receipts USING btree (kind, plan_hash)",
+      "codex_upgrade_receipts_pkey": "CREATE UNIQUE INDEX codex_upgrade_receipts_pkey ON public.codex_upgrade_receipts USING btree (id)",
+      "codex_upgrade_receipts_sequence_key": "CREATE UNIQUE INDEX codex_upgrade_receipts_sequence_key ON public.codex_upgrade_receipts USING btree (sequence)",
       "config_pkey": "CREATE UNIQUE INDEX config_pkey ON public.config USING btree (key)",
       "content_chunks_pkey": "CREATE UNIQUE INDEX content_chunks_pkey ON public.content_chunks USING btree (id)",
       "content_chunks_stale_idx": "CREATE INDEX content_chunks_stale_idx ON public.content_chunks USING btree (page_id, chunk_index) WHERE (embedding IS NULL)",
@@ -957,6 +967,7 @@
       "calibration_profiles_id_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=calibration_profiles.id",
       "chat_usage_log_id_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=chat_usage_log.id",
       "chronicle_judge_reservations_id_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=chronicle_judge_reservations.id",
+      "codex_upgrade_receipts_sequence_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=codex_upgrade_receipts.sequence",
       "content_chunks_id_seq": "integer start=1 min=1 max=2147483647 increment=1 cycle=false cache=1 owned_by=content_chunks.id",
       "context_volunteer_events_id_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=context_volunteer_events.id",
       "core_edit_notices_id_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=core_edit_notices.id",
@@ -1127,6 +1138,20 @@
           "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_upgrade_receipts": {
+        "columns": [
+          "1 sequence bigint/int8 NOT NULL DEFAULT nextval('codex_upgrade_receipts_sequence_seq'::regclass)",
+          "2 id uuid/uuid NOT NULL",
+          "3 kind text/text NOT NULL",
+          "4 plan_hash text/text NOT NULL",
+          "5 plan jsonb/jsonb NOT NULL",
+          "6 state text/text NOT NULL",
+          "7 receipt jsonb/jsonb NOT NULL",
+          "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "9 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
       },
       "config": {
         "columns": [

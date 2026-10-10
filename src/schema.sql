@@ -3125,3 +3125,19 @@ CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGU
     RETURN NEW;
   END $$;
 -- END GENERATED from src/core/persistence/codex-action-schema.ts (CODEX_ACTION_WRITE_SCHEMA_SQL)
+
+-- BEGIN GENERATED from src/core/ai/private-upgrade-schema.ts (CODEX_UPGRADE_SCHEMA_SQL). Edit that file, then run: bun run build:schema
+CREATE TABLE IF NOT EXISTS codex_upgrade_receipts (
+  sequence BIGSERIAL UNIQUE NOT NULL,
+  id UUID PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('pins','jobs')),
+  plan_hash TEXT NOT NULL,
+  plan JSONB NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('applied','rolled_back')),
+  receipt JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS codex_upgrade_plan_hash ON codex_upgrade_receipts(kind,plan_hash);
+ALTER TABLE codex_upgrade_receipts ENABLE ROW LEVEL SECURITY;
+-- END GENERATED from src/core/ai/private-upgrade-schema.ts (CODEX_UPGRADE_SCHEMA_SQL)

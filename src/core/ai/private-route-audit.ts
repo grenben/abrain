@@ -1,5 +1,5 @@
 import type { ConfigReader } from '../config-snapshot.ts';
-import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError } from './private-policy.ts';
+import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError, privatePinConflicts } from './private-policy.ts';
 import { PRIVATE_GENERATION_ROLES } from './private-roles.ts';
 
 /** No SDKs, subprocesses, discovery, connection bootstrap or config mutation. */
@@ -21,6 +21,7 @@ export async function auditPrivateRoutes(engine?: ConfigReader) {
       feature_acceptance:'unverified' as const});
   }
   return {schema_version:1,status:'incomplete' as const,private_opt_in:policy!==undefined,activated:false,
+    conflicting_pins:policy?privatePinConflicts(policy):[],
     runtime:{qualification:'unverified',live_verified:false},
     planes:{file:'inspected',environment:'inspected',database:engine?'inspected applicable model keys':'uninspected',workers:'uninspected',queued_jobs:'uninspected'},
     budgets:{subscription:'explicit durable envelope required',account_concurrency:1,monetary_cost_usd:null,remaining_quota:null,
