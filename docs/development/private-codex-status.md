@@ -401,3 +401,12 @@ against job/source/cancellation changes. Native synopsis schema v2 binds prompt
 and chunk evidence. Contextual job identities are v2 and require an explicit
 source. Migration v255 preserves small paid charges in both accounting tables.
 This is source development with isolated checks, not an installed upgrade.
+
+## Proposal-cache follow-up
+
+[Native proposal caching](private-codex-proposal-cache.md) adds v256 durable raw
+responses in the subscription owner's database. The synopsis seam revalidates
+schema, quote evidence, authority and grant lifetime on every scoped reuse;
+failed calls never become cache entries or refunded attempts. LongMemEval's
+durable run lifecycle, additional native roles and aggregate accounting remain
+incomplete. Installed capabilities and activation are unchanged.
