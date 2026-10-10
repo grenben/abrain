@@ -27,6 +27,8 @@ import { serializeError, StructuredAgentError } from '../core/errors.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import type { RunReceipt, SkillOptOpts } from '../core/skillopt/types.ts';
 import { capNotice, mergeCapFlag, parseCapFlag, type CapFlag } from '../core/budget/cap-flag.ts';
+import { withSkillOptAllowance, type LocalOptimizerScope } from '../core/skillopt/codex-local-grant.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
 
 /** Per-run cost cap when no cap flag is passed (a `default` cap: unpriced models warn and run). */
 const DEFAULT_SKILLOPT_MAX_COST_USD = 5.0;
@@ -78,6 +80,14 @@ interface ParsedFlags {
 }
 
 export async function runSkillOptCommand(engine: BrainEngine | null, args: string[]): Promise<void> {
+  if (engine && args.length && !args.includes('--help') && !args.includes('-h')) {
+    try { return await withSkillOptAllowance(engine, args, (remaining, scope) => runSkillOptCommandBody(engine, remaining, scope)); }
+    catch (error) { handleErrorAndExit(error, args.includes('--json'), 2); }
+  }
+  return runSkillOptCommandBody(engine, args, {});
+}
+
+async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[], scope: LocalOptimizerScope): Promise<void> {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     process.stdout.write(SKILLOPT_HELP_TEXT);
     process.exit(0);
@@ -100,7 +110,7 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
   if (parsed.maxCostFlag === '--max-cost-usd' && parsed.maxCostUsd === 0) {
     process.stderr.write('gbrain skillopt: --max-cost-usd 0 is deprecated; it still means uncapped, but write --max-usd off.\n');
   }
-  process.stderr.write(`[skillopt] ${capNotice({ usd: parsed.maxCostUsd > 0 ? parsed.maxCostUsd : null, source: parsed.maxCostSource, flag: parsed.maxCostFlag })}\n`);
+  if (!readPrivateCodexConfig()) process.stderr.write(`[skillopt] ${capNotice({ usd: parsed.maxCostUsd > 0 ? parsed.maxCostUsd : null, source: parsed.maxCostSource, flag: parsed.maxCostFlag })}\n`);
 
   if (!engine) {
     process.stderr.write('gbrain skillopt: requires a configured brain (engine connection failed)\n');
@@ -308,6 +318,7 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
 
   // Build SkillOptOpts.
   const opts: SkillOptOpts = {
+    ...scope,
     engine,
     skillName: parsed.skillName,
     skillsDir,

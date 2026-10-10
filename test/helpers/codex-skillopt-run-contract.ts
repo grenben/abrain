@@ -9,6 +9,8 @@ import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts
 import { CODEX_JOB_ACCOUNT_LANE } from '../../src/core/minions/subscription-jobs.ts';
 import * as store from '../../src/core/skillopt/codex-run-store.ts';
 import * as files from '../../src/core/skillopt/codex-run-files.ts';
+import { withSkillOptAllowance } from '../../src/core/skillopt/codex-local-grant.ts';
+import { runSkillOptCommand } from '../../src/commands/skillopt.ts';
 interface Fixture { engine(): BrainEngine; root: string; replies(...values: unknown[]): void; calls(): any[] }
 export function codexSkilloptRunContract(f: Fixture) {
   describe('durable Codex optimizer workflow', () => {
@@ -32,6 +34,71 @@ export function codexSkilloptRunContract(f: Fixture) {
         maxAttempts: max, maxTurns: max, deadline: new Date(Date.now() + 3600000) });
       return withCodexSubscription({ engine: f.engine(), runId: 'optimizer-workflow' }, fn);
     }
+    const localArgs = () => ['--codex-request-id', '123e4567-e89b-42d3-a456-426614174000', '--codex-max-attempts', '150',
+      '--codex-max-turns', '150', '--codex-deadline', new Date(Date.now() + 3600000).toISOString(), '--source', 'default', '--read-prefix', 'notes/*'];
+    test('local CLI runs the real optimizer and reuses its grant, receipt and accepted draft', async () => {
+      const args = ['synthetic-skill', '--skills-dir', dir, '--benchmark', benchmark, '--epochs', '1', '--batch-size', '5', '--lr', '1', '--lr-schedule', 'constant',
+        '--split', '1:1:1', '--reflect-max-tokens', '2048', '--no-mutate', '--force', '--json', ...localArgs()];
+      const exits: number[] = [], stdout: string[] = [], stderr: string[] = [];
+      const exit = spyOn(process, 'exit').mockImplementation(code => { exits.push(Number(code)); return undefined as never; });
+      const out = spyOn(process.stdout, 'write').mockImplementation(chunk => { stdout.push(String(chunk)); return true; });
+      const err = spyOn(process.stderr, 'write').mockImplementation(chunk => { stderr.push(String(chunk)); return true; });
+      try { await runSkillOptCommand(f.engine(), args); await runSkillOptCommand(f.engine(), args); }
+      finally { exit.mockRestore(); out.mockRestore(); err.mockRestore(); }
+      expect(exits).toEqual([0, 0]);
+      const results = stdout.filter(s => s.startsWith('{')).map(s => JSON.parse(s));
+      expect(results).toHaveLength(2); expect(results[1]).toEqual(results[0]);
+      expect(results[0]).toMatchObject({ outcome: 'accepted', receipt: { final_cost_usd: null, subscription: { attempts: 66 } } });
+      expect(stderr.join('')).toContain('subscription request 123e4567-e89b-42d3-a456-426614174000');
+      expect(stderr.join('')).not.toContain('cap $'); expect(f.calls()).toHaveLength(66);
+      const [row] = await f.engine().executeRaw<{ input: Record<string, any> }>('SELECT input FROM codex_skillopt_runs');
+      expect(row!.input.sourceId).toBe('default'); expect(row!.input.codex).toEqual({ allowedTools: ['get_page'], allowedSlugPrefixes: ['notes/*'] });
+    });
+    test('local preflight and dry-run never leave an unused durable allowance', async () => {
+      const args = localArgs();
+      await withSkillOptAllowance(f.engine(), args, async (_, scope) => {
+        await expect(runSkillOpt(opts({ ...scope, targetModel: 'anthropic:claude-sonnet-4-6' }))).rejects.toThrow();
+        expect(await runSkillOpt(opts({ ...scope, dryRun: true }))).toMatchObject({ mutatedSkillFile: false });
+      });
+      expect(await f.engine().executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+      expect(await f.engine().executeRaw('SELECT run_id FROM codex_skillopt_runs')).toHaveLength(0); expect(f.calls()).toHaveLength(0);
+    });
+    test('local recovery refuses changed limits, source, tool scope and auxiliary cap', async () => {
+      const args = localArgs(), localRun = (a: string[]) => withSkillOptAllowance(f.engine(), a, (_, scope) => runSkillOpt(opts(scope)));
+      await localRun(args);
+      for (const altered of [args.map((v, i) => args[i - 1] === '--codex-max-attempts' ? '151' : v),
+        args.map((v, i) => args[i - 1] === '--source' ? 'other' : v), args.map((v, i) => args[i - 1] === '--read-prefix' ? 'notes/one' : v), [...args, '--aux-max-usd', '1']])
+        await expect(localRun(altered)).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect(f.calls()).toHaveLength(66);
+      expect(await f.engine().executeRaw('SELECT max_attempts,attempts FROM codex_subscription_runs WHERE parent_run_id IS NULL')).toEqual([{ max_attempts: 150, attempts: 66 }]);
+    });
+    test('local grant identity survives checkpoint acknowledgement loss without refunded calls', async () => {
+      const args = localArgs(), localRun = () => withSkillOptAllowance(f.engine(), args, (_, scope) => runSkillOpt(opts(scope)));
+      const original = store.saveOptimizerCheckpoint, fault = spyOn(store, 'saveOptimizerCheckpoint').mockImplementationOnce(async (...input) => {
+        await original(...input); throw new Error('synthetic local acknowledgement lost');
+      });
+      try { await expect(localRun()).rejects.toThrow('synthetic local acknowledgement lost'); } finally { fault.mockRestore(); }
+      expect(f.calls()).toHaveLength(15); expect((await localRun()).outcome).toBe('accepted'); expect(f.calls()).toHaveLength(66);
+    });
+    test('local USD-only, missing scope, malformed grant and unsupported producers fail before invocation', async () => {
+      let invoked = false;
+      for (const args of [[], ['--max-usd', '5'], localArgs().filter(v => v !== '--read-prefix' && v !== 'notes/*'),
+        [...localArgs(), '--read-prefix', 'notes/*'], [...localArgs(), '--codex-max-attempts', '10'], [...localArgs(), '--background'], [...localArgs(), '--all']]) {
+        await expect(withSkillOptAllowance(f.engine(), args, async () => { invoked = true; })).rejects.toThrow();
+      }
+      expect(invoked).toBe(false); expect(f.calls()).toHaveLength(0);
+      expect(await f.engine().executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+    });
+    test('local cancellation retains acknowledged progress and removes its signal handlers', async () => {
+      const args = localArgs(), before = [process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')];
+      const localRun = () => withSkillOptAllowance(f.engine(), args, (_, scope) => runSkillOpt(opts(scope)));
+      const original = store.saveOptimizerCheckpoint, fault = spyOn(store, 'saveOptimizerCheckpoint').mockImplementationOnce(async (...input) => {
+        await original(...input); process.emit('SIGINT');
+      });
+      try { await expect(localRun()).rejects.toMatchObject({ code: 'subscription_owner_lost' }); } finally { fault.mockRestore(); }
+      expect([process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')]).toEqual(before);
+      expect(f.calls()).toHaveLength(15); expect((await localRun()).outcome).toBe('accepted'); expect(f.calls()).toHaveLength(66);
+    });
     test('actual entry evaluates baseline, reflection, candidate and final tests before a recoverable draft', async () => {
       await run(async () => {
         const result = await runSkillOpt(opts());

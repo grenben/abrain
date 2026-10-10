@@ -7,6 +7,7 @@ import { declareDurablePersistence } from '../persistence/protocol.ts';
 import { digest, jsonBytes } from '../persistence/digest.ts';
 import type { RejectedEntry } from './rejected-buffer.ts';
 import type { RunSkillOptResult } from './orchestrator.ts';
+import { ensureLocalOptimizerGrant } from './codex-local-grant.ts';
 
 export interface OptimizerCheckpoint {
   bestText: string; bestScore: number | null; baselineScore: number | null;
@@ -31,6 +32,7 @@ export async function claimOptimizerRun(host: CodexSubscriptionContext, input: R
   await host.checkAuthority?.(); host.signal?.throwIfAborted();
   const row = await host.engine.transaction(async tx => {
     await declareDurablePersistence(tx); await host.checkAuthorityInTransaction?.(tx);
+    await ensureLocalOptimizerGrant(tx, host.runId);
     const [grant] = await tx.executeRaw<{ account_lane: string; parent_run_id: string | null; deadline: Date | string }>('SELECT account_lane,parent_run_id,deadline FROM codex_subscription_runs WHERE run_id=$1 FOR UPDATE', [host.runId]);
     if (!grant || grant.parent_run_id || grant.account_lane !== CODEX_JOB_ACCOUNT_LANE) throw new SubscriptionAdmissionError('subscription_required');
     const initial: OptimizerCheckpoint = { bestText: skillText, bestScore: null, baselineScore: null, nextStep: 0, acceptedSteps: 0, rejected: [], decisions: [] };

@@ -61,6 +61,19 @@ Modes:
   --json                        Machine-readable stdout
 
 Safety:
+  Private single foreground runs require explicit subscription admission:
+  --codex-max-attempts N        Native attempts, including failed calls (1–1000)
+  --codex-max-turns N           Accepted turns (at most the attempt limit)
+  --codex-deadline UTC          Absolute ISO UTC deadline (new grants: within 24h)
+  --codex-request-id UUID       Reuse unchanged inputs/limits to recover a run
+  --source ID                  Explicit source for private benchmark reads
+  --read-prefix PATH           Allowed slug or prefix/*; repeat for more prefixes
+  --aux-max-usd N              Separate paid embedding/reranking allowance
+                                Current native registry only permits get_page.
+                                Cost and remaining subscription quota are unknown.
+                                --max-usd never authorizes subscription calls.
+                                Batch/fleet/bootstrap/background grants are pending.
+
   --max-usd N|off               Hard cap. Default 5.00. Preflight refuses
                                 if estimate exceeds. A model with no price
                                 runs under the default with a warning; an

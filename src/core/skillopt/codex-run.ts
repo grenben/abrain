@@ -13,6 +13,7 @@ import { CODEX_READ_PROTOCOL, validateCodexReadJob } from '../minions/codex-acti
 import { readOptimizerRun, claimOptimizerRun, fenceOptimizerRun, saveOptimizerResult, completeOptimizerRun, releaseOptimizerRun } from './codex-run-store.ts';
 import { snapshotOptimizerFiles, publishOptimizerFile, type OptimizerFiles } from './codex-run-files.ts';
 import { runOptimizerLoop } from './codex-run-loop.ts';
+import { localOptimizerAllowance, reportOptimizerAllowance } from './codex-local-grant.ts';
 import { buildModelsPlan, unknownProvenanceModels, strictVerdict, resolveModelsStrict, modelsStrictError } from './models-plan.ts';
 const invalid = (): never => { throw new CodexProposalError('invalid_input'); };
 
@@ -61,7 +62,8 @@ export async function runCodexSkillOpt(original: SkillOptOpts): Promise<RunSkill
     skillName: opts.skillName, epochs: opts.epochs, batchSize: opts.batchSize, lr: opts.lr, lrSchedule: opts.lrSchedule,
     split: opts.split, mode: opts.mode, codex: opts.codex, optimizerModel: opts.optimizerModel, targetModel: opts.targetModel,
     judgeModel: opts.judgeModel, model: policy!.model, bin: policy!.bin, reflectCap: cap.maxTokens, maxRuntimeMin: opts.maxRuntimeMin,
-    bootstrapReviewed: opts.bootstrapReviewed, modelsStrict: strict, modelsPlan };
+    bootstrapReviewed: opts.bootstrapReviewed, modelsStrict: strict, modelsPlan,
+    ...(localOptimizerAllowance() ? { localAllowance: localOptimizerAllowance() } : {}) };
   const receipt: RunReceipt = { run_id: host.runId, skill: opts.skillName, skill_sha8: digest(files.skillText).slice(0, 8),
     benchmark_sha8: benchmark.benchmark_sha8, optimizer_model: opts.optimizerModel, target_model: opts.targetModel, judge_model: opts.judgeModel,
     epochs: opts.epochs, batch_size: opts.batchSize, lr: opts.lr, lr_schedule: opts.lrSchedule, max_cost_usd: opts.maxCostUsd,
@@ -70,6 +72,7 @@ export async function runCodexSkillOpt(original: SkillOptOpts): Promise<RunSkill
   if (opts.dryRun) return { outcome: 'aborted', finalText: files.skillText, mutatedSkillFile: false, receipt: { ...receipt, outcome: 'aborted' } };
   const { claim, row } = await claimOptimizerRun(host, input, files.skillText, opts.maxRuntimeMin * 60000);
   try {
+    reportOptimizerAllowance();
     if (row.state === 'complete') return row.result!;
     const signal = AbortSignal.any([...(host.signal ? [host.signal] : []), AbortSignal.timeout(Math.max(0, Math.min(2147483647, claim.deadline - Date.now())))]);
     const fence = async (tx: typeof engine) => {

@@ -105,8 +105,9 @@ live subscription/runtime acceptance were not run.
 
 ## Remaining work and installation
 
-Next integrate the explicit root grant and tool scope at CLI, queued-worker,
-cycle, batch/fleet and remote producers, plus durable shared-skill staging and
+The subsequent [CLI admission checkpoint](private-codex-skillopt-cli.md) connects
+single foreground commands to explicit root grants and read scopes. Next integrate
+queued-worker, cycle, batch/fleet, bootstrap and remote producers, plus durable shared-skill staging and
 prepared-publication recovery. Those paths must preserve independent budgets,
 source grants and stable identities rather than creating fresh allowances.
 Broader tool coverage and real runtime qualification also remain incomplete.
