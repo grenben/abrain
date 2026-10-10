@@ -392,3 +392,12 @@ whole-response source validation and versioned raw cache revalidation. Failed
 parses stay failures in the real extraction dispatcher. Optional fallback still
 requires its explicit opt-in; no separate polish caller exists. Source work does
 not qualify a production Codex executable or activate the installed brain.
+
+## Contextual-summary follow-up
+
+[Contextual summaries](private-codex-contextual.md) now resolve Codex for direct
+service calls, retain independent embedding admission, and fence publication
+against job/source/cancellation changes. Native synopsis schema v2 binds prompt
+and chunk evidence. Contextual job identities are v2 and require an explicit
+source. Migration v255 preserves small paid charges in both accounting tables.
+This is source development with isolated checks, not an installed upgrade.

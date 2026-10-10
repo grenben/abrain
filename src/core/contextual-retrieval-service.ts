@@ -4,18 +4,13 @@ import { CODEX_SYNOPSIS_VERSION } from './ai/codex-versions.ts';
  * D26 P0-3 + D27 P1-3 + D27 P2-2).
  *
  * Single source of truth for "re-embed one page with the active CR mode."
- * Composed by THREE consumers:
- *
- *   1. `src/core/import-file.ts` — sync-time re-embed during `gbrain sync`
- *      (synchronous, inline).
- *   2. `src/commands/reindex.ts` — `gbrain reindex --markdown` batch sweep
- *      (per-page loop, synchronous within the command process).
- *   3. `src/core/minions/handlers/contextual-reindex-per-chunk.ts` — Minion
- *      job handler for the post-upgrade-prompt-accepted backfill (async,
- *      worker-pool concurrency with global rate-leasing).
+ * Called by the contextual-reindex Minion handler and the LongMemEval
+ * synopsis tier. Import/embedding paths share pure mode/generation helpers;
+ * they do not call this re-embedding loop directly.
  *
  * The service runs the D26 P0-2 two-phase build pattern. PHASE 1 collects
- * all synopses + embeddings IN MEMORY. If any chunk triggers a refusal /
+ * all synopses + embeddings IN MEMORY. Strict private failures propagate;
+ * the following title fallback is non-private behavior. If a chunk triggers a refusal /
  * empty / malformed response (per D14 + D27 P1-2), PHASE 1 RESTARTS at
  * the lower 'title' tier — discarding the in-progress synopsis vectors so
  * the page's chunks NEVER end up mid-state on disk. Only after PHASE 1
@@ -36,10 +31,11 @@ import { CODEX_SYNOPSIS_VERSION } from './ai/codex-versions.ts';
  * Rate-leasing is the caller's responsibility (D26 P0-3 — the Minion
  * handler acquires a shared, resolved-model-specific synopsis lease per chunk
  * before invoking the service's optional `acquireSynopsisLease`
- * / `releaseSynopsisLease` hooks). Inline callers (import-file, reindex
- * command) pass no hooks and rely on the gateway's own rate-limit retry.
+ * / `releaseSynopsisLease` hooks). Private account-lane admission remains
+ * independently durable even if a rate lease expires.
  */
 
+import { privateContextualModel, withPrivateContextualPreparation, fencePrivateContextualPublication, contextualSignal } from './contextual-retrieval-private.ts';
 import { createHash } from 'crypto';
 import * as fs from 'node:fs';
 import { embedBatch } from './embedding.ts';
@@ -322,6 +318,7 @@ export async function reembedPageWithContextualRetrieval(
   const publish = async (mode: CRMode, generation: string | null, embedded?: ChunkInput[]): Promise<ReembedPageResult | null> => {
     try {
       const installed = await args.engine.transaction(async tx => {
+        await fencePrivateContextualPublication(tx, page.source_id, prepared.snapshot.sourceIncarnation, args.abortSignal);
         await tx.lockPageKeys([{ sourceId: page.source_id, slug: page.slug }]);
         if (digest(sourcePolicy(await loadSourceRow(tx, page.source_id))) !== digest(sourcePolicy(source))) return false;
         if (embedded) {
@@ -387,7 +384,9 @@ export async function reembedPageWithContextualRetrieval(
   // fall-back path is the D14 page-level consistency guarantee: a
   // single bad chunk demotes the whole page to title-only so all
   // chunks on the page share the same wrapper shape.
-  const synopsisModel = args.synopsisModel ?? args.haikuModel ?? DEFAULT_SYNOPSIS_MODEL;
+  const synopsisModel = resolution.mode === 'per_chunk_synopsis'
+    ? await privateContextualModel(args, args.synopsisModel ?? args.haikuModel ?? DEFAULT_SYNOPSIS_MODEL)
+    : args.synopsisModel ?? args.haikuModel ?? DEFAULT_SYNOPSIS_MODEL;
   // #3883: explicit arg wins; else the models.synopsis_max_tokens config;
   // else undefined → page-summary's SYNOPSIS_MAX_TOKENS default (200).
   const synopsisMaxTokens =
@@ -397,14 +396,14 @@ export async function reembedPageWithContextualRetrieval(
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const phase1 = await tryBuildPhase1({
+    const phase1 = await withPrivateContextualPreparation(args, attemptMode === 'per_chunk_synopsis', chunks.length, () => tryBuildPhase1({
       attemptMode,
       page,
       chunks: chunks as ChunkInput[],
-      args,
+      args: { ...args, abortSignal: contextualSignal(args.abortSignal) },
       synopsisModel,
       synopsisMaxTokens,
-    });
+    }));
 
     if (phase1.kind === 'success') {
       const corpus_generation = computeCorpusGeneration({

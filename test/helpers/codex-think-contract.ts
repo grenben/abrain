@@ -1,3 +1,4 @@
+import { codexContextualContract } from './codex-contextual-contract.ts';
 import { codexParserContract } from './codex-parser-contract.ts';
 import { codexThinkAbContract } from './codex-think-ab-contract.ts';
 import { codexThinkAutomationContract } from './codex-think-automation-contract.ts';
@@ -289,6 +290,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     reply({...valid,answer:'"Fictional orbital certainty" [notes/orbit]',citations:[{page_slug:slug,row_num:null,citation_index:1}]});
     await run(async()=>{const result=await think({question:'Orbit: "Fictional orbital certainty"'});expect(result.quote_check?.unverified).toBe(1);expect(result.answer).toContain('[unverified]');});
   });
+  codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
   codexParserContract({engine:()=>engine,sourceId,run,reply,calls});
   codexThinkAbContract({engine:()=>engine,sourceId,run,reply,valid,calls});
   codexThinkAutomationContract({engine:()=>engine,sourceId,root,run,reply,valid,calls});

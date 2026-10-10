@@ -1,0 +1,53 @@
+import type { BrainEngine } from './engine.ts';
+import type { ReembedPageArgs } from './contextual-retrieval-service.ts';
+import { readPrivateCodexConfig, assertPrivateRoute } from './ai/private-policy.ts';
+import { resolveModel } from './model-config.ts';
+import { codexSubscriptionContext } from './ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from './ai/subscription-admission.ts';
+import { CodexProposalError } from './ai/providers/codex-contract.ts';
+import { hasAIInvocationGuard, withAIInvocationPreflight } from './ai/invocation-guard.ts';
+
+/** Resolve every explicit pin, including a shadowed legacy argument, before work. */
+export async function privateContextualModel(args: ReembedPageArgs, fallback: string): Promise<string> {
+  if (!readPrivateCodexConfig()) return fallback;
+  for (const [key, value] of [['synopsisModel', args.synopsisModel], ['haikuModel', args.haikuModel]] as const)
+    if (value !== undefined) assertPrivateRoute(value, `contextual:${key}`);
+  if (args.generateSynopsis) throw new CodexProposalError('invalid_input');
+  return resolveModel(args.engine, { cliFlag: args.synopsisModel ?? args.haikuModel,
+    configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model',
+    envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility', fallback });
+}
+
+/** A subscription grant authorizes summaries, never unpriced/unbounded paid embeddings. */
+export async function withPrivateContextualPreparation<T>(args: ReembedPageArgs, synopsis: boolean, chunks: number, run: () => Promise<T>): Promise<T> {
+  if (!readPrivateCodexConfig()) return run();
+  const context = codexSubscriptionContext();
+  if (synopsis && !context) throw new SubscriptionAdmissionError('subscription_required');
+  if (!context) return run(); // Standalone embedding-only workflows retain their own admission.
+  if (chunks > 256 || args.synopsisMaxTokens !== undefined && (!Number.isSafeInteger(args.synopsisMaxTokens) || args.synopsisMaxTokens < 16 || args.synopsisMaxTokens > 8192)) throw new CodexProposalError('invalid_input');
+  const [target] = await args.engine.executeRaw<{brain_id:string}>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
+  const [owner] = await context.engine.executeRaw<{brain_id:string}>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
+  if (!target || target.brain_id !== owner?.brain_id) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  if (!hasAIInvocationGuard()) throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
+  if (context.signal?.aborted || args.abortSignal?.aborted) throw new CodexProposalError('aborted');
+  await context.checkAuthority?.();
+  return withAIInvocationPreflight(async () => {
+    if (context.signal?.aborted || args.abortSignal?.aborted) throw new CodexProposalError('aborted');
+    await context.checkAuthority?.();
+  }, run);
+}
+
+/** Fence the real publication transaction before taking its page locks. */
+export async function fencePrivateContextualPublication(tx: BrainEngine, sourceId: string, incarnation: string, signal?: AbortSignal): Promise<void> {
+  if (!readPrivateCodexConfig()) return;
+  const context = codexSubscriptionContext();
+  if (context?.signal?.aborted || signal?.aborted) throw new CodexProposalError('aborted');
+  await context?.checkAuthorityInTransaction?.(tx);
+  const [source] = await tx.executeRaw<{incarnation:string;archived:boolean}>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [sourceId]);
+  if (!source || source.archived || source.incarnation !== incarnation) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+}
+
+export function contextualSignal(signal?: AbortSignal): AbortSignal | undefined {
+  const inherited = readPrivateCodexConfig() ? codexSubscriptionContext()?.signal : undefined;
+  return inherited && signal ? AbortSignal.any([inherited, signal]) : inherited ?? signal;
+}

@@ -35,6 +35,9 @@
  * local callers (CLI, autopilot, doctor --remediate) can.
  */
 
+import { readPrivateCodexConfig } from '../../ai/private-policy.ts';
+import { CodexProposalError } from '../../ai/providers/codex-contract.ts';
+import { preflightSubscriptionJob } from '../subscription-jobs.ts';
 import type { MinionJobContext } from '../types.ts';
 import { UnrecoverableError } from '../types.ts';
 import type { BrainEngine } from '../../engine.ts';
@@ -130,6 +133,10 @@ export function makeContextualReindexHandler(opts: MakeContextualReindexHandlerO
   return async function contextualReindexHandler(
     ctx: MinionJobContext,
   ): Promise<{ ok: true; mode_applied: string; chunks_embedded: number }> {
+    if (readPrivateCodexConfig()) {
+      if (opts.reembedPage) throw new CodexProposalError('invalid_input');
+      await preflightSubscriptionJob(engine, 'contextual_reindex_per_chunk', ctx.data ?? {});
+    }
     const data = parseJobData(ctx.data);
 
     // Load page row to derive the authoritative source_id (D27 P2-1).

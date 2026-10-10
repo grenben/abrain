@@ -50,7 +50,7 @@ const schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8')),prompt=read
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({schema,prompt})+'\\n');
 const value=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
 if(value.facts)for(const f of value.facts)for(const k of schema.properties.facts.items.required)if(!(k in f))f[k]=null;
-const text=JSON.stringify(value);writeFileSync(arg('--output-last-message'),text);
+const text=JSON.stringify({...(schema.properties.evidence_hash?{evidence_hash:schema.properties.evidence_hash.enum[0]}:{}),...value});writeFileSync(arg('--output-last-message'),text);
 for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:10,cached_input_tokens:0,output_tokens:4}}])console.log(JSON.stringify(event));
 `;
   writeFileSync(bin, script, { mode: 0o700 }); unregister = __registerCodexFixtureForTests(bin, createHash('sha256').update(script).digest('hex'));

@@ -24,6 +24,11 @@ export async function preflightSubscriptionJob(engine: BrainEngine, name: string
     }
   }
   await resolvePrivateModel(engine, { fallback: 'unused' }, policy);
+  if (name === 'contextual_reindex_per_chunk') {
+    const source = data.expected_source_id;
+    if (typeof source !== 'string' || !source || [data.source_id, data.sourceId].some(value => value !== undefined && value !== source)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    await resolvePrivateModel(engine, { configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model', envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility', fallback: 'unused' }, policy);
+  }
   if (name === 'subagent') {
     validateCodexReadJob(data);
     await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
@@ -41,7 +46,8 @@ async function runIdentity(engine: BrainEngine, job: MinionJob): Promise<string>
   const policy = readPrivateCodexConfig();
   if (!policy) throw new SubscriptionAdmissionError('subscription_required');
   const data = job.data ?? {};
-  const sourceId = data.source_id ?? data.sourceId;
+  const contextual = job.name === 'contextual_reindex_per_chunk';
+  const sourceId = contextual ? data.expected_source_id : data.source_id ?? data.sourceId;
   let sourceCreatedAt: string | null = null;
   let sourceIncarnation: string | null = null;
   if (sourceId !== undefined) {
@@ -55,7 +61,7 @@ async function runIdentity(engine: BrainEngine, job: MinionJob): Promise<string>
     sourceCreatedAt = new Date(source.created_at).toISOString();
     sourceIncarnation = source.incarnation;
   }
-  return `codex-job:${job.id}:v1:${authorityDigest({ name: job.name, data, authority: job.submission_authority,
+  return `codex-job:${job.id}:${contextual ? 'v2' : 'v1'}:${authorityDigest({ name: job.name, data, authority: job.submission_authority,
     model: policy.model, bin: policy.bin, sourceCreatedAt, sourceIncarnation })}`;
 }
 
