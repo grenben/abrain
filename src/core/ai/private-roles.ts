@@ -21,6 +21,7 @@ export const PRIVATE_GENERATION_ROLES = [
   ['contextual-synopsis','models.contextual_synopsis','utility','contextual-retrieval-service.ts'],
   ['page-summary',undefined,'utility','page-summary.ts'],
   ['brainstorm',undefined,'deep','brainstorm/'],
+  ['brainstorm-judge','models.brainstorm.judge','utility','brainstorm/judges.ts'],
   ['judges',undefined,'utility','skillopt/'],
   ['generated-reports',undefined,'reasoning',undefined],
   ['parser-fallback',undefined,'utility','conversation-parser/llm-codex-fallback.ts'],

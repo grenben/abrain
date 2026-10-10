@@ -1,3 +1,4 @@
+import { codexBrainstormJudgeContract } from './codex-brainstorm-judge-contract.ts';
 import { codexEvalAllowanceContract } from './codex-eval-allowance-contract.ts';
 import { codexEvalRunContract } from './codex-eval-run-contract.ts';
 import { codexFactKeysContract } from './codex-fact-keys-contract.ts';
@@ -52,7 +53,8 @@ const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1],schema=JSON.pars
 const prompt=readFileSync(0,'utf8');
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt,mode:statSync(arg('--output-schema')).mode&511,envKeys:Object.keys(process.env)})+'\\n');
 const configured=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
-const value=configured.byRole?configured.byRole[schema.properties.claims?'extractor':schema.properties.citations?'reader':'judge']:configured;
+let value=configured.byRole?configured.byRole[schema.properties.claims?'extractor':schema.properties.citations?'reader':'judge']:configured;
+if(value.autoJudge){const ids=schema.properties.ideas.items.properties.id.enum;value=ids.includes(value.failId)?{raw:'{}'}:{ideas:ids.map(id=>({id,scores:{originality:4,resistance:4,thesis_density:4,concrete_grounding:4,cognitive_load:4},note:'Synthetic grounded idea.'}))};}
 if(value?.citations?.[0]?.session_id==='__first_session__')value.citations[0].session_id=JSON.parse(prompt).messages[0].content.match(/<chat_session id="([^"]+)"/)[1];
 if(value.wait) await new Promise(()=>setInterval(()=>{},1000));
 const text=value.raw??JSON.stringify({...(schema.properties.evidence_hash?{evidence_hash:schema.properties.evidence_hash.enum[0]}:{}),...value});
@@ -300,6 +302,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     reply({...valid,answer:'"Fictional orbital certainty" [notes/orbit]',citations:[{page_slug:slug,row_num:null,citation_index:1}]});
     await run(async()=>{const result=await think({question:'Orbit: "Fictional orbital certainty"'});expect(result.quote_check?.unverified).toBe(1);expect(result.answer).toContain('[unverified]');});
   });
+  codexBrainstormJudgeContract({engine:()=>engine,run,reply,calls});
   codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
   codexProposalCacheContract({engine:()=>engine,run,reply,calls});
   codexFactKeysContract({root,engine:()=>engine,run,reply,calls});

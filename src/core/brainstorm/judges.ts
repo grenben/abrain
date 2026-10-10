@@ -24,6 +24,8 @@
 
 import { chat as defaultChat, getChatModel, type ChatResult, type ChatOpts } from '../ai/gateway.ts';
 import { splitProviderModelId } from '../model-id.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexBrainstormJudge } from './codex-judge.ts';
 
 export const PROMPT_VERSION = 'brainstorm-judge-v1';
 
@@ -159,6 +161,9 @@ export interface JudgeResult {
   /** Provider:model that answered (for cost accounting / debugging). */
   model: string;
   usage: ChatResult['usage'];
+  billing?: { kind: 'subscription'; costUsd: null; remainingQuota: null };
+  /** Retained native chunks reused without new inference or token charges. */
+  cache_hits?: number;
 }
 
 /** Brainstorm vs LSD config delta. */
@@ -250,7 +255,7 @@ validateConfig(LSD_JUDGE_CONFIG);
 
 const FENCE_RE = /```(?:json)?\s*\n?([\s\S]*?)```/i;
 
-function buildJudgePrompt(config: JudgeConfig, ideas: JudgeIdea[]): string {
+export function buildJudgePrompt(config: JudgeConfig, ideas: JudgeIdea[]): string {
   const w = config.weights;
   const ideasBlock = ideas
     .map(
@@ -468,6 +473,7 @@ export async function runJudge(
     // returning a well-formed empty result is more ergonomic.
     return { ideas: [], pass_count: 0, model: 'noop', usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 } };
   }
+  if (readPrivateCodexConfig()) return runCodexBrainstormJudge(config, ideas, options);
   const chunkSize = Math.max(1, options.maxIdeasPerCall ?? DEFAULT_JUDGE_CHUNK_SIZE);
   const stderr = options.stderrWrite ?? ((s: string) => { process.stderr.write(s); });
 
