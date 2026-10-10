@@ -335,3 +335,12 @@ schemas/images, maintenance, iterative read/write recovery and cancellation.
 Only then activate trusted private configuration. **Installed GBrain currently
 retains its original capabilities. Implemented source, fake verification,
 installation, live verification and activation are different states.**
+
+## Calibration voice follow-up
+
+The [calibration checkpoint](private-codex-calibration.md) adds native structured
+voice judgments and explicit failure handling with one shared content-repair
+allowance. The inventory separates profile generation, voice review and the
+think A/B harness. Full calibration profile generation/publication remains
+partial: source scoping, grounded patterns/tags and retained input evidence are
+still required. Supported judge modes are not proof of wired product surfaces.

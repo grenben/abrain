@@ -23,6 +23,7 @@ test/ai/codex-pins.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME), glob
 test/ai/codex-upgrade-jobs.serial.test.ts	R1	R1: shared upgrade contract mutates GBRAIN_HOME, global fetch and CLI output spies
 test/ai/codex-publication.serial.test.ts	R1	R1: shared publication contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-synthesis.serial.test.ts	R1	R1: shared synthesis contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-voice.serial.test.ts	R1	R1: shared voice contract mutates isolated HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification; hooks own engine cleanup
 test/ai/gateway-ledger-records.serial.test.ts	global-state	global-state: process-wide test seams __setChatTransportForTests, __setEmbedTransportForTests, __setRerankTransportForTests; configureGateway changes the process-wide AI gateway
 test/ai/gateway-model-sources.serial.test.ts	global-state	global-state: configureGateway changes the process-wide AI gateway; patches process stdout/stderr/console
 test/ai/header-transport.serial.test.ts	global-state	global-state: process-wide test seams __setRerankTransportForTests; configureGateway changes the process-wide AI gateway
