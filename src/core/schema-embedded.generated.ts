@@ -3461,4 +3461,20 @@ DROP TRIGGER IF EXISTS codex_subscription_group_guard ON codex_subscription_runs
 CREATE TRIGGER codex_subscription_group_guard BEFORE INSERT OR UPDATE ON codex_subscription_runs
   FOR EACH ROW EXECUTE FUNCTION gbrain_codex_subscription_group_guard();
 -- END GENERATED from src/core/ai/subscription-group-schema.ts (SUBSCRIPTION_GROUP_SCHEMA_SQL)
+
+-- BEGIN GENERATED from src/core/skillopt/codex-rollout-schema.ts (CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL). Edit that file, then run: bun run build:schema
+CREATE TABLE IF NOT EXISTS codex_skillopt_rollouts (
+  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
+  invocation_id TEXT NOT NULL CHECK (invocation_id ~ '^[A-Za-z0-9._:-]{1,160}\$'),
+  protocol INTEGER NOT NULL CHECK (protocol=1),
+  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
+  job_id BIGINT NOT NULL UNIQUE REFERENCES minion_jobs(id),
+  trajectory JSONB CHECK (jsonb_typeof(trajectory)='object' AND octet_length(trajectory::text)<=262144),
+  trajectory_hash TEXT CHECK (trajectory_hash ~ '^[a-f0-9]{64}\$'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(run_id,invocation_id),
+  CHECK ((trajectory IS NULL)=(trajectory_hash IS NULL))
+);
+ALTER TABLE codex_skillopt_rollouts ENABLE ROW LEVEL SECURITY;
+-- END GENERATED from src/core/skillopt/codex-rollout-schema.ts (CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL)
 `;

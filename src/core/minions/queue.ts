@@ -722,7 +722,7 @@ export class MinionQueue {
   /** Remove a job. Only terminal statuses can be removed. */
   async removeJob(id: number): Promise<boolean> {
     const rows = await this.engine.executeRaw<Record<string, unknown>>(
-      `DELETE FROM minion_jobs WHERE id = $1 AND status IN ('completed', 'dead', 'cancelled', 'failed') RETURNING id`,
+      `DELETE FROM minion_jobs WHERE id = $1 AND status IN ('completed', 'dead', 'cancelled', 'failed') AND NOT EXISTS (SELECT 1 FROM codex_skillopt_rollouts r WHERE r.job_id=minion_jobs.id) RETURNING id`,
       [id]
     );
     return rows.length > 0;
@@ -1217,7 +1217,7 @@ export class MinionQueue {
     if (opts?.dryRun) {
       const rows = await this.engine.executeRaw<{ count: string }>(
         `SELECT count(*)::text as count FROM minion_jobs
-         WHERE status = ANY($1) AND updated_at < $2`,
+         WHERE status = ANY($1) AND updated_at < $2 AND NOT EXISTS (SELECT 1 FROM codex_skillopt_rollouts r WHERE r.job_id=minion_jobs.id)`,
         [statuses, olderThan.toISOString()]
       );
       return parseInt(rows[0]?.count ?? '0', 10);
@@ -1229,7 +1229,7 @@ export class MinionQueue {
     const rows = await this.engine.executeRaw<{ count: string }>(
       `WITH pruned AS (
          DELETE FROM minion_jobs
-         WHERE status = ANY($1) AND updated_at < $2
+         WHERE status = ANY($1) AND updated_at < $2 AND NOT EXISTS (SELECT 1 FROM codex_skillopt_rollouts r WHERE r.job_id=minion_jobs.id)
          RETURNING name, status, data, idempotency_key, finished_at
        ), archived AS (
          INSERT INTO dream_synthesis_completions (source_id, idempotency_key, completed_at)

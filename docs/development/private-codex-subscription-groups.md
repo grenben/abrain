@@ -5,6 +5,10 @@ while enforcing one aggregate subscription allowance.”*
 
 ## Implemented admission foundation
 
+The later [optimizer rollout checkpoint](private-codex-skillopt-rollouts.md)
+connects this foundation to real child jobs and retained trajectories. Whole-run
+optimizer integration remains incomplete.
+
 Trusted host callers can create a child subscription run with `parentRunId`.
 The parent must already exist and be a root run. Children cannot introduce a
 different account lane, extend the deadline, exceed the parent's attempt/turn

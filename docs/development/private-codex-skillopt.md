@@ -97,6 +97,10 @@ deterministic checks.
 
 ## Verified development checkpoint
 
+The later [durable rollout checkpoint](private-codex-skillopt-rollouts.md) adds
+actual scoped read jobs and real multi-repetition validation gates. Results
+below describe the earlier judge/proposal checkpoint and synthetic rollouts.
+
 These commands use fresh temporary configuration, discovery disabled, synthetic
 fixtures, fake Codex executables and provider/network tripwires. Native
 PostgreSQL runs use an authorized disposable cluster that is stopped afterward.

@@ -44,3 +44,5 @@ See [private Codex status and acceptance gaps](../../development/private-codex-s
 The [skills index](skills.md) owns the native skill-optimization judge entry.
 See the [private skill-optimization checkpoint](../../development/private-codex-skillopt.md)
 for its validation gate and remaining rollout/publication work.
+
+Optimizer child jobs retain parent authority through `subscription-jobs.ts`; ordinary workers without the enclosing host scope refuse them. Migration v261 and queue pruning protections retain their permanent replay identities. See the [rollout checkpoint](../../development/private-codex-skillopt-rollouts.md).

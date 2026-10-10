@@ -81,6 +81,16 @@
       "codex_publication_plans.codex_publication_plans_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "codex_publication_plans.codex_publication_plans_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
       "codex_publication_plans.codex_publication_plans_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_check": "c CHECK (((trajectory IS NULL) = (trajectory_hash IS NULL)))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_invocation_id_check": "c CHECK ((invocation_id ~ '^[A-Za-z0-9._:-]{1,160}$'::text))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_job_id_key": "u UNIQUE (job_id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_pkey": "p PRIMARY KEY (run_id, invocation_id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_trajectory_check": "c CHECK (((jsonb_typeof(trajectory) = 'object'::text) AND (octet_length((trajectory)::text) <= 262144)))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_trajectory_hash_check": "c CHECK ((trajectory_hash ~ '^[a-f0-9]{64}$'::text))",
       "codex_subscription_attempts.codex_subscription_attempts_cached_input_tokens_check": "c CHECK ((cached_input_tokens >= 0))",
       "codex_subscription_attempts.codex_subscription_attempts_input_tokens_check": "c CHECK ((input_tokens >= 0))",
       "codex_subscription_attempts.codex_subscription_attempts_output_tokens_check": "c CHECK ((output_tokens >= 0))",
@@ -608,6 +618,9 @@
       "codex_publication_plans": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_skillopt_rollouts": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "codex_subscription_attempts": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -1036,6 +1049,8 @@
       "codex_proposal_cache_pkey": "CREATE UNIQUE INDEX codex_proposal_cache_pkey ON public.codex_proposal_cache USING btree (namespace, binding_hash, request_hash)",
       "codex_publication_pending": "CREATE UNIQUE INDEX codex_publication_pending ON public.codex_publication_plans USING btree (source_id, source_incarnation, kind) WHERE (state = 'accepted'::text)",
       "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
+      "codex_skillopt_rollouts_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_rollouts_job_id_key ON public.codex_skillopt_rollouts USING btree (job_id)",
+      "codex_skillopt_rollouts_pkey": "CREATE UNIQUE INDEX codex_skillopt_rollouts_pkey ON public.codex_skillopt_rollouts USING btree (run_id, invocation_id)",
       "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
       "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
       "codex_subscription_parent": "CREATE INDEX codex_subscription_parent ON public.codex_subscription_runs USING btree (parent_run_id)",
@@ -1765,6 +1780,19 @@
           "10 completed_at timestamp with time zone/timestamptz NULL"
         ],
         "flags": "relkind=r rls=false force_rls=false"
+      },
+      "codex_skillopt_rollouts": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 invocation_id text/text NOT NULL",
+          "3 protocol integer/int4 NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 job_id bigint/int8 NOT NULL",
+          "6 trajectory jsonb/jsonb NULL",
+          "7 trajectory_hash text/text NULL",
+          "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
       },
       "codex_subscription_attempts": {
         "columns": [

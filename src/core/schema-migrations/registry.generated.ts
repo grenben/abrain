@@ -261,6 +261,7 @@ import { v257 } from './v257-codex-eval-results.ts';
 import { v258 } from './v258-codex-brainstorm-runs.ts';
 import { v259 } from './v259-codex-brainstorm-fixtures.ts';
 import { v260 } from './v260-codex-subscription-groups.ts';
+import { v261 } from './v261-codex-skillopt-rollouts.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -520,4 +521,5 @@ export const MIGRATIONS: Migration[] = [
   v258,
   v259,
   v260,
+  v261,
 ];

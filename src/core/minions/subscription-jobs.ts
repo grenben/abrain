@@ -1,12 +1,12 @@
 import type { BrainEngine } from '../engine.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError, type SubscriptionEnvelope } from '../ai/subscription-admission.ts';
-import { withCodexSubscription, hasAdmittedCodexAttempt } from '../ai/subscription-context.ts';
+import { withCodexSubscription, hasAdmittedCodexAttempt, codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { withAIInvocationGuard } from '../ai/invocation-guard.ts';
 import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, PrivateRoutingError } from '../ai/private-policy.ts';
 import { authorityDigest, authorizeJobExecution } from './submission-authority.ts';
 import { rowToMinionJob, type MinionJob, type MinionJobContext } from './types.ts';
 import { jobMayGenerate } from './subscription-job-kinds.ts';
-import { validateCodexReadJob } from './codex-action-contract.ts';
+import { validateCodexReadJob, CODEX_SKILLOPT_JOB_PROTOCOL } from './codex-action-contract.ts';
 export { CODEX_GENERATIVE_JOBS, jobMayGenerate } from './subscription-job-kinds.ts';
 
 /** Only a trusted host argument can grant this allowance. No USD conversion or quota estimate. */
@@ -91,9 +91,16 @@ export async function runWithJobSubscription<T>(engine: BrainEngine, job: Minion
   if (!policy && rows.length === 0) return run();
   await preflightSubscriptionJob(engine, job.name, job.data ?? {});
   if (!policy || rows.length !== 1) throw new SubscriptionAdmissionError('subscription_required');
+  // Optimizer child jobs are driven only by their enclosing host, never an ordinary queue worker.
+  const [rollout] = await engine.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_skillopt_rollouts WHERE job_id=$1', [job.id]);
+  if (!!rollout !== (job.data?.optimizer_protocol === CODEX_SKILLOPT_JOB_PROTOCOL)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  const parent = rollout ? codexSubscriptionContext() : undefined;
+  if (rollout && (!parent || parent.engine !== engine || parent.runId !== rollout.run_id)) throw new SubscriptionAdmissionError('subscription_required');
   const runId = await runIdentity(engine, job);
   if (rows[0]!.run_id !== runId) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const checkAuthority = async (tx = engine, lock = false) => {
+    parent?.signal?.throwIfAborted();
+    if (lock) await parent?.checkAuthorityInTransaction?.(tx); else await parent?.checkAuthority?.();
     if (ctx.signal?.aborted || ctx.shutdownSignal?.aborted) throw new SubscriptionAdmissionError('subscription_owner_lost');
     const [row] = await tx.executeRaw<Record<string, unknown>>(
       `SELECT * FROM minion_jobs WHERE id=$1 AND lock_token=$2 AND status='active' AND lock_until>now()${lock ? ' FOR UPDATE' : ''}`, [job.id, job.lock_token]);

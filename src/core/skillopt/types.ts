@@ -93,6 +93,8 @@ export type EditResult =
 
 /** What a rollout produced. Captured in-process; never persisted to DB (D2). */
 export interface Trajectory {
+  /** Retained native job identity; usage is a measured subtotal if usage_complete is false. */
+  codex?: { job_id: number; subscription_run_id: string; cost_usd: null; usage_complete: boolean };
   task_id: string;
   task: string;
   /** Final assistant text (typically the user-visible output). */

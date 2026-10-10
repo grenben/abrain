@@ -21,6 +21,7 @@ import { runJobInChild } from '../../src/core/minions/child-job-runner.ts';
 import { noteChildSubscriptionEnforcement } from '../../src/core/minions/subscription-child.ts';
 import { disposePersistenceConsumer } from '../../src/core/persistence/service.ts';
 import { codexActionWritesContract } from './codex-action-writes-contract.ts';
+import { codexSkilloptRolloutContract } from './codex-skillopt-rollout-contract.ts';
 
 export function codexActionsContract(factory: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
   const root = mkdtempSync(join(tmpdir(), 'codex-actions-')), bin = join(root, 'fake.mjs'), control = join(root, 'replies.json'), capture = join(root, 'calls.jsonl');
@@ -67,6 +68,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   beforeEach(async () => {
     await disposePersistenceConsumer(engine);
     await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
+    await engine.executeRaw('DELETE FROM codex_skillopt_rollouts');
     await engine.executeRaw('DELETE FROM codex_subscription_attempts'); await engine.executeRaw('DELETE FROM codex_subscription_runs'); await engine.executeRaw('DELETE FROM minion_jobs');
     writeFileSync(capture, ''); replies(get(), final); resetGateway(); configureGateway({ env: {} });
   });
@@ -233,7 +235,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     expect(calls()[1].prompt).toContain('codex_action_read_failed'); expect(calls()[1].prompt).not.toContain('x'.repeat(100));
   });
   test('queue rejects legacy, write, custom system and unsupported job protocols', async () => {
-    for (const extra of [{ action_protocol: undefined }, { action_protocol: 'future' }, { allowed_tools: ['put_page'] }, { require_writes: true }, { system: 'override' }, { brain_id: 'other' }, { no_self_fix: false }]) await expect(submit(extra)).rejects.toThrow();
+    for (const extra of [{ action_protocol: undefined }, { action_protocol: 'future' }, { optimizer_protocol: 'future' }, { allowed_tools: ['put_page'] }, { require_writes: true }, { system: 'override' }, { brain_id: 'other' }, { no_self_fix: false }]) await expect(submit(extra)).rejects.toThrow();
     expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
   });
   test('source incarnation and handler payload changes refuse before inference', async () => {
@@ -250,4 +252,5 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
       invocation: { cmd: '/nonexistent/forbidden', argsPrefix: [] }, tiniPath: '' })).rejects.toMatchObject({ reasonCode: 'child_protocol_incompatible' });
   });
   codexActionWritesContract({ engine: () => engine, root, claim, run, replies, calls, get, final });
+  codexSkilloptRolloutContract({ engine: () => engine, replies, calls, get, final });
 }

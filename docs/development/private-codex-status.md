@@ -3,6 +3,11 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
+Latest source checkpoint: [durable optimizer read rollouts](private-codex-skillopt-rollouts.md)
+connect real validation gates to child jobs and aggregate admission, with
+migration 241 and shared PGLite/PostgreSQL recovery tests. Whole-run optimizer
+production and broader read-tool coverage remain incomplete.
+
 ## Installation and source evidence (2026-10-09)
 
 - The shell GBrain launcher resolves through `~/.local/bin/gbrain` and

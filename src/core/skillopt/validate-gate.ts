@@ -31,10 +31,13 @@ import { runRollout, type RolloutOpts } from './rollout.ts';
 import { scoreTrajectory } from './score.ts';
 import type { BenchmarkTask, GateInput, GateResult, ScoredRollout } from './types.ts';
 import { VALIDATION_EPSILON, VALIDATION_RUNS_PER_TASK } from './types.ts';
+import { digest } from '../persistence/digest.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { OperationContext } from '../ops/contract.ts';
 
 export interface ValidateGateOpts extends Omit<GateInput, 'selSet'> {
+  /** Host-owned phase/candidate evaluation identity; repetitions derive distinct durable jobs. */
+  codex?: { evaluationId: string; allowedTools: string[]; allowedSlugPrefixes: string[] };
   operationContext?: OperationContext;
   selSet: BenchmarkTask[];
   engine: BrainEngine;
@@ -86,6 +89,7 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
   const rolloutFn = opts.rolloutFn ?? runRollout;
   const scoreFn = opts.scoreFn ?? scoreTrajectory;
   const privateMode=!!readPrivateCodexConfig();
+  if (privateMode) opts = { ...opts, selSet: structuredClone(opts.selSet), codex: opts.codex ? structuredClone(opts.codex) : undefined };
   const concurrency = privateMode ? 1 : opts.concurrency ?? 4;
   // Forward pass uses 1; sel/baseline use VALIDATION_RUNS_PER_TASK (3). Floor
   // at 1 (a runsPerTask of 0 would silently produce an empty median).
@@ -95,6 +99,7 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
     if(!codexSubscriptionContext())throw new SubscriptionAdmissionError('subscription_required');
     if(!opts.selSet.length||opts.selSet.length>1000||!Number.isSafeInteger(runsPerTask)||runsPerTask>9||
       opts.runsPerTask!==undefined&&opts.runsPerTask<1)throw new CodexProposalError('invalid_input');
+    if (opts.codex && (!/^[A-Za-z0-9._:-]{1,160}$/.test(opts.codex.evaluationId) || new Set(opts.selSet.map(t => t.task_id)).size !== opts.selSet.length)) throw new CodexProposalError('invalid_input');
     assertPrivateRoute(opts.targetModel,'skillopt:target_model');
     if(opts.judgeModel)assertPrivateRoute(opts.judgeModel,'skillopt:judge_model');
     for(const task of opts.selSet)if(task.judge.kind==='llm'&&task.judge.model)assertPrivateRoute(task.judge.model,'skillopt:task.judge.model');
@@ -124,6 +129,7 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
             throw new Error(SKILLOPT_RUNTIME_EXCEEDED);
           }
           const rolloutOpts: RolloutOpts = {
+            ...(opts.codex ? { codex: { allowedTools: opts.codex.allowedTools, allowedSlugPrefixes: opts.codex.allowedSlugPrefixes, invocationId: digest({ evaluation: opts.codex.evaluationId, taskId: task.task_id, repetition: i }) } } : {}),
             operationContext: opts.operationContext,
             engine: opts.engine,
             skillText: opts.candidateSkillText,
@@ -210,6 +216,7 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
 }
 
 export interface ScoreOnTasksOpts {
+  codex?: ValidateGateOpts['codex'];
   operationContext?: OperationContext;
   engine: BrainEngine;
   skillText: string;
@@ -235,6 +242,7 @@ export interface ScoreOnTasksOpts {
  */
 export async function scoreSkillOnTasks(opts: ScoreOnTasksOpts): Promise<number> {
   const gate = await runValidationGate({
+    codex: opts.codex,
     operationContext: opts.operationContext,
     engine: opts.engine,
     candidateSkillText: opts.skillText,

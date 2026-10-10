@@ -7,11 +7,13 @@ import type { ToolDef } from './types.ts';
 
 export const CODEX_READ_PROTOCOL = 'codex-host-read-v1';
 export const CODEX_WRITE_PROTOCOL = 'codex-host-actions-v1';
+export const CODEX_SKILLOPT_JOB_PROTOCOL = 'codex-skillopt-rollout-v1';
 export const CODEX_ACTION_LIMITS = { turns: 16, prompt: 16000, result: 16000, history: 96000, answer: 8000, content: 12000 } as const;
 export interface CodexReadJob {
   action_protocol: typeof CODEX_READ_PROTOCOL | typeof CODEX_WRITE_PROTOCOL; prompt: string; source_id: string;
   allowed_tools: string[]; allowed_slug_prefixes: string[]; max_turns: number; no_self_fix: true;
   model?: string; require_writes?: boolean;
+  optimizer_protocol?: typeof CODEX_SKILLOPT_JOB_PROTOCOL;
 }
 export type CodexAction = { kind: 'final'; answer: string } | { kind: 'tool'; name: string; arguments: { slug: string; content?: string } };
 export const actionError = (code: string): never => { throw new Error(`codex_action_${code}`); };
@@ -20,8 +22,9 @@ export const actionError = (code: string): never => { throw new Error(`codex_act
 export function validateCodexReadJob(data: Record<string, unknown>): CodexReadJob {
   const writes = data.action_protocol === CODEX_WRITE_PROTOCOL;
   if (!writes && data.action_protocol !== CODEX_READ_PROTOCOL) throw new PrivateRoutingError('job:subagent', 'private_native_loop_unsupported');
-  const fields = ['action_protocol', 'prompt', 'source_id', 'allowed_tools', 'allowed_slug_prefixes', 'max_turns', 'no_self_fix', 'model', '__param_hash', ...(writes ? ['require_writes'] : [])];
+  const fields = ['action_protocol', 'prompt', 'source_id', 'allowed_tools', 'allowed_slug_prefixes', 'max_turns', 'no_self_fix', 'model', '__param_hash', ...(writes ? ['require_writes'] : ['optimizer_protocol'])];
   if (Object.keys(data).some(k => !fields.includes(k))) actionError('unsupported_job_field');
+  if (data.optimizer_protocol !== undefined && data.optimizer_protocol !== CODEX_SKILLOPT_JOB_PROTOCOL) actionError('unsupported_job_field');
   // Queue-owned coalescing metadata is bound with the full payload, never sent as model authority.
   if (data.__param_hash !== undefined && (typeof data.__param_hash !== 'string' || !/^[a-f0-9]{64}$/.test(data.__param_hash))) actionError('invalid_job');
   if (typeof data.prompt !== 'string' || !data.prompt.trim() || Buffer.byteLength(data.prompt) > CODEX_ACTION_LIMITS.prompt ||
