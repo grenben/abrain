@@ -250,11 +250,13 @@ async function runLoopConvertingLeaseLoss<T>(
   }
 }
 
+async function refusePrivateSubagent(_ctx: MinionJobContext): Promise<SubagentResult> {
+  assertPrivateNativeLoopAllowed('minions.legacy_subagent');
+  throw new Error('private_subagent_configuration_changed');
+}
+
 export function makeSubagentHandler(deps: SubagentDeps) {
-  if (readPrivateCodexConfig()) return async (_ctx: MinionJobContext): Promise<SubagentResult> => {
-    assertPrivateNativeLoopAllowed('minions.legacy_subagent');
-    throw new Error('private_subagent_configuration_changed');
-  };
+  if (readPrivateCodexConfig()) return refusePrivateSubagent;
   const engine = deps.engine;
   // sdk.messages IS the MessagesClient-shaped object. The v0.16.0 bug was
   // casting new Anthropic() (top level) to MessagesClient, but .create()
