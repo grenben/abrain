@@ -1,6 +1,6 @@
 {
   "golden": {
-    "count": 243,
+    "count": 244,
     "gaps": [
       17,
       18,
@@ -54,7 +54,7 @@
       "sqlQueryForEngine": "71fb1ccec1b22cdc1662876dbd8c17ed81e9ab83485c6965cdf5caa4fc4a4ab5",
       "verifyProjectionStatistics": "0d231b04ecfbc5a4109d6fca9567bf4e8c9e9db6c3fbbb35212e026579ed6f67"
     },
-    "latest": 248,
+    "latest": 249,
     "records": [
       {
         "handler": {
@@ -3762,6 +3762,19 @@
         "transaction": "absent",
         "verify": "absent",
         "version": 248
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_job_parking",
+        "sql": {
+          "length": 1251,
+          "sha256": "b34d6729852234cd2789fdc757cfa1fa2ace782f86d74c253e955743ad8fc59e"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 249
       }
     ],
     "versions": [
@@ -4007,7 +4020,8 @@
       245,
       246,
       247,
-      248
+      248,
+      249
     ]
   },
   "normalizer": "migrations-record-v1"
