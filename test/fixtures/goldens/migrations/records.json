@@ -1,6 +1,6 @@
 {
   "golden": {
-    "count": 246,
+    "count": 247,
     "gaps": [
       17,
       18,
@@ -54,7 +54,7 @@
       "sqlQueryForEngine": "71fb1ccec1b22cdc1662876dbd8c17ed81e9ab83485c6965cdf5caa4fc4a4ab5",
       "verifyProjectionStatistics": "0d231b04ecfbc5a4109d6fca9567bf4e8c9e9db6c3fbbb35212e026579ed6f67"
     },
-    "latest": 251,
+    "latest": 252,
     "records": [
       {
         "handler": {
@@ -3801,6 +3801,19 @@
         "transaction": "absent",
         "verify": "absent",
         "version": 251
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_think_publications",
+        "sql": {
+          "length": 3668,
+          "sha256": "2f0876a9d6ec6c8732aaba536be6efd0d57611bf4e1906bddf51c1222a66ae36"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 252
       }
     ],
     "versions": [
@@ -4049,7 +4062,8 @@
       248,
       249,
       250,
-      251
+      251,
+      252
     ]
   },
   "normalizer": "migrations-record-v1"
