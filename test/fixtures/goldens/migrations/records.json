@@ -1,6 +1,6 @@
 {
   "golden": {
-    "count": 244,
+    "count": 245,
     "gaps": [
       17,
       18,
@@ -54,7 +54,7 @@
       "sqlQueryForEngine": "71fb1ccec1b22cdc1662876dbd8c17ed81e9ab83485c6965cdf5caa4fc4a4ab5",
       "verifyProjectionStatistics": "0d231b04ecfbc5a4109d6fca9567bf4e8c9e9db6c3fbbb35212e026579ed6f67"
     },
-    "latest": 249,
+    "latest": 250,
     "records": [
       {
         "handler": {
@@ -3775,6 +3775,19 @@
         "transaction": "absent",
         "verify": "absent",
         "version": 249
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_take_proposal_evidence",
+        "sql": {
+          "length": 73,
+          "sha256": "af984fe86723c1fe3d1618bcabb0b237d7c1156910594335b38ccea57d45a5fb"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 250
       }
     ],
     "versions": [
@@ -4021,7 +4034,8 @@
       246,
       247,
       248,
-      249
+      249,
+      250
     ]
   },
   "normalizer": "migrations-record-v1"
