@@ -6,7 +6,8 @@ export function codexProposalArgv(input: {
   const settings = [
     'model_provider="openai"', 'forced_login_method="chatgpt"',
     'approval_policy="never"', 'web_search="disabled"', 'mcp_servers={}',
-    'project_doc_max_bytes=0', 'shell_environment_policy.inherit="none"',
+    'project_doc_max_bytes=0', 'project_root_markers=[".gbrain-codex-root"]',
+    'shell_environment_policy.inherit="none"',
     'suppress_unstable_features_warning=true',
     `model_instructions_file=${JSON.stringify(input.instructionsFile)}`,
     `model_catalog_json=${JSON.stringify(input.modelCatalogFile)}`,

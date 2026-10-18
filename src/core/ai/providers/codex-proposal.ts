@@ -40,11 +40,13 @@ export async function runCodexProposal(original: CodexProposalInput): Promise<Co
     const denyHook = join(scratch, 'deny-native');
     const instructionsFile = join(scratch, 'instructions.txt');
     const modelCatalogFile = join(scratch, 'model-catalog.json');
+    const projectRootMarker = join(scratch, '.gbrain-codex-root');
     await writeFile(schemaFile, prepared.serialized, { mode: 0o600, flag: 'wx' });
     await writeFile(answerFile, '', { mode: 0o600, flag: 'wx' });
     await writeFile(denyHook, CODEX_DENY_NATIVE_HOOK, { mode: 0o700, flag: 'wx' });
     await writeFile(instructionsFile, CODEX_PROPOSAL_INSTRUCTIONS, { mode: 0o600, flag: 'wx' });
     await writeFile(modelCatalogFile, codexProposalModelCatalog(input.model), { mode: 0o600, flag: 'wx' });
+    await writeFile(projectRootMarker, '', { mode: 0o600, flag: 'wx' });
     const imageFiles: string[] = [];
     for (const [i, image] of images.entries()) {
       const path = join(scratch, `image-${i}.${image.mime.split('/')[1]}`);

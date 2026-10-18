@@ -21,7 +21,7 @@ const args = process.argv.slice(2), arg = name => args[args.indexOf(name) + 1];
 const catalogSetting = args.find(value => value.startsWith('model_catalog_json='));
 const catalogPath = JSON.parse(catalogSetting.slice('model_catalog_json='.length));
 const prompt = readFileSync(0, 'utf8');
-writeFileSync(${JSON.stringify(capture)}, JSON.stringify({args,prompt,pid:process.pid,cwd:process.cwd(),env:process.env,schema:JSON.parse(readFileSync(arg('--output-schema'),'utf8')),schemaMode:statSync(arg('--output-schema')).mode & 511,catalog:JSON.parse(readFileSync(catalogPath,'utf8')),catalogMode:statSync(catalogPath).mode & 511,dirMode:statSync(process.cwd()).mode & 511,image:args.includes('--image')?Array.from(readFileSync(arg('--image'))):null}));
+writeFileSync(${JSON.stringify(capture)}, JSON.stringify({args,prompt,pid:process.pid,cwd:process.cwd(),env:process.env,schema:JSON.parse(readFileSync(arg('--output-schema'),'utf8')),schemaMode:statSync(arg('--output-schema')).mode & 511,catalog:JSON.parse(readFileSync(catalogPath,'utf8')),catalogMode:statSync(catalogPath).mode & 511,rootMarkerMode:statSync('.gbrain-codex-root').mode & 511,dirMode:statSync(process.cwd()).mode & 511,image:args.includes('--image')?Array.from(readFileSync(arg('--image'))):null}));
 const mode = ${JSON.stringify(mode)};
 const emit = event => { const line = JSON.stringify(event)+'\\n'; for (let i=0;i<line.length;i+=3) writeSync(1,line.slice(i,i+3)); };
 if (mode === 'exit') { writeSync(2,'synthetic secret provider error'); process.exit(7); }
@@ -55,11 +55,12 @@ describe('Codex proposal production transport with fake executable', () => {
     const seen = JSON.parse(await readFile(capture, 'utf8'));
     expect(seen.prompt).toBe('synthetic only'); expect(seen.schema).toEqual(schema);
     expect(seen.image).toEqual(Array.from(png)); expect(seen.schemaMode).toBe(0o600); expect(seen.dirMode).toBe(0o700);
-    expect(seen.catalogMode).toBe(0o600);
+    expect(seen.catalogMode).toBe(0o600); expect(seen.rootMarkerMode).toBe(0o600);
     expect(seen.catalog.models).toHaveLength(1);
     expect(seen.catalog.models[0]).toMatchObject({ slug: 'gpt-test', shell_type: 'disabled', tool_mode: 'direct',
       apply_patch_tool_type: null, experimental_supported_tools: [], supports_search_tool: false });
     expect(seen.args.some((arg: string) => arg.startsWith('model_catalog_json='))).toBe(true);
+    expect(seen.args).toContain('project_root_markers=[".gbrain-codex-root"]');
     for (const flag of ['--output-schema', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--strict-config', 'read-only', 'forced_login_method="chatgpt"', 'web_search="disabled"', 'features.shell_tool=false', 'features.hooks=true', 'suppress_unstable_features_warning=true']) expect(seen.args).toContain(flag);
     expect(seen.args).not.toContain('features.codex_hooks=true');
     expect(seen.args).not.toContain('features.memory_tool=false');
