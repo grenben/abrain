@@ -202,6 +202,19 @@ export function codexSkilloptJobContract(f: Fixture) {
       expect(await f.engine().executeRaw('SELECT id FROM minion_jobs WHERE name=\'skillopt\'')).toHaveLength(1);
       expect(f.calls()).toHaveLength(0);
     });
+    test('public batch API refuses changed inputs when a request identity is replayed', async () => {
+      if (f.engine().kind === 'pglite') return;
+      const g = grant(), base = await input();
+      const { skillName: _skillName, benchmarkPath: _benchmarkPath, ...batchInput } = base;
+      const first = await submitCodexSkillOptBatch(f.engine(), { ...batchInput, skillsDir: batchDir }, batchScope(), g);
+      const benchmark = join(batchDir, 'beta', 'skillopt-benchmark.jsonl');
+      writeFileSync(benchmark, readFileSync(benchmark, 'utf8').replace('Synthetic task 0.', 'Changed after enqueue.'));
+      await expect(submitCodexSkillOptBatch(f.engine(), { ...batchInput, skillsDir: batchDir }, batchScope(), g))
+        .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect(await f.engine().executeRaw('SELECT job_id FROM codex_skillopt_batch_submissions')).toHaveLength(1);
+      expect(await f.engine().executeRaw('SELECT id FROM minion_jobs WHERE name=\'skillopt\'')).toEqual([{ id: first.id }]);
+      expect(f.calls()).toHaveLength(0);
+    });
     test('queued batch preflight rejects a changed benchmark before creating a job', async () => {
       if (f.engine().kind === 'pglite') return;
       writeFileSync(join(batchDir, 'beta', 'skillopt-benchmark.jsonl'), 'malformed');

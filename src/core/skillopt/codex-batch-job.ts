@@ -67,13 +67,6 @@ export async function submitCodexSkillOptBatch(engine: BrainEngine, original: Co
   const trustedScope = { operationContext: originalScope, codex };
   const canonicalScope = { sourceId: source.source_id, ...codex };
   const reqHash = requestHash(input, canonicalScope, grant);
-  const [prior] = await engine.executeRaw<Binding>('SELECT * FROM codex_skillopt_batch_submissions WHERE request_id=$1::uuid', [grant.requestId]);
-  if (prior) {
-    const job = await new MinionQueue(engine).getJob(Number(prior.job_id));
-    if (prior.protocol !== 1 || prior.request_hash !== reqHash || !job || payloadHash(job.data ?? {}) !== prior.data_hash) conflict();
-    if (!job) return conflict();
-    return { id: Number(job.id), name: 'skillopt', status: job.status };
-  }
   const names = collectSkillsWithBenchmarks(input.skillsDir).sort();
   if (names.length > 20) throw new SubscriptionAdmissionError('subscription_invalid');
   const requestRunId = `codex-batch-submit:${grant.requestId}`;
@@ -89,6 +82,16 @@ export async function submitCodexSkillOptBatch(engine: BrainEngine, original: Co
   }
   const data = commonData(input, input.skillsDir, names, entries, canonicalScope, grant.requestId);
   const dataHash = payloadHash(data);
+  // Rebuild the content identity before the replay fast path. The public request
+  // hash intentionally binds options; this hash also binds current skill inputs.
+  const [prior] = await engine.executeRaw<Binding>('SELECT * FROM codex_skillopt_batch_submissions WHERE request_id=$1::uuid', [grant.requestId]);
+  if (prior) {
+    const job = await new MinionQueue(engine).getJob(Number(prior.job_id));
+    if (!job) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    if (prior.protocol !== 1 || prior.request_hash !== reqHash || prior.data_hash !== dataHash ||
+        payloadHash(job.data ?? {}) !== prior.data_hash) conflict();
+    return { id: Number(job.id), name: 'skillopt', status: job.status };
+  }
   const queued = await engine.transaction(async tx => {
     await declareDurablePersistence(tx); await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
     const [saved] = await tx.executeRaw<Binding>('SELECT * FROM codex_skillopt_batch_submissions WHERE request_id=$1::uuid FOR UPDATE', [grant.requestId]);
