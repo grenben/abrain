@@ -145,6 +145,7 @@ const EXPECTED_PHASES: CyclePhase[] = [
   'propose_takes',              // v0.36.1.0 — hindsight calibration wave
   'grade_takes',                // v0.36.1.0
   'calibration_profile',        // v0.36.1.0
+  'auto_think',                 // private Codex phase
   'edge_contradictions',        // temporal typed edges (proposals by default)
   'drift',                       // #2653 — drift detection (default OFF, report-only)
   'standing_questions',          // C4 pinned questions (no pins = skipped)
