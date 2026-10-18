@@ -200,7 +200,9 @@ open file descriptor inside the production Linux PID-namespace wrapper. It
 checks the host boundary, executable hash and inode protection, obtains the
 offline version, and uses disposable loopback mock providers to inspect the
 tool plan and force unadvertised shell, patch, code-mode, image-read, goal,
-and MCP-resource calls. One shell case replaces the deny hook with a script
+and MCP-resource calls. It also injects a typed Responses API
+`local_shell_call`, a separate response item from a named function call. One
+shell case replaces the deny hook with a script
 that exits successfully without denying anything. It also sends a one-pixel
 synthetic PNG through the configured `--image` path and checks that an
 `input_image` item reaches the mock provider. It places hostile config and
@@ -228,6 +230,13 @@ request/tool counts, forced-call outputs, and each result. Even a future green r
 probe: it cannot establish that every configuration, instruction, hosted action,
 image path, or descendant-crash case is safe. The production hash registry
 remains empty.
+
+The typed `local_shell_call` extension ran against the same exact ELF and
+credential-free loopback provider. Its one request advertised zero tools;
+Codex made no follow-up function-call output, created no scratch marker, and
+the runner settled. This confirms no local execution for this one typed
+shell response. The probe still exits 1 because the executable inode is
+user-owned; it does not prove server-side hosted actions are impossible.
 
 ## Disposable live transport probe — 2026-10-18
 

@@ -32,4 +32,5 @@ test('invalid usage and native tool events cannot become successful application 
   const xs=events({});xs[3]={type:'turn.completed',usage:{input_tokens:1,cached_input_tokens:2,output_tokens:0}} as any;
   expect(()=>parseCodexLifecycle(jsonl(xs))).toThrow('malformed_lifecycle');
   expect(()=>parseCodexLifecycle(jsonl([xs[0],xs[1],{type:'item.started',item:{type:'mcp_tool_call'}}]))).toThrow('native_action');
+  expect(()=>parseCodexLifecycle(jsonl([xs[0],xs[1],{type:'item.completed',item:{type:'local_shell_call'}}]))).toThrow('native_action');
 });

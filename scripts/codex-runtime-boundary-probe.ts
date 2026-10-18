@@ -31,7 +31,7 @@ const childEnv = { PATH: '/usr/bin:/bin', HOME: home, CODEX_HOME: home,
 type Request = { tools?: unknown; input?: unknown };
 const forcedNames = ['exec_command', 'apply_patch', 'functions.exec', 'view_image',
   'get_goal', 'list_mcp_resources', 'exec_command_broken_hook'] as const;
-type Scenario = 'plan' | 'image_plan' | typeof forcedNames[number];
+type Scenario = 'plan' | 'image_plan' | 'local_shell_call' | typeof forcedNames[number];
 type ScenarioResult = { requests: number; toolCounts: number[]; outputs: string[]; reason: string;
   markerCreated: boolean; ancestorSentinelSeen: boolean; imageSeen: boolean };
 const forcedArguments = (name: Scenario): string => {
@@ -56,11 +56,15 @@ async function scenario(name: Scenario): Promise<ScenarioResult> {
     const done = { type: 'response.completed', response: { id: rid, usage: {
       input_tokens: 0, input_tokens_details: null, output_tokens: 0,
       output_tokens_details: null, total_tokens: 0 } } };
+    const forcedItem = name === 'local_shell_call'
+      ? { type: 'local_shell_call', call_id: 'forced-1', status: 'completed',
+        action: { type: 'exec', command: ['/bin/sh', '-c', 'touch native-tool-ran'],
+          timeout_ms: 1000, working_directory: null, env: null, user: null } }
+      : { type: 'function_call', call_id: 'forced-1', name: callName,
+        arguments: forcedArguments(callName) };
     const events = requests.length === 1
       ? [{ type: 'response.created', response: { id: rid } },
-        { type: 'response.output_item.done', item: { type: 'function_call',
-          call_id: 'forced-1', name: callName,
-          arguments: forcedArguments(callName) } }, done]
+        { type: 'response.output_item.done', item: forcedItem }, done]
       : [{ type: 'response.created', response: { id: rid } },
         { type: 'response.output_item.done', item: { type: 'message', role: 'assistant',
           id: 'synthetic-msg', content: [{ type: 'output_text', text: '{"ok":true}' }] } }, done];
@@ -127,20 +131,26 @@ try {
     args: ['--version'], cwd: root, env: childEnv, prompt: '', timeoutMs: 5_000, maxOutputBytes: 1024 });
   const plan = await scenario('plan');
   const imagePlan = await scenario('image_plan');
+  const typedLocalShell = await scenario('local_shell_call');
   const forced: Record<string, ScenarioResult> = {};
   for (const name of forcedNames) forced[name] = await scenario(name);
-  const all = [plan, imagePlan, ...forcedNames.map(name => forced[name]!)];
+  const all = [plan, imagePlan, typedLocalShell, ...forcedNames.map(name => forced[name]!)];
   const zeroTools = all.every(item => item.requests > 0 && item.toolCounts.every(count => count === 0));
   const rejectedForcedCalls = forcedNames.every(name => forced[name]!.outputs.includes(
     `unsupported call: ${name === 'exec_command_broken_hook' ? 'exec_command' : name}`)
     && !forced[name]!.markerCreated);
+  const typedLocalShellDenied = typedLocalShell.requests > 0 && !typedLocalShell.markerCreated
+    && typedLocalShell.outputs.length === 0;
   const ancestorInstructionsIgnored = all.every(item => !item.ancestorSentinelSeen);
   const imageTransport = imagePlan.requests > 0 && imagePlan.imageSeen;
   const result = { sha256, version: version.trim(), model, hostBoundary: 'pass', runtimeFileProtected,
     plan: { requests: plan.requests, toolCounts: plan.toolCounts, reason: plan.reason },
     imagePlan: { requests: imagePlan.requests, toolCounts: imagePlan.toolCounts, imageSeen: imagePlan.imageSeen },
+    typedLocalShell: { requests: typedLocalShell.requests, toolCounts: typedLocalShell.toolCounts,
+      reason: typedLocalShell.reason, markerCreated: typedLocalShell.markerCreated },
     forced: Object.fromEntries(forcedNames.map(name => [name, forced[name]!.outputs])),
-    zeroTools, rejectedForcedCalls, ancestorInstructionsIgnored, imageTransport };
+    zeroTools, rejectedForcedCalls, typedLocalShellDenied, ancestorInstructionsIgnored, imageTransport };
   console.log(JSON.stringify(result));
-  if (!runtimeFileProtected || !zeroTools || !rejectedForcedCalls || !ancestorInstructionsIgnored || !imageTransport) process.exitCode = 1;
+  if (!runtimeFileProtected || !zeroTools || !rejectedForcedCalls || !typedLocalShellDenied
+    || !ancestorInstructionsIgnored || !imageTransport) process.exitCode = 1;
 } finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
