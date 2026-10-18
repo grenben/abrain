@@ -125,6 +125,12 @@ The host's actual `/etc/codex` configuration files are absent, but this
 demonstrates that the same binary hash on another host is insufficient for
 qualification. Managed-configuration absence or isolation must be a checked
 host condition before the production registry can admit the runtime.
+With a second synthetic managed file selecting a tool-capable catalog and
+re-enabling shell features, six more captured requests advertised
+`exec_command`, `apply_patch`, and other native tools despite GBrain's session
+settings. The probe provider returned 401 to every request, so no tool was
+executed. This confirms the managed-config boundary is an execution-safety
+condition, not just a cosmetic tool-list difference.
 
 ## Disposable live transport probe — 2026-10-18
 
