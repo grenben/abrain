@@ -143,6 +143,21 @@ describe('purge_fact', () => {
     }
   }), 60_000);
 
+  test('a private take proposal retaining the purged claim only in its source quote is swept', async () => withEnv({ GBRAIN_HOME: home }, async () => {
+    for (const engine of engines) {
+      const slug = 'people/codex-evidence-example';
+      const id = await seedPage(engine, slug);
+      const [proposal] = await engine.executeRaw<{ id: number }>(`INSERT INTO take_proposals
+        (source_id,page_slug,content_hash,prompt_version,proposal_run_id,claim_text,kind,holder,weight,model_id,codex_evidence)
+        VALUES ('default',$1,'hash','codex-v1','run','Another claim','take','brain',0.5,'codex-cli:fixture',$2::text::jsonb)
+        RETURNING id`, [slug, JSON.stringify({ source_quote: CLAIM })]);
+      const done = await confirmedPurge(engine, id);
+      expect(done.state).toBe('committed');
+      expect(done.purge.removed.take_proposals).toBe(1);
+      expect(await engine.executeRaw('SELECT 1 FROM take_proposals WHERE id=$1', [proposal.id])).toHaveLength(0);
+    }
+  }), 60_000);
+
   test('held writes carrying the claim and gate receipts naming the purged fact or those holds are swept', async () => withEnv({ GBRAIN_HOME: home }, async () => {
     for (const engine of engines) {
       const slug = 'people/heldclaim-example';
