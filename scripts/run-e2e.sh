@@ -441,11 +441,19 @@ for f in "${files[@]}"; do
   # it spawns TWO `gbrain serve --http` subprocesses (19133 + a chaos serve
   # on 19134) plus several CLI register subprocesses, so its wall clock is
   # process-spawn-bound, not test-bound.
-  file_timeout="${GBRAIN_E2E_FILE_TIMEOUT:-${E2E_FILE_TIMEOUT_SECS:-180}}"
+  # The native Codex actions contract has 169 sequential cases and took 608s
+  # on PostgreSQL. Give only that file a measured 1200s cap and a 180s Bun
+  # per-test ceiling; the other files keep the existing 180s/60s defaults.
+  default_file_timeout=180
+  test_timeout_ms=60000
+  case "$f" in
+    */codex-actions.test.ts) default_file_timeout=1200; test_timeout_ms=180000 ;;
+  esac
+  file_timeout="${GBRAIN_E2E_FILE_TIMEOUT:-${E2E_FILE_TIMEOUT_SECS:-$default_file_timeout}}"
   # Digits-only validation (same strict positive-int posture as the TS env
   # knobs): a malformed value falls back to the default instead of
   # word-splitting into extra gtimeout arguments or breaking the 4x math.
-  case "$file_timeout" in ''|*[!0-9]*) file_timeout=180 ;; esac
+  case "$file_timeout" in ''|*[!0-9]*) file_timeout="$default_file_timeout" ;; esac
   case "$f" in
     # graduation-crash-*: one graduation per custody or rollback boundary (5-6 SIGKILL-and-resume cases of ~16 s per file).
     # large-pages-export: five 20 MiB imports per engine on the string path (~240 s on 4 cores, ~340 s on a loaded gate VM).
@@ -471,7 +479,7 @@ for f in "${files[@]}"; do
     p=0
     rm -f "$E2E_TMP_HOME/current.junit.xml"
     receipt_begin primary "$RECEIPT_TAG-f$file_idx-$pass_label" "$RECEIPT_SHARD" "$RECEIPT_OF" "$arm" "${f#./}"
-    env "$@" HOME="$FILE_HOME" GBRAIN_HOME="$FILE_HOME" $TIMEOUT_CMD bun test --timeout=60000 --reporter=junit --reporter-outfile="$E2E_TMP_HOME/current.junit.xml" ${COVERAGE_ARGS[@]+"${COVERAGE_ARGS[@]}"} "$f" > "$E2E_TMP_HOME/current.log" 2>&1 &
+    env "$@" HOME="$FILE_HOME" GBRAIN_HOME="$FILE_HOME" $TIMEOUT_CMD bun test --timeout="$test_timeout_ms" --reporter=junit --reporter-outfile="$E2E_TMP_HOME/current.junit.xml" ${COVERAGE_ARGS[@]+"${COVERAGE_ARGS[@]}"} "$f" > "$E2E_TMP_HOME/current.log" 2>&1 &
     ACTIVE_E2E_PID=$!
     wait "$ACTIVE_E2E_PID" || rc=$?
     ACTIVE_E2E_PID=""
