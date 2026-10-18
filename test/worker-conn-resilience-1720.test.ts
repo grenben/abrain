@@ -42,6 +42,8 @@ function makeEngine(counter: { reconnects: number }): BrainEngine {
       // real startup authority check, and reject unrelated unexpected queries.
       if (sql.includes('SELECT id, submission_authority FROM minion_jobs') &&
           sql.includes('submission_authority IS DISTINCT FROM')) return [];
+      // Isolated children now check for a durable Codex subscription binding.
+      if (sql.includes('SELECT run_id FROM codex_subscription_runs')) return [];
       throw new Error('Unexpected SQL in worker reconnect fixture');
     },
   } as unknown as BrainEngine;
