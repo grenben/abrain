@@ -3,14 +3,14 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [scheduled optimizer cycles](private-codex-skillopt-cycles.md)
-connects maintenance to retained batch manifests, frozen source-scoped selection
-and receipt-backed completion/cooldowns. Foreground `skillopt --all` and trusted
-SDK batches also use retained manifests and child grants. Schema head is 270;
-queued PostgreSQL batch jobs use a permanent request binding. The public
-queued batch API is exported from `gbrain/core/skillopt` and covered through
-the package import path. Fleet and remote producers, broader query/graph tools,
-full dispatch coverage and production runtime qualification remain incomplete.
+Latest source checkpoint: [standalone benchmark bootstrap jobs](private-codex-bootstrap-cli.md)
+adds PostgreSQL background submission and fenced worker publication for
+standalone skill benchmark drafts. Migration head is 270; queued PostgreSQL
+batch and bootstrap jobs retain permanent request bindings. Scheduled optimizer
+cycles retain source-scoped selection and receipt-backed cooldowns. The public
+queued batch API is exported from `gbrain/core/skillopt`. Fleet and remote
+producers, broader query/graph tools, full dispatch coverage and production
+runtime qualification remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 
@@ -75,6 +75,11 @@ The old two-file prototype was not a gateway implementation. This branch adds:
   storage engines) and dispatch integration. It never expires ambiguous account
   ownership just because time elapsed. Failed attempts consume their allowance.
   Missing subscription admission cannot be replaced by a USD-only cap.
+- Durable PostgreSQL background submission for standalone benchmark bootstrap:
+  v270 request/job binding, immutable preflight input, strict model validation,
+  fenced worker reuse of the retained proposal and review-draft writer, cross-
+  workflow UUID collision checks, and queue retention of bound jobs. PGLite
+  remains inline; the installed artifact is unchanged.
 - Gateway chat, query expansion and OCR paths, observed through the invocation
   guard, retaining measured tokens and unknown monetary cost. Auxiliary embedding
   and reranking still use their own USD admission. No provider fallback is used.
@@ -518,9 +523,10 @@ The actual private reflection and one-shot rewrite entries now use native
 schemas, full input snapshots, all-or-nothing semantic validation, sequential
 edit composition and durable accepted-proposal reuse. Failures cannot become
 empty successful proposals, and cancellation prevents a second reflection call.
-This does not publish a skill or replace the legacy rollout loop. Benchmark
-bootstrap, whole-run admission and durable optimizer publication remain work;
-[scope and checks](private-codex-skillopt.md). Installed GBrain is unchanged.
+This does not publish a skill or replace the legacy rollout loop. Whole-run
+admission and durable optimizer publication remain work; benchmark bootstrap
+now has a separate foreground/background checkpoint. [Scope and checks](private-codex-skillopt.md).
+Installed GBrain is unchanged.
 
 ## Skill benchmark generation checkpoint
 
