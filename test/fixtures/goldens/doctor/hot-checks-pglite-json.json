@@ -554,7 +554,7 @@
           },
           {
             "category": "meta",
-            "message": "1113 column(s) verified against live schema",
+            "message": "1306 column(s) verified against live schema",
             "name": "schema_columns",
             "status": "ok"
           },
@@ -2712,11 +2712,12 @@
             "category": "meta",
             "details": {
               "counts": {
-                "global": 15,
+                "global": 16,
                 "mixed": 2,
                 "source": 12
               },
               "phase_scope_map": {
+                "auto_think": "global",
                 "backlinks": "source",
                 "calibration_profile": "global",
                 "chronicle": "global",
@@ -2748,7 +2749,7 @@
                 "synthesize_concepts": "global"
               }
             },
-            "message": "Phase taxonomy: 12 source-scoped, 15 brain-global, 2 mixed. Source-safe: [lint, backlinks, sync, extract, extract_facts, extract_atoms, recompute_emotional_weight, consolidate, propose_takes, conversation_facts_backfill, enrich_thin, schema-suggest]. Brain-global: [fence_repair, content_repair, resolve_symbol_edges, synthesize_concepts, grade_takes, calibration_profile, edge_contradictions, drift, standing_questions, chronicle, facts_drain, skillopt, embed, orphans, purge]. Mixed: [synthesize, patterns].",
+            "message": "Phase taxonomy: 12 source-scoped, 16 brain-global, 2 mixed. Source-safe: [lint, backlinks, sync, extract, extract_facts, extract_atoms, recompute_emotional_weight, consolidate, propose_takes, conversation_facts_backfill, enrich_thin, schema-suggest]. Brain-global: [fence_repair, content_repair, resolve_symbol_edges, synthesize_concepts, grade_takes, calibration_profile, auto_think, edge_contradictions, drift, standing_questions, chronicle, facts_drain, skillopt, embed, orphans, purge]. Mixed: [synthesize, patterns].",
             "name": "cycle_phase_scope",
             "status": "ok"
           },
@@ -3659,7 +3660,7 @@
           },
           {
             "category": "meta",
-            "message": "1113 column(s) verified against live schema",
+            "message": "1306 column(s) verified against live schema",
             "name": "schema_columns",
             "status": "ok"
           },
@@ -5817,11 +5818,12 @@
             "category": "meta",
             "details": {
               "counts": {
-                "global": 15,
+                "global": 16,
                 "mixed": 2,
                 "source": 12
               },
               "phase_scope_map": {
+                "auto_think": "global",
                 "backlinks": "source",
                 "calibration_profile": "global",
                 "chronicle": "global",
@@ -5853,7 +5855,7 @@
                 "synthesize_concepts": "global"
               }
             },
-            "message": "Phase taxonomy: 12 source-scoped, 15 brain-global, 2 mixed. Source-safe: [lint, backlinks, sync, extract, extract_facts, extract_atoms, recompute_emotional_weight, consolidate, propose_takes, conversation_facts_backfill, enrich_thin, schema-suggest]. Brain-global: [fence_repair, content_repair, resolve_symbol_edges, synthesize_concepts, grade_takes, calibration_profile, edge_contradictions, drift, standing_questions, chronicle, facts_drain, skillopt, embed, orphans, purge]. Mixed: [synthesize, patterns].",
+            "message": "Phase taxonomy: 12 source-scoped, 16 brain-global, 2 mixed. Source-safe: [lint, backlinks, sync, extract, extract_facts, extract_atoms, recompute_emotional_weight, consolidate, propose_takes, conversation_facts_backfill, enrich_thin, schema-suggest]. Brain-global: [fence_repair, content_repair, resolve_symbol_edges, synthesize_concepts, grade_takes, calibration_profile, auto_think, edge_contradictions, drift, standing_questions, chronicle, facts_drain, skillopt, embed, orphans, purge]. Mixed: [synthesize, patterns].",
             "name": "cycle_phase_scope",
             "status": "ok"
           },

@@ -20,7 +20,8 @@
  * fresh temp dir. Spawns go through runCliBatch at width 2.
  *
  * Normalizer `cli-thin-client-v1` scrubs the temp home, ANSI, timestamps,
- * request UUIDs and the release version. In-test stability proof captures
+ * request UUIDs, the release version and the platform's ECONNREFUSED prefix
+ * for the fixed 127.0.0.1:1 probe. In-test stability proof captures
  * the volatile rows (timestamp, UUID) twice; the full matrix's two-capture
  * receipt is recorded in the W0 PR body. Regenerate: GBRAIN_TEST_UPDATE_GOLDENS=1.
  */
@@ -91,7 +92,15 @@ function run(rows: string[][]): Promise<CliResult[]> {
 
 function normalizerFor(rows: string[][]) {
   return defineNormalizer('cli-thin-client-v1', (results: CliResult[]) =>
-    rows.map((argv, i) => ({ argv: argv.join(' '), ...normalizeCliResult(results[i]!, home) })),
+    rows.map((argv, i) => {
+      const result = normalizeCliResult(results[i]!, home);
+      const normalizeRefusal = (line: string) => line.replace(
+        'OAuth discovery network error: Unable to connect. Is the computer able to access the url?',
+        'OAuth discovery network error: ECONNREFUSED: Unable to connect. Is the computer able to access the url?',
+      );
+      return { argv: argv.join(' '), ...result,
+        stdout: result.stdout.map(normalizeRefusal), stderr: result.stderr.map(normalizeRefusal) };
+    }),
   );
 }
 
