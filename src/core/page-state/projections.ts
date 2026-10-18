@@ -292,7 +292,6 @@ export async function installPageEmbeddings(engine: BrainEngine, prepared: Proje
     await tx.lockPageKeys([{ sourceId, slug }]);
     const current = await tx.readPageSnapshot(slug, { sourceId });
     if (!current || current.page.deleted_at || current.sourceIncarnation !== snapshot.sourceIncarnation || current.page.id !== snapshot.page.id
-      || current.revision !== snapshot.revision
       || current.page.text_projection_revision !== current.revision || isSegmentedPage(current.page)) return refused;
     const [source] = await tx.executeRaw<{ archived: boolean }>('SELECT archived FROM sources WHERE id=$1', [sourceId]);
     if (!source || source.archived) return refused;

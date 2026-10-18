@@ -103,6 +103,9 @@ for (const kind of testBackends()) {
       const content = segmentedPage('Fits', 20 * MB, 400, 16);
       const bodyBullets = content.split('| Body review ').length - 1;
       expect((await importFromContent(engine, 'notes/fits', content, { sourceId: 'default', noEmbed: true })).status).toBe('imported');
+      // PGLite can checkpoint a large preceding import during the measured transaction.
+      // Settle its WAL first so this measures retained timeline blocks, not checkpoint heap.
+      if (kind === 'pglite') await engine.executeRaw('CHECKPOINT');
       const bytes = await bodyBytes('notes/fits');
       let peak = 0;
       const transaction = engine.transaction.bind(engine);
