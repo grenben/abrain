@@ -1,6 +1,6 @@
 {
   "golden": {
-    "count": 257,
+    "count": 258,
     "gaps": [
       17,
       18,
@@ -54,7 +54,7 @@
       "sqlQueryForEngine": "71fb1ccec1b22cdc1662876dbd8c17ed81e9ab83485c6965cdf5caa4fc4a4ab5",
       "verifyProjectionStatistics": "0d231b04ecfbc5a4109d6fca9567bf4e8c9e9db6c3fbbb35212e026579ed6f67"
     },
-    "latest": 262,
+    "latest": 263,
     "records": [
       {
         "handler": {
@@ -3944,6 +3944,19 @@
         "transaction": "absent",
         "verify": "absent",
         "version": 262
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_skillopt_submissions",
+        "sql": {
+          "length": 462,
+          "sha256": "d3403ee461ead0fdd75dbd4ccd7d178a84f79d39af1969a04449531260990691"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 263
       }
     ],
     "versions": [
@@ -4203,7 +4216,8 @@
       259,
       260,
       261,
-      262
+      262,
+      263
     ]
   },
   "normalizer": "migrations-record-v1"
