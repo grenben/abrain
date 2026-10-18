@@ -35,7 +35,9 @@ import { invokeAI, withAIInvocationGuard } from '../../src/core/ai/invocation-gu
 import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
 import { withCodexSubscription, type CodexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
-import { flushDecideWrites } from '../../src/core/ai/decide/store.ts';
+import { flushDecideWrites, insertCalibration, storeQualification } from '../../src/core/ai/decide/store.ts';
+import { packShape } from '../../src/core/ai/decide/pack.ts';
+import { resetDecideSearchCache } from '../../src/core/search/decide-stage.ts';
 import { operations, type OperationContext } from '../../src/core/operations.ts';
 import { installFixtureChunks } from './page-projection.ts';
 
@@ -189,6 +191,54 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
       const rows=await engine.executeRaw<Record<string,unknown>>('SELECT provider,model_resolved,call_site,answer_value,outcome FROM decision_receipts WHERE slot=$1',['answerable']);
       expect(rows.some(row=>row.provider==='llm:codex-cli:gpt-test'&&row.model_resolved==='codex-cli:gpt-test'&&row.call_site==='query'&&row.answer_value!==null)).toBe(true);
     }finally{for(const key of Object.keys(keys))await engine.setConfig(key,'');await engine.executeRaw('DELETE FROM pages WHERE id=$1',[queryPage.id]);}
+  });
+  test('the query operation requires a matching qualification before a Codex answerability turn',async()=>{
+    const keys={'decide.provider':'llm:codex-cli:gpt-test','decide.slots.answerable.mode':'on'};
+    const queryPage=await engine.putPage('notes/qualified-query',{type:'note',title:'Qualified query',compiled_truth:'alpha keyword qualified evidence'},{sourceId});
+    await installFixtureChunks(engine,'notes/qualified-query',[{chunk_index:0,chunk_text:'alpha keyword qualified evidence',chunk_source:'compiled_truth'}],{sourceId});
+    const calibrationId=await insertCalibration(engine,{
+      slot:'answerable',call_site:'query',provider:'llm:codex-cli:gpt-test',model_resolved:'codex-cli:gpt-test',
+      threshold:0.5,min_keep:null,metric:'synthetic_fixture',metric_value:null,ece:null,retest_sd:0,repack_sd:0,
+      n:1,dataset_hash:null,split_hash:null,calibrate_ids_hash:null,calibrate_only:false,
+      pack_shape:packShape('answerable',[],{unpacked:true}),notes:'Synthetic gate fixture; not model qualification.',
+    });
+    for(const [key,value] of Object.entries(keys))await engine.setConfig(key,value);
+    const query=operations.find(op=>op.name==='query')!;
+    const ctx={engine,config:{engine:engine.constructor.name==='PostgresEngine'?'postgres':'pglite'},
+      logger:{info(){},warn(){},error(){}},dryRun:false,remote:false,sourceId} as OperationContext;
+    const invoke=()=>query.handler(ctx,{query:'alpha keyword',expand:false,limit:5});
+    const ref=`local:${calibrationId}`;
+    try{
+      resetDecideSearchCache();
+      const before=calls().length;
+      await run(async()=>{expect(await invoke()).toBeDefined();}, {}, 4);
+      await flushDecideWrites();
+      expect(calls().length).toBe(before);
+      const unqualified=await engine.executeRaw<Record<string,unknown>>(
+        'SELECT answer_value,error_reason,policy_fingerprint FROM decision_receipts WHERE slot=$1 AND call_site=$2 AND calibration_ref=$3 ORDER BY id',
+        ['answerable','query',ref]);
+      expect(unqualified).toHaveLength(1);
+      expect(unqualified[0]).toMatchObject({answer_value:null,error_reason:'no_qualification'});
+      const fingerprint=String(unqualified[0]!.policy_fingerprint);
+      expect(fingerprint).toMatch(/^[a-f0-9]{16}$/);
+      await storeQualification(engine,calibrationId,{action_precision_lb:0.95,qualification:'synthetic gate fixture',policy_fingerprint:fingerprint});
+      resetDecideSearchCache();
+      await run(async()=>{expect(await invoke()).toBeDefined();}, {}, 4);
+      await flushDecideWrites();
+      const qualified=await engine.executeRaw<Record<string,unknown>>(
+        'SELECT provider,model_resolved,answer_value,error_reason,policy_fingerprint FROM decision_receipts WHERE slot=$1 AND call_site=$2 AND calibration_ref=$3 ORDER BY id',
+        ['answerable','query',ref]);
+      expect(qualified).toHaveLength(2);
+      expect(qualified[1]).toMatchObject({provider:'llm:codex-cli:gpt-test',model_resolved:'codex-cli:gpt-test',
+        error_reason:null,policy_fingerprint:fingerprint});
+      expect(qualified[1]!.answer_value).not.toBeNull();
+      expect(calls().length).toBe(before+1);
+    }finally{
+      for(const key of Object.keys(keys))await engine.setConfig(key,'');
+      await engine.executeRaw('DELETE FROM decide_calibrations WHERE id=$1',[calibrationId]);
+      await engine.executeRaw('DELETE FROM pages WHERE id=$1',[queryPage.id]);
+      resetDecideSearchCache();
+    }
   });
   test('calibration lookup is source scoped and hides unpublished profiles from remote callers',async()=>{
     async function profile(source:string,text:string){await engine.executeRaw(`INSERT INTO calibration_profiles(source_id,holder,published,total_resolved,pattern_statements,active_bias_tags,model_id,domain_scorecards,voice_gate_passed,voice_gate_attempts) VALUES($1,'self',false,5,$2::text[],ARRAY[]::text[],'fixture','{}'::jsonb,true,1)`,[source,[text]]);}

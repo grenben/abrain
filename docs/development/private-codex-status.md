@@ -27,9 +27,13 @@ serialize through validation and acceptance, so parallel decision slots do not
 race the subscription lane. Fake-executable PGLite tests cover standalone
 search, the query operation and think decisions with hash-only receipts.
 The same think/search intent and query-operation answerability receipts pass
-on a disposable PostgreSQL brain. The shared 426-case think contract passes
-on both PGLite and PostgreSQL. Calibrated action across slots and real-runtime
-qualification remain open.
+on a disposable PostgreSQL brain. A synthetic calibration fixture on both
+engines proves that query answerability stays inactive without qualification
+and admits a Codex turn only after a matching policy fingerprint and action
+precision lower bound are stored. This checks the gate, not the model's
+measured precision. The shared 427-case think contract passes on both PGLite
+and PostgreSQL. Real calibration datasets, calibrated action across slots and
+real-runtime qualification remain open.
 
 ## Installation and source evidence (2026-10-09)
 
