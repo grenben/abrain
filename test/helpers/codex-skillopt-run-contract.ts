@@ -105,7 +105,7 @@ export function codexSkilloptRunContract(f: Fixture) {
     test('local USD-only, missing scope, malformed grant and unsupported producers fail before invocation', async () => {
       let invoked = false;
       for (const args of [[], ['--max-usd', '5'], localArgs().filter(v => v !== '--read-prefix' && v !== 'notes/*'),
-        [...localArgs(), '--read-prefix', 'notes/*'], [...localArgs(), '--codex-max-attempts', '10'], [...localArgs(), '--follow'], [...localArgs(), '--all', '--background']]) {
+        [...localArgs(), '--read-prefix', 'notes/*'], [...localArgs(), '--codex-max-attempts', '10'], [...localArgs(), '--follow']]) {
         await expect(withSkillOptAllowance(f.engine(), args, async () => { invoked = true; })).rejects.toThrow();
       }
       expect(invoked).toBe(false); expect(f.calls()).toHaveLength(0);
@@ -115,7 +115,10 @@ export function codexSkilloptRunContract(f: Fixture) {
       const args = localArgs(), before = [process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')];
       const localRun = () => withSkillOptAllowance(f.engine(), args, (_, scope) => runSkillOpt(opts(scope)));
       const original = store.saveOptimizerCheckpoint, fault = spyOn(store, 'saveOptimizerCheckpoint').mockImplementationOnce(async (...input) => {
-        await original(...input); process.emit('SIGINT');
+        await original(...input);
+        const cancel = process.listeners('SIGINT').at(-1);
+        if (!cancel) throw new Error('local cancellation handler was not registered');
+        (cancel as () => void)();
       });
       try { await expect(localRun()).rejects.toMatchObject({ code: 'subscription_owner_lost' }); } finally { fault.mockRestore(); }
       expect([process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')]).toEqual(before);

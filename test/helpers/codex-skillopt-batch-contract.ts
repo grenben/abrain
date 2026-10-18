@@ -63,8 +63,9 @@ export function codexSkilloptBatchContract(f: Fixture) {
     });
     test('valid empty selection is distinct from a missing directory or conflicting CLI controls', async () => {
       await expect(run({ skillsDir: join(dir, 'missing') })).rejects.toThrow();
-      for (const extra of [['--benchmark', '/unused'], ['--brain-wide-max-cost-usd', '1'], ['--background']])
+      for (const extra of [['--benchmark', '/unused'], ['--brain-wide-max-cost-usd', '1']])
         await expect(withSkillOptAllowance(f.engine(), [...args, ...extra], async () => undefined)).rejects.toThrow();
+      expect(await withSkillOptAllowance(f.engine(), [...args, '--background'], async remaining => remaining.includes('--background'))).toBe(true);
       expect(await f.engine().executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
       expect(await run({ filter: () => false })).toMatchObject({ skills_scanned: 0, skills_run: 0, errored: 0, cumulative_cost_usd: null });
       expect((await batch())!.state).toBe('complete'); expect(f.calls()).toHaveLength(0);

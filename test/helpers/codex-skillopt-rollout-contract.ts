@@ -45,9 +45,9 @@ export function codexSkilloptRolloutContract(f: Fixture) {
       await run(async () => {
         const result = await runRollout(opts({ codex }));
         expect(result.tool_calls.map(t => t.name)).toEqual(['list_pages', 'get_page']);
-        expect(result.tool_calls[0]!.output).toMatchObject({ mode: 'listing', items: expect.arrayContaining([
-          expect.objectContaining({ slug: 'notes/one', source_id: 'default' }),
-        ]) });
+        const listing = result.tool_calls[0]!.output as { mode: string; items: Array<{ slug: string; source_id: string }> };
+        expect(listing.mode).toBe('listing');
+        expect(listing.items).toContainEqual(expect.objectContaining({ slug: 'notes/one', source_id: 'default' }));
         expect(await runRollout(opts({ codex }))).toEqual(result);
         await expect(runRollout(opts())).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
         expect(await f.engine().executeRaw("SELECT data->>'read_registry' AS registry FROM minion_jobs")).toEqual([{ registry: 'codex-discovery-v1' }]);
