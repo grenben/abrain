@@ -3,14 +3,14 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-The isolated integration checkout is restamped onto upstream 0.60.296.0 as
-source version 0.60.297.0. Its private migrations are registered at v261–v288.
-This checkout has passed the repository verification gates; the installed
+The isolated integration checkout is restamped onto upstream 0.60.303.0 as
+source version 0.60.304.0. Its private migrations are registered at v261–v288.
+This checkout passed all 84 repository verification checks; the installed
 0.60.96.0 package and its database have not been changed.
 
 Latest source checkpoint: [standalone benchmark bootstrap jobs](private-codex-bootstrap-cli.md)
 adds PostgreSQL background submission and fenced worker publication for
-standalone skill benchmark drafts. Migration head is 285; queued PostgreSQL
+standalone skill benchmark drafts. Migration head is 288; queued PostgreSQL
 batch and bootstrap jobs retain permanent request bindings. Scheduled optimizer
 cycles retain source-scoped selection and receipt-backed cooldowns. The public
 queued batch API is exported from `gbrain/core/skillopt`. Fleet and remote

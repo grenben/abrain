@@ -830,7 +830,10 @@
         "tryLoadSnapshot"
       ],
       "./pglite-lock": [
+        "LEGACY_UNVERIFIED_WHY",
+        "LegacyOwnerUnverifiedError",
         "LiveServeLockError",
+        "PGLITE_LOCK_PROTOCOL",
         "PgliteBusyError",
         "acquireKernelLockOnly",
         "acquireLock",
@@ -840,12 +843,15 @@
         "inspectLockHolder",
         "isPidReusedByOtherProgram",
         "isProcessAlive",
+        "legacyOwnerUnverified",
         "msSinceLastReap",
         "peekLock",
         "pgliteLockDirFor",
         "processStartTime",
         "readBootId",
+        "readMetadata",
         "readPidNs",
+        "readProcessArgs",
         "releaseLock"
       ],
       "./search/evidence-delivery": [

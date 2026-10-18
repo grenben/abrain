@@ -35,7 +35,8 @@
  * ci:local uses (scripts/ubicloud/ci-item.sh). The pg-arms lane runs every
  * file in test/postgres-unit-arms.txt with DATABASE_URL set, the way
  * persistence-validation's unit-postgres-arms job does, and fails the run when
- * a shard of that job's partition measures over its step timeout. Durations of every run are
+ * a shard of that job's partition measures over its step timeout; with the unit
+ * and slow lanes it does the same for test.yml's unit shards. Durations of every run are
  * merged into .context/ci-ubicloud/weights.json, which weights the next run.
  *
  * VMs are named ubirun-<owner>-<epoch>-ciNN<hex> (owner: UBI_OWNER or the
@@ -67,6 +68,7 @@ import {
 import { runScript, type RunScriptOpts } from "./ubicloud/run-script.ts";
 import { buildTypecheckState, portableBuildInfo, typecheckBuildInfo } from "./ubicloud/typecheck-state.ts";
 import { ARM_SHARDS, ARM_STEP_TIMEOUT_MS, ARM_WEIGHTS, armShards, readArmsList } from "./postgres-unit-arms.ts";
+import { UNIT_JOB_TIMEOUT_MS, UNIT_SETUP_ALLOWANCE_MS, UNIT_SHARDS, unitShards } from "./sharding.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const RUNNER = join(ROOT, "scripts/ubicloud/ubi-runner.sh");
@@ -542,6 +544,20 @@ async function main() {
     for (const s of armShardReport) console.log(`    ${s.shard}/${ARM_SHARDS}: ${Math.round(s.ms / 1000)}s across ${s.files} files`);
   }
   const overBudget = armShardReport.filter((s) => s.ms > ARM_STEP_TIMEOUT_MS);
+  // The same proof for test.yml's unit shards: test-shard.sh's own partition,
+  // summed from this run's measured unit and slow file durations.
+  const unitShardRoomMs = UNIT_JOB_TIMEOUT_MS - UNIT_SETUP_ALLOWANCE_MS;
+  const unitShardReport = opts.lanes.has("unit") && opts.lanes.has("slow")
+    ? unitShards(ROOT).map((files, i) => {
+      const measured = files.map((file) => results.get(weightKey("unit", file))?.ms ?? results.get(weightKey("slow", file))?.ms);
+      return { shard: i + 1, files: files.length, unmeasured: measured.filter((ms) => ms === undefined).length, ms: measured.reduce<number>((sum, ms) => sum + (ms ?? 0), 0) };
+    })
+    : [];
+  if (unitShardReport.length) {
+    console.log(`  unit shards (test.yml partition, ${UNIT_SHARDS} shards, ${unitShardRoomMs / 1000}s each after setup):`);
+    for (const s of unitShardReport) console.log(`    ${s.shard}/${UNIT_SHARDS}: ${Math.round(s.ms / 1000)}s across ${s.files} files${s.unmeasured ? ` (${s.unmeasured} not run by this gate)` : ""}`);
+  }
+  const unitOverBudget = unitShardReport.filter((s) => s.ms > unitShardRoomMs);
 
   const timings: Record<string, number> = {};
   for (const r of all) if (r.rc === 0 && r.file !== "-") timings[weightKey(r.lane as Lane, r.file)] = r.ms;
@@ -560,6 +576,7 @@ async function main() {
     vms: vms.map(({ name, state, setupMs, infraErrors }) => ({ name, state, setupMs, infraErrors })),
     lanes: Object.fromEntries(byLane), failures: failures.map(({ lane, file, rc, ms, vm }) => ({ lane, file, rc, ms, vm })),
     armShards: armShardReport,
+    unitShards: unitShardReport,
   }, null, 2) + "\n");
 
   if (failures.length) {
@@ -575,6 +592,10 @@ async function main() {
   }
   if (overBudget.length) {
     console.log(`\npg-arms: ${overBudget.map((s) => `shard ${s.shard}/${ARM_SHARDS} measured ${Math.round(s.ms / 1000)}s`).join(", ")}, over the ${ARM_STEP_TIMEOUT_MS / 1000}s step timeout of persistence-validation's unit-postgres-arms job, which would cut that shard off mid-list. Fix: raise ARM_SHARDS (and the workflow matrix) or speed up the heaviest files, then re-mine scripts/postgres-arm-weights.json. Docs: docs/TESTING.md#postgres-arm-lanes`);
+    exitCode = 1;
+  }
+  if (unitOverBudget.length) {
+    console.log(`\nunit: ${unitOverBudget.map((s) => `shard ${s.shard}/${UNIT_SHARDS} measured ${Math.round(s.ms / 1000)}s`).join(", ")}, over the ${unitShardRoomMs / 1000}s a test.yml unit shard has inside its job timeout after setup, which would cancel that shard mid-list. Fix: raise UNIT_SHARDS (and both workflow matrices) or speed up the heaviest files, then re-mine scripts/test-weights.json. Docs: docs/TESTING.md#keeping-ci-partitions-balanced`);
     exitCode = 1;
   }
   const expected = totalItems;

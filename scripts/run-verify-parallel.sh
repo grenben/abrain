@@ -18,6 +18,8 @@
 #
 # Env overrides:
 #   GBRAIN_VERIFY_TIMEOUT       per-check wallclock cap, seconds (default 120)
+#   GBRAIN_VERIFY_SKIP_TYPECHECK=1  leave typecheck out: test.yml's typecheck job
+#                               runs tsc in parallel under its own measured timeout
 #   GBRAIN_VERIFY_LOG_DIR       where to write per-check logs (default tempdir,
 #                               removed on success and kept on failure)
 #   GBRAIN_TEST_RECEIPT_DIR     also write the verify receipt (X2): one JUnit
@@ -163,6 +165,9 @@ CHECKS=(
   # W5 (refactor wave 1): per-function line ratchet over src/**/*.ts (TS AST,
   # ~1.5s); baseline scripts/function-size-baseline.tsv.
   "check:function-size"
+  # GBRA-130: per-item catches that test an error code against a list and
+  # rethrow the rest only shrink; baseline scripts/item-allowlist-catches-baseline.tsv.
+  "check:item-allowlist-catches"
   # EO10 (refactor wave 1): engine-sql/ and schema-migrations/ never import
   # back up into the engine façades or migrate.ts (ESM TDZ cycles).
   "check:layering"
@@ -229,6 +234,11 @@ SOLO_CHECKS=(
   # Budget: 30 s wall clock (scripts/guard-self-test.sh BUDGET_SECONDS).
   "check:guard-self-test"
 )
+if [ "${GBRAIN_VERIFY_SKIP_TYPECHECK:-}" = "1" ]; then
+  KEPT=()
+  for c in "${CHECKS[@]}"; do [ "$c" = "typecheck" ] || KEPT+=("$c"); done
+  CHECKS=("${KEPT[@]}")
+fi
 ALL_CHECKS=("${CHECKS[@]}" "${SOLO_CHECKS[@]}")
 
 if [ "${#CHECKS[@]}" -eq 0 ]; then

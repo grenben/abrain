@@ -1494,6 +1494,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'facts.extraction_max_tokens',
   // Automatic facts drain caps (src/core/facts/drain.ts FACTS_DRAIN_KEYS).
   'facts.drain_budget_usd', 'facts.drain_daily_budget_usd', 'facts.drain_max_jobs',
+  'facts.absorb_retry.max_resubmits', // C-9: re-submits per dead page-write facts-absorb job (default 3; 0 disables; facts/dead-absorb-retry.ts)
   // #3852: operator-set system-prompt appendix for the facts extractor (e.g.
   // a durable-vs-ephemeral rubric for agent work-session transcripts).
   // Composes with BOTH honest-notability prompt variants.

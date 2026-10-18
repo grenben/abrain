@@ -277,7 +277,9 @@
     "mergeOntologyFact#corroborate": {},
     "mergeOntologyFact#insert": {},
     "mergeOntologyFact#supersede": {},
-    "migrateFactsToCanonical#default": {},
+    "migrateFactsToCanonical#default": {
+      "raw": 1
+    },
     "purgeDeletedPages#default": {},
     "purgeDeletedPages#dryRun": {},
     "putContradictionCacheEntry#default": {},
@@ -403,7 +405,7 @@
     "traversePathsDetailed#out+sourceId+linkType": {},
     "updatePageContextualRetrievalState#default": {},
     "updateSlug#moved": {
-      "raw": 11,
+      "raw": 13,
       "tx": 1
     },
     "updateSlug#noop": {

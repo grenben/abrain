@@ -11,6 +11,7 @@ import { readPageSnapshot as readCanonicalPageSnapshot } from './page-state/snap
 import { readPageSnapshotsBatch } from './page-snapshot-batch.ts';
 import { createPageVersion } from './page-state/versions.ts';
 import { moveSlugBindings, recordRenameAlias } from './page-state/rename-alias.ts';
+import { dropPhantomMigrationDuplicates } from './facts/ontology-rekey.ts';
 import { composablePostgresTransaction, transactionMemo } from './page-state/transactions.ts';
 import type { PageReadScope } from './types.ts';
 import type { PageReadPolicy } from './types.ts';
@@ -166,6 +167,7 @@ export function cancelSettleMs(): number {
 import type { SqlExecutor } from './engine-sql/executor.ts';
 import { scopedRead, unscopedExecutor } from './engine-sql/brands.ts';
 import { writerStamp } from './persistence/writer-versions.ts';
+import { wellFormedJson } from './text-safe.ts';
 
 function escapeSqlStringLiteral(value: string): string {
   return value.replace(/'/g, "''");
@@ -867,7 +869,7 @@ export class PostgresEngine implements BrainEngine {
 
   async purgeDeletedPages(
     olderThanHours: number,
-    opts?: { dryRun?: boolean },
+    opts?: { dryRun?: boolean; excludeIds?: number[] },
   ): Promise<{ slugs: string[]; count: number; pages?: { slug: string; deleted_at: Date }[] }> {
     return pagesImpl.purgeDeletedPages(this.engineSql, olderThanHours, opts);
   }
@@ -906,13 +908,12 @@ export class PostgresEngine implements BrainEngine {
     // index. MAX counts expired rows too (the index only excludes NULL);
     // NULL + M stays NULL (legacy-guard semantics intact). extract_facts
     // hasRowNumDrift re-harmonises the numbering against the disk fence.
-    // Idempotent by virtue of the WHERE clause matching nothing on re-run.
-    //
-    // We scope to `expired_at IS NULL` so the migration touches only
+    // Idempotent by virtue of the WHERE clause matching nothing on re-run. We scope to `expired_at IS NULL` so the migration touches only
     // active facts. Forgotten / superseded rows that already carry an
     // expiry stay where they are — soft-deleting the phantom page is
     // sufficient to make them invisible without rewriting their slug
-    // (and rewriting would break the audit trail in listSupersessions).
+    // (and rewriting would break the audit trail in listSupersessions). B-10: an observation the canonical page already holds would collide on idx_facts_ontology_stint_dedup; drop it first.
+    await dropPhantomMigrationDuplicates(this, sourceId, canonicalSlug, phantomSlug);
     const result = await sql`
       UPDATE facts
       SET entity_slug = ${canonicalSlug},
@@ -1646,7 +1647,7 @@ export class PostgresEngine implements BrainEngine {
     return chunksImpl.deleteChunks(this.engineSql, slug, opts);
   }
 
-  async countStalePagesForExtraction(opts?: { sourceId?: string; versionTs?: string; attendance?: 'exclude' | 'blocked' }): Promise<number> {
+  async countStalePagesForExtraction(opts?: { sourceId?: string; versionTs?: string; attendance?: 'exclude' | 'blocked'; held?: 'exclude' | 'only' }): Promise<number> {
     return this.withScopedReadTransaction(undefined, opts?.sourceId, tx => pagesImpl.countStalePagesForExtraction(scopedRead(this.engineSqlOn(tx)), opts));
   }
 
@@ -1655,6 +1656,7 @@ export class PostgresEngine implements BrainEngine {
     afterPageId?: number;
     sourceId?: string;
     versionTs?: string;
+    held?: 'exclude';
   }): Promise<StalePageRow[]> {
     return this.withScopedReadTransaction(undefined, opts.sourceId, tx => pagesImpl.listStalePagesForExtraction(scopedRead(this.engineSqlOn(tx)), opts));
   }
@@ -2137,6 +2139,7 @@ export class PostgresEngine implements BrainEngine {
 
   async putDreamVerdict(filePath: string, contentHash: string, verdict: DreamVerdictInput): Promise<void> {
     const sql = this.sql;
+    verdict = wellFormedJson(verdict);
     // Expiry is computed server-side (now() + TTL) so it lives on the same
     // clock as the `expires_at > now()` read predicate and judged_at.
     await sql`

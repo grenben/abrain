@@ -37,6 +37,10 @@ function equalFile(path: string, bytes: Buffer): boolean {
     } finally { fs.closeSync(fd); }
   } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
 }
+function linkStagedFile(temp: string, path: string, bytes: Buffer): void {
+  try { fs.linkSync(temp, path); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !equalFile(path, bytes)) throw error; }
+}
 /** Owner-only immutable staging; partial staging resumes only from absent or exact expected files. */
 export function stageSharedOptimizer(input: SharedOptimizerInput): { skillsDir: string; benchmarkPath: string; heldOutPath?: string } {
   const root = input.stageRoot; assertLegacySkillFilesystemWrite(root); directory(dirname(root)); directory(root);
@@ -52,7 +56,7 @@ export function stageSharedOptimizer(input: SharedOptimizerInput): { skillsDir: 
     const temp = join(dirname(path), `.codex-stage-${randomUUID()}.tmp`), fd = fs.openSync(temp, 'wx', 0o600);
     try {
       try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      try { fs.linkSync(temp, path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !equalFile(path, bytes)) throw error; }
+      linkStagedFile(temp, path, bytes);
       flushDirectory(dirname(path));
     } finally { fs.rmSync(temp, { force: true }); }
   }

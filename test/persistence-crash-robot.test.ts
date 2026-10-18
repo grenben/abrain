@@ -24,7 +24,7 @@ import { FULL_ROBOT_SECONDS, ROBOT_TOPOLOGY, restrict, runRobotPhase, type Robot
 import { robotFailure, robotFullGate, runValidation, spawnWorker } from '../scripts/persistence/validate.ts';
 import { faultPoint, installFaultHook, type FaultDetail, type FaultPoint } from '../src/core/persistence/fault-points.ts';
 import { shrinkRun } from '../scripts/persistence/shrink.ts';
-import { runSchedule, runSteps } from '../scripts/persistence/crash-robot.ts';
+import { finish, runSchedule, runSteps, seamCounter } from '../scripts/persistence/crash-robot.ts';
 import { installLockOrderTrace, lockOrderReport } from '../scripts/persistence/lock-order.ts';
 import { prepareTopology } from '../scripts/persistence/history-fixture.ts';
 import { claimPersistenceEffect, releaseAbandonedClaims } from '../src/core/persistence/effect-journal.ts';
@@ -430,6 +430,40 @@ process.stdout.write('{"event":"continued"}\\n');
         { event: 'fault', point: 'consumer:claiming', nth: 3, detail: {} },
       ]);
     } finally { child.kill('SIGKILL'); await child.exited; rmSync(dir, { recursive: true, force: true }); }
+  }, 90_000);
+
+  test('#6957: finish waits for the claim pass after its probe, so the last claim epoch a count role sees is reached in every run', async () => {
+    await robotBrain(async ({ world }) => {
+      const counted = seamCounter(); const prepared = new Set<string>(); let slots = 0;
+      world.claimPasses = 0;
+      // Every claim pass is slow to start, so the one the consumer makes after the probe commits lands only when finish waits for it.
+      installFaultHook(async (point, detail) => {
+        if (point === 'consumer:preparing' && detail.writeId) prepared.add(detail.writeId);
+        if (point !== 'consumer:claiming') { counted(point, detail); return; }
+        await Bun.sleep(1000);
+        world.claimPasses!++; slots += counted(point, detail);
+      });
+      try { await finish(world, new ReferenceModel(world), 'probe only'); }
+      finally { installFaultHook(undefined); }
+      expect({ prepared: prepared.size, slots }).toEqual({ prepared: 1, slots: 2 });
+    });
+  }, 90_000);
+
+  test('seed 5105: finish drains its probe\'s effects, so the probe\'s effect:git:mid a count role may see is reached in every run', async () => {
+    await robotBrain(async ({ world }) => {
+      const reached: string[] = [];
+      world.claimPasses = 0;
+      // Every effect seam is slow, so the probe's git effect reaches its seam only when finish waits for it.
+      installFaultHook(async (point, detail) => {
+        if (point === 'consumer:claiming') { world.claimPasses!++; return; }
+        if (!point.startsWith('effect:')) return;
+        await Bun.sleep(1500);
+        reached.push(`${point}:${detail.requestId}`);
+      });
+      try { await finish(world, new ReferenceModel(world), 'probe only'); }
+      finally { installFaultHook(undefined); }
+      expect(reached.filter(seam => seam.startsWith('effect:git:mid:'))).toHaveLength(1);
+    });
   }, 90_000);
 
   test('a hook that cannot report its fault emits fault_hook_error and still freezes', async () => {

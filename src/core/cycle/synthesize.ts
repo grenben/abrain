@@ -8,6 +8,7 @@ import { assertTriageRoute, isCodexTriageModel, validateCodexTriage, triageVersi
 import { observationDateLine, observationDateRule } from '../ai/date-grounding.ts';
 import { isConsumerDateGroundingOn } from '../facts/extract.ts';
 import { maintenancePreflight, publishMaintenancePage, type MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
+import { reportFileHolds, reverseWriteDreamRefs, writeDreamPageFile } from './derived-write-through.ts';
 import { deferPublishOrThrow, finishDeferredPostprocess, loadCommittedOutputsOrDefer, postprocessManagedSynthesis, withPostprocessConflicts, withPublishPending, type PostprocessConflict, type RetainedOutput } from './synthesize-postprocess.ts';
 /**
  * Synthesize phase (v0.23; #4152 two-stage cascade) — conversation-to-brain
@@ -58,7 +59,6 @@ import { deferPublishOrThrow, finishDeferredPostprocess, loadCommittedOutputsOrD
  *     (manual `gbrain dream retriage --audit-rejects` is the v1 control).
  */
 
-import { writeFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { AIConfigError } from '../ai/errors.ts';
 import { resolveChatContextTokens } from '../ai/model-resolver.ts';
@@ -93,15 +93,14 @@ import { discoverTranscripts, DEFAULT_EXCLUDE_PATTERNS, type DiscoveredTranscrip
 import { loadStorageConfig, isDbOnly } from '../storage-config.ts';
 import { serializeMarkdown, serializePageToMarkdown } from '../markdown.ts';
 import type { Page, PageType } from '../types.ts';
-import { validateSourceId } from '../utils.ts';
-import { safeSplitIndex } from '../text-safe.ts';
+import { safeSplitIndex, truncateUtf8 } from '../text-safe.ts';
 import { PAGE_SLUG_SEG } from '../cjk.ts';
 import { withChatPhase, estimateChatCostUsd } from '../ai/chat-usage.ts';
 import { verifyAndRepairDreamPages, normForGrounding, readVerifyEpoch, loadChildWriteEpochs, isDreamOwnedPage, type QuoteVerifyStats, type TranscriptForVerify } from './synthesize-verify.ts';
 import { dreamBreakerRefusal, loadDreamBreaker } from './dream-breaker.ts';
 import { resolveTriageDecide, type TriageDecide, type TriageDecideStats } from './triage-decide.ts';
 import { OperationError } from '../ops/contract.ts';
-import { backoffUntil, recordUnreliableTriage, responseDiagnostic, triageBackoffDetails, TRIAGE_UNRELIABLE_BACKOFF, type TriageDiagnostic } from './triage-backoff.ts';
+import { backoffUntil, recordUnreliableTriage, responseDiagnostic, triageBackoffDetails, TRIAGE_UNRELIABLE_BACKOFF, VerdictCacheWrites, type TriageDiagnostic, type VerdictCacheFailure } from './triage-backoff.ts';
 import { resolveGroundingDecide } from './grounding-decide.ts';
 import { passesTriageGate, rescueConfigOf, DEFAULT_RESCUE_FLOOR, DEFAULT_RESCUE_MIN_SEGMENTS, DEFAULT_RESCUE_CONTENT_TYPES, DEFAULT_RESCUE_CONFIG, type RescueConfig, type RescueVerdictLike } from './triage-rescue.ts';
 
@@ -575,7 +574,7 @@ async function runPhaseSynthesizeInner(
       judged: pass.judged,
       cache_hits: pass.cacheHits,
       unreliable: pass.unreliable,
-      deferred: pass.deferred, ...triageBackoffDetails(pass.backoff),
+      deferred: pass.deferred, ...triageBackoffDetails(pass.backoff), ...(pass.verdictCacheFailures.length ? { verdict_cache_failures: pass.verdictCacheFailures } : {}),
       degraded: degradedCount,
       below_threshold: pass.reports.filter(r => r.score !== null && !r.worth).length,
       // F6 spend visibility: judge-call tokens for this pass's cache MISSES
@@ -1181,15 +1180,15 @@ async function runPhaseSynthesizeInner(
     if (!maintenance) await stampDreamProvenance(engine, writtenRefs, summaryDate, opts.signal);
 
     // Dual-write: reverse-render each DB row → markdown file.
-    const reverseWriteCount = maintenance ? (maintenance.binding ? writtenRefs.length : 0)
-      : await reverseWriteRefs(engine, opts.brainDir, writtenRefs, cycleSourceId, opts.signal);
+    const fileHolds: string[] = [];
+    const reverseWriteCount = maintenance ? (maintenance.binding ? writtenRefs.length : 0) : await reverseWriteRefs(engine, opts.brainDir, writtenRefs, cycleSourceId, opts.signal, fileHolds);
 
     const summarySlug = buildDreamSummarySlug(config.outputRoot, summaryDate);
     const writtenSlugs = writtenRefs.map(r => r.slug);
     if (SUMMARY_SLUG_RE.test(summarySlug) && !publishPending) {
       const preserveSummary = maintenance && !writtenRefs.length && await engine.readPageSnapshot(summarySlug, { sourceId: cycleSourceId });
       if (!preserveSummary) await writeSummaryPage(engine, opts.brainDir, summarySlug, summaryDate, finalizedRefs.map(r => r.slug), childOutcomes, cycleSourceId, opts.signal, maintenance)
-        .catch((e: unknown) => { deferPublishOrThrow(e, summarySlug); publishPending++; });
+        .then(held => held && fileHolds.push(held), (e: unknown) => { deferPublishOrThrow(e, summarySlug); publishPending++; });
     }
 
     // #4077: nothing below runs for a cancelled cycle — no phase-end embed
@@ -1361,7 +1360,7 @@ async function runPhaseSynthesizeInner(
     const turnsSamples = childOutcomes.filter(
       (o): o is { jobId: number; status: string; turns: number } => typeof o.turns === 'number',
     );
-    return withPostprocessConflicts(postprocessConflicts, withPublishPending(publishPending, ok(`${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s${deferralSuffix}`, {
+    return reportFileHolds(withPostprocessConflicts(postprocessConflicts, withPublishPending(publishPending, ok(`${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s${deferralSuffix}`, {
       transcripts_discovered: transcripts.length,
       transcripts_processed: submittedTranscripts,
       pages_written: writtenSlugs.length,
@@ -1428,7 +1427,7 @@ async function runPhaseSynthesizeInner(
         // child counters + triage pass usage). cost_usd null when unpriced.
         spend: spendBlock,
       },
-    }), postprocessDeferral));
+    }), postprocessDeferral)), fileHolds, 'page');
   } catch (e) {
     return failed(makeError('InternalError', 'SYNTH_PHASE_FAIL', e instanceof Error ? (e.message || 'synthesize phase threw') : String(e),
       e instanceof OperationError ? e.suggestion : undefined), e instanceof OperationError ? { error_code: e.code } : {});
@@ -2052,7 +2051,7 @@ Quote verbatim; never paraphrase inside "quote".`;
     // buildTriageMapBlock (security review, #4152).
     const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
     const contentType = typeof parsed.content_type === 'string'
-      ? collapse(parsed.content_type).toLowerCase().slice(0, 40) || null
+      ? truncateUtf8(collapse(parsed.content_type).toLowerCase(), 40) || null
       : null;
     const segments: TriageSegment[] = Array.isArray(parsed.segments)
       ? parsed.segments
@@ -2061,15 +2060,15 @@ Quote verbatim; never paraphrase inside "quote".`;
             && (s as { quote: string }).quote.trim().length > 0)
           .slice(0, 8)
           .map(s => ({
-            quote: collapse(s.quote).slice(0, 300),
-            ...(typeof s.note === 'string' && s.note.trim() ? { note: collapse(s.note).slice(0, 200) } : {}),
+            quote: truncateUtf8(collapse(s.quote), 300),
+            ...(typeof s.note === 'string' && s.note.trim() ? { note: truncateUtf8(collapse(s.note), 200) } : {}),
           }))
       : [];
     const entities = Array.isArray(parsed.entities)
       ? parsed.entities
           .filter((e): e is string => typeof e === 'string' && e.trim().length > 0)
           .slice(0, 12)
-          .map(e => collapse(e).slice(0, 80))
+          .map(e => truncateUtf8(collapse(e), 80))
       : [];
     const reasons = Array.isArray(parsed.reasons)
       ? parsed.reasons.filter((r): r is string => typeof r === 'string').slice(0, 4)
@@ -2258,6 +2257,8 @@ export interface TriagePassResult {
   tokens: { in: number; out: number };
   /** S7 decide stats, present only when the slot is not off. */
   decide?: TriageDecideStats;
+  /** Verdicts judged this pass that the database refused to cache (GBRA-130 B-6); each still decided this pass. */
+  verdictCacheFailures: VerdictCacheFailure[];
 }
 
 /**
@@ -2280,7 +2281,9 @@ export interface TriagePassResult {
  * Failure contract (byte-compatible with the pre-#4152 sequential loop):
  * a null judge client or an AIConfigError degrades PER TRANSCRIPT (reason
  * entry, nothing cached, phase continues); any other error aborts new pulls,
- * lets in-flight items settle, and rethrows (the phase fails).
+ * lets in-flight items settle, and rethrows (the phase fails). A verdict the
+ * database refuses to cache for one transcript does not stop the pass
+ * (`VerdictCacheWrites`, GBRA-130 B-6).
  *
  * Lock renewal: `yieldDuringPhase` ticks at most once per 30s (single-flight).
  * The cycle lock has its own background refresher (cycle.ts
@@ -2313,6 +2316,7 @@ export async function runTriagePass(
   let cursor = 0;
   let abortError: unknown = null;
   let stopped = false;
+  const verdictCache = new VerdictCacheWrites();
 
   // Coarse single-flight lock-renewal tick (at most every 30s).
   let lastTick = start;
@@ -2458,7 +2462,7 @@ export async function runTriagePass(
       if (triage.answeredBy) {
         process.stderr.write(`[dream] triage for ${t.basename} came from fallback model ${triage.answeredBy}; not caching in dream_verdicts\n`);
       } else {
-        await engine.putDreamVerdict(t.filePath, t.contentHash, {
+        await verdictCache.put(engine, t, {
           worth_processing: triage.worth_processing,
           reasons: triage.reasons,
           score: triage.score,
@@ -2467,7 +2471,7 @@ export async function runTriagePass(
           entities: triage.entities,
           model: cfg.model,
           triage_version: triageVersion,
-        });
+        }, { existing, keepExisting: existing !== null && isTriageCacheValid(existing, cfg.model), signal: cfg.signal });
       }
       byPath.set(t.filePath, {
         worth_processing: triage.worth_processing,
@@ -2532,6 +2536,7 @@ export async function runTriagePass(
     Array.from({ length: Math.min(concurrency, Math.max(1, transcripts.length)) }, () => worker()),
   );
   if (abortError !== null) throw abortError;
+  await verdictCache.backOff(engine, { model: cfg.model, triageVersion, aborted: cfg.signal?.aborted === true });
 
   // Defensive: today every claimed index either sets its report or the pass
   // rethrows above, so no holes can exist — but a future early-exit path
@@ -2552,7 +2557,7 @@ export async function runTriagePass(
     }
   }
 
-  return { reports, byPath, judged, cacheHits, unreliable: unreliableCount, deferred: deferredCount, backoff: backoffCount, tokens: { in: tokensIn, out: tokensOut }, ...(cfg.decide ? { decide: cfg.decide.stats } : {}) };
+  return { reports, byPath, judged, cacheHits, unreliable: unreliableCount, deferred: deferredCount, backoff: backoffCount, tokens: { in: tokensIn, out: tokensOut }, verdictCacheFailures: verdictCache.failures, ...(cfg.decide ? { decide: cfg.decide.stats } : {}) };
 }
 
 // ── Subagent prompt ──────────────────────────────────────────────────
@@ -2655,7 +2660,7 @@ export function buildTriageMapBlock(
     lines.push('- candidate segments:');
     for (let i = 0; i < segments.length; i++) {
       const s = segments[i];
-      lines.push(`  ${i + 1}. "${s.quote.slice(0, 300)}"${s.note ? ` — ${s.note.slice(0, 200)}` : ''}`);
+      lines.push(`  ${i + 1}. "${truncateUtf8(s.quote, 300)}"${s.note ? ` — ${truncateUtf8(s.note, 200)}` : ''}`);
     }
   }
   if (chunkTotal > 1) {
@@ -2851,43 +2856,11 @@ async function collectChildPutPageSlugs(
 
 // ── Reverse-write DB rows → markdown files ───────────────────────────
 
-async function reverseWriteRefs(
-  engine: BrainEngine,
-  brainDir: string,
-  refs: Array<{ slug: string; source_id: string; first_write_at?: Date }>,
-  nativeSourceId = 'default',
-  signal?: AbortSignal,
-): Promise<number> {
-  let count = 0;
-  for (const { slug, source_id, first_write_at } of refs) {
-    throwIfAborted(signal, '[dream] synthesize reverse-write');
-    // v0.32.8 F6: validate source_id is filesystem-safe before any join().
-    validateSourceId(source_id);
-    const page = await engine.getPage(slug, { sourceId: source_id });
-    if (!page) continue;
-    const tags = await engine.getTags(slug, { sourceId: source_id });
-    // #4077: re-check after the row reads — an abort that lands during
-    // getPage/getTags must not reach this ref's file write.
-    throwIfAborted(signal, '[dream] synthesize reverse-write');
-    try {
-      const md = isDreamOwnedPage(page, first_write_at) ? renderPageToMarkdown(page, tags) : serializePageToMarkdown(page, tags);
-      // v0.32.8 F6: foreign-source pages land at brainDir/.sources/<id>/<slug>.md
-      // so same-slug-different-source pages don't collide. Pages belonging to
-      // the cycle's own source (#1586: brainDir IS that source's checkout —
-      // legacy 'default' when unscoped) stay at brainDir/<slug>.md.
-      const filePath = source_id === nativeSourceId
-        ? join(brainDir, `${slug}.md`)
-        : join(brainDir, '.sources', source_id, `${slug}.md`);
-      mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, md, 'utf8');
-      count++;
-    } catch (e) {
-      // Per-slug failures are non-fatal — phase continues.
-      const msg = e instanceof Error ? e.message : String(e);
-      process.stderr.write(`[dream] reverse-write ${slug}@${source_id} failed: ${msg}\n`);
-    }
-  }
-  return count;
+/** Reverse-render each page a child wrote to its markdown file (`reverseWriteDreamRefs`, #6982); holds go to `held`. */
+async function reverseWriteRefs(engine: BrainEngine, brainDir: string, refs: Array<{ slug: string; source_id: string; first_write_at?: Date }>,
+  nativeSourceId = 'default', signal?: AbortSignal, held?: string[]): Promise<number> {
+  return reverseWriteDreamRefs(engine, brainDir, refs, { phase: 'synthesize', nativeSourceId, signal, held,
+    render: (page, tags, ref) => isDreamOwnedPage(page, ref.first_write_at) ? renderPageToMarkdown(page, tags) : serializePageToMarkdown(page, tags) });
 }
 
 /**
@@ -2937,6 +2910,11 @@ export function renderPageToMarkdown(page: Page, tags: string[]): string {
  */
 const SUMMARY_LINK_SAMPLE_LIMIT = 20;
 
+/**
+ * Write the cycle's summary index page: the database row (the prior body kept in page_versions, `putDerivedPage`),
+ * then its file through `writeDreamPageFile` (#6982). Returns the file's `file_database_drift` entry when the file
+ * holds an edit the database lacks and was kept.
+ */
 async function writeSummaryPage(
   engine: BrainEngine,
   brainDir: string,
@@ -2947,7 +2925,7 @@ async function writeSummaryPage(
   sourceId = 'default',
   signal?: AbortSignal,
   maintenance?: MaintenanceAuthority | null,
-): Promise<void> {
+): Promise<string | undefined> {
   throwIfAborted(signal, '[dream] synthesize summary');
   const completed = childOutcomes.filter(c => c.status === 'completed').length;
   const failed = childOutcomes.length - completed;
@@ -3008,7 +2986,7 @@ async function writeSummaryPage(
     compiled_truth: parsed.compiled_truth,
     timeline: parsed.timeline,
     frontmatter: parsed.frontmatter,
-  }, { sourceId });
+  }, { sourceId, tags: parsed.tags });
 
   const fileWriteRaw = (await engine.getConfig('dream.synthesize.summary_file_write'))?.trim().toLowerCase();
   const fileWriteEnabled = !(fileWriteRaw === 'false' || fileWriteRaw === '0' || fileWriteRaw === 'off');
@@ -3038,13 +3016,14 @@ async function writeSummaryPage(
     return;
   }
   try {
-    const filePath = join(brainDir, `${summarySlug}.md`);
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, fullMarkdown, 'utf8');
+    const file = await writeDreamPageFile(engine, brainDir, summarySlug, sourceId, { nativeSourceId: sourceId, markdown: fullMarkdown });
+    if (!file.written && file.held) return file.held;
+    if (!file.written && file.error) process.stderr.write(`[dream] summary file-write failed: ${file.error}\n`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     process.stderr.write(`[dream] summary file-write failed: ${msg}\n`);
   }
+  return undefined;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
