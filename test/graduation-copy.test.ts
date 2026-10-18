@@ -91,6 +91,11 @@ async function seedSource(source: BrainEngine): Promise<void> {
              (2, 'done-job', 'completed', 1, NULL, NULL, now(), NULL)`);
     await tx.executeRaw("SELECT setval('minion_jobs_id_seq', 2, true)");
     await tx.executeRaw("INSERT INTO config (key, value) VALUES ('source.only', 'carried'), ('Zz.case', 'kept') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+    await tx.executeRaw(`INSERT INTO codex_subscription_runs(run_id,account_lane,max_attempts,max_turns,deadline,parent_run_id)
+      VALUES ('z-parent','lane',3,3,now() + interval '1 hour',NULL),
+             ('a-child','lane',1,1,now() + interval '1 hour','z-parent')`);
+    await tx.executeRaw(`INSERT INTO codex_subscription_attempts(attempt_id,run_id,account_lane,request_hash,owner_id,state)
+      VALUES ('a-attempt','a-child','lane','hash','owner','unresolved')`);
   });
 }
 
@@ -113,7 +118,7 @@ for (const backend of testBackends()) {
         const e = { source, target };
         const runId = randomUUID();
         const [targetVersion] = await target.executeRaw<{ value: string }>("SELECT value FROM config WHERE key = 'version'");
-        const relations = ['config', 'sources', 'graduation_test_types', 'facts', 'minion_jobs'];
+        const relations = ['config', 'sources', 'graduation_test_types', 'facts', 'minion_jobs', 'codex_subscription_runs', 'codex_subscription_attempts'];
         const batches: number[] = [];
         for (const relation of relations) {
           const { rows } = await copyTable(e, entry(relation), { bypass, runId, batchBytes: 64, onBatch: n => { batches.push(n); } });
@@ -129,6 +134,10 @@ for (const backend of testBackends()) {
         expect(await target.executeRaw("SELECT value FROM config WHERE key = 'source.only'")).toEqual([{ value: 'carried' }]);
         expect(await target.executeRaw('SELECT len FROM graduation_test_types WHERE k = $1', ['a_b'])).toEqual([{ len: 300_000 }]);
         expect(await target.executeRaw('SELECT superseded_by::int AS superseded_by FROM facts WHERE id = 1')).toEqual([{ superseded_by: 3 }]);
+        expect(await target.executeRaw("SELECT parent_run_id FROM codex_subscription_runs WHERE run_id = 'a-child'"))
+          .toEqual([{ parent_run_id: 'z-parent' }]);
+        expect(await target.executeRaw("SELECT state FROM codex_subscription_attempts WHERE attempt_id = 'a-attempt'"))
+          .toEqual([{ state: 'unresolved' }]);
         expect(await target.executeRaw(`SELECT status, claim_generation::int AS claim_generation, lock_token, lock_until, started_at, timeout_at FROM minion_jobs WHERE id = 1`))
           .toEqual([{ status: 'waiting', claim_generation: 3, lock_token: null, lock_until: null, started_at: null, timeout_at: null }]);
         expect(await target.executeRaw("SELECT status FROM minion_jobs WHERE id = 2 AND started_at IS NOT NULL")).toEqual([{ status: 'completed' }]);

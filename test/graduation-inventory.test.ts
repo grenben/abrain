@@ -44,7 +44,8 @@ afterAll(async () => {
 
 /** Self-referencing FKs the copy handles in two passes; any other self-reference or cycle must be designed for first. */
 const KNOWN_SELF_FKS = [
-  'facts(superseded_by)', 'minion_jobs(budget_owner_job_id)', 'minion_jobs(parent_job_id)', 'minion_jobs(private_queue_owner_job_id)',
+  'codex_subscription_runs(parent_run_id)', 'facts(superseded_by)', 'minion_jobs(budget_owner_job_id)',
+  'minion_jobs(parent_job_id)', 'minion_jobs(private_queue_owner_job_id)',
 ];
 
 async function expectCode(promise: Promise<unknown>, code: string): Promise<OperationError> {
@@ -60,7 +61,7 @@ describe('graduation inventory', () => {
     expect(new Set(names).size).toBe(names.length);
     const counts: Record<string, number> = {};
     for (const e of GRADUATION_INVENTORY.entries) counts[e.class] = (counts[e.class] ?? 0) + 1;
-    expect(counts).toEqual({ carry: 122, rebind: 2, rebuild: 2, discard: 7, schema_owned: 4 });
+    expect(counts).toEqual({ carry: 143, rebind: 2, rebuild: 2, discard: 7, schema_owned: 4 });
     for (const e of GRADUATION_INVENTORY.entries) {
       expect({ relation: e.relation, reason: e.reason.length > 5, present: e.engines.pglite || e.engines.postgres })
         .toEqual({ relation: e.relation, reason: true, present: true });
