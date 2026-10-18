@@ -1,5 +1,4 @@
-import { dataFrontmatter as matter, FrontmatterLanguageError } from './data-frontmatter.ts';
-import { load as yamlLoad } from 'js-yaml';
+import { dataFrontmatter as matter, FrontmatterLanguageError, loadBoundedYaml as yamlLoad } from './data-frontmatter.ts';
 import type { Page, PageType } from './types.ts';
 import { resolveSlugForPath, slugifyPath } from './sync.ts';
 import {

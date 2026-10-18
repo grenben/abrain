@@ -10,7 +10,7 @@ credits are retained; no result has been reassigned to another provider. Origina
 identifiers and attribution are available in the pre-removal Git revision
 `6040075c6cb95be5881cc2e1b76ef7d71f4e5d29` (retained on 2026-09-23).
 
-## [0.60.305.0] - 2026-10-19
+## [0.60.306.0] - 2026-10-19
 
 **Private Codex proposals are retained and checked by the brain host before publication.**
 This development release adds source-bound subscription runs, durable proposal and
@@ -19,9 +19,29 @@ skill, cycle, evaluation, and contextual indexing workflows. A native proposal
 cannot publish after its grant, source binding, or job ownership expires. The
 new tables and guards are supplied by migrations v261–v288 for both engines.
 
-This source integration checkpoint also includes upstream 0.60.304.0, including its published schema migrations v258–v260. Production activation still requires
+This source integration checkpoint also includes upstream 0.60.305.0, including its bounded YAML alias-expansion guard and published schema migrations v258–v260. Production activation still requires
 runtime qualification, a configured private account lane, and validation against
 the target host database. The installed brain is not migrated by this release.
+## [0.60.305.0] - 2026-10-18
+
+**A few hundred bytes of crafted frontmatter can no longer take down your brain.** YAML lets a value refer back to another value, and nesting those references multiplies them: a 432-byte page sent through `put_page` used to expand into gigabytes in memory and crash a PGLite brain, and a committed file like it could kill `gbrain sync`. Any caller with write access could do it, including a remote agent over MCP. gbrain now measures how far a frontmatter block would expand before it uses it, and refuses one that would grow far past its own size.
+
+### What changed
+
+| Situation | Before | Now |
+|---|---|---|
+| `put_page` / `edit_page` with frontmatter whose YAML aliases expand past the limit | stored the expanded value (681 KB from 324 bytes, 6.1 MB from 378 bytes) or ran the database out of memory (432 bytes) | refused `invalid_frontmatter`; nothing is written |
+| `gbrain sync` reaches such a file (classic or managed) | stored it whole, or the process was killed for running out of memory | the file is held `invalid_frontmatter` with a message naming the alias limit and its line; every other file keeps syncing |
+| Ordinary anchors and merge keys (`<<: *defaults`) | read | still read: a block may expand up to its own length plus 64 KiB |
+
+### What you need to do
+
+Nothing. Real frontmatter stays far below the limit. If a file is held for it, replace its anchors and aliases with plain values, commit, and run `gbrain sync --source <id> --no-pull`.
+
+### Itemized changes
+
+- `loadBoundedYaml` in `src/core/data-frontmatter.ts` is the only js-yaml `load` in `src/`. Every frontmatter, skill and manifest parse goes through it: `data-frontmatter`, `markdown`, `brain-writer`, `frontmatter-recovery`, `skill-frontmatter`, `shared-skills/manifest`, `skill-catalog` and `sync-rename-identity`. After loading, it sizes the value as if every alias were copied out (a shared node is measured once, a cycle counts as unbounded) and throws `YamlAliasBoundError`, shaped like a js-yaml parse error, past the text length plus 65,536 characters, before anything serializes the value.
+- Tests: `test/pathological/s-47-yaml-alias-bomb.test.ts` (remote `put_page` and `edit_page` through MCP dispatch, classic and managed sync, and a 9-level parse-time guard) and its Postgres arm `test/e2e/s-47-yaml-alias-bomb-postgres.test.ts`.
 
 ## [0.60.304.0] - 2026-10-18
 

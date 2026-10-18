@@ -30,7 +30,8 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, openSync, readSync, closeSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
-import { JSON_SCHEMA, load as yamlLoad } from 'js-yaml';
+import { JSON_SCHEMA } from 'js-yaml';
+import { loadBoundedYaml as yamlLoad } from './data-frontmatter.ts';
 import type { BrainEngine } from './engine.ts';
 import { spawn } from './spawn.ts';
 import { gitChildEnv } from './git-env.ts';
