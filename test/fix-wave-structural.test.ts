@@ -249,7 +249,9 @@ describe('#2084 — cli.ts owns process-exit teardown via finishCliTeardown', ()
     // awaited literal, so this is comment-proof — eng-review D13.2). A bare
     // disconnect skips the bounded drain + computed-deadline backstop and
     // reopens the lingering-socket hang class.
-    const src = surfaceSource('cli');
+    // The dispatcher owns process-exit teardown. Delegated private-codex
+    // subcommands open and close their own short-lived engines independently.
+    const src = surfaceFileSource('cli', 'src/cli/main.ts');
     expect(src).not.toContain('await engine.disconnect()');
     expect(src).not.toContain('await eng.disconnect()');
   });

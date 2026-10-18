@@ -124,7 +124,7 @@ src/core/workspace-push.ts	0	filesystem_guard	The resolved git root is checked b
 src/core/write-through.ts	1	filesystem_guard	Source filesystem lock and canonical page SQL guards reject legacy publication.
 src/eval/brainbench/seed.ts	3	isolated_eval	Explicit isolated evaluation database only; never opened against the active managed brain. Direct importFromContent calls without prepare refuse on managed brains before any write (assertUnmanagedCanonicalWriter).
 src/eval/chronicle/harness.ts	2	isolated_eval	Explicit isolated evaluation database only; never opened against the active managed brain.
-src/eval/longmemeval/extract.ts	1	isolated_eval	Explicit isolated evaluation database only; never opened against the active managed brain.
+src/eval/longmemeval/extract.ts	2	isolated_eval	Explicit isolated evaluation database only; private Codex admission also reads the source incarnation before publishing there, never against the active managed brain.
 src/commands/reinit-pglite.ts	0	filesystem_guard	Managed datastore registry refuses destructive reinit even offline; unmanaged rename requires the stable native lock.
 src/core/persistence/maintenance.ts	0	filesystem_guard	Legacy managed writers refuse before effects; unmanaged datastore backup retains native exclusion through rename.
 src/commands/files.ts	0	filesystem_guard	Attachment copying, redirection, restore and cleanup refuse paths in managed canonical trees before file effects.
