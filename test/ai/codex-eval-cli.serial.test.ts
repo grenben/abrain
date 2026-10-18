@@ -31,7 +31,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
 {type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:21,cached_input_tokens:0,output_tokens:9}}])console.log(JSON.stringify(event));
 `,{mode:0o700});
   writeFileSync(preload,`
-import {readFileSync,appendFileSync} from 'node:fs';
+import {readFileSync,appendFileSync,fstatSync,statSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {__registerCodexFixtureForTests} from ${JSON.stringify(join(repo,'src/core/ai/providers/codex-qualification.ts'))};
 import {PGLiteEngine} from ${JSON.stringify(join(repo,'src/core/pglite-engine.ts'))};
@@ -40,7 +40,13 @@ const deny=kind=>{appendFileSync(${JSON.stringify(tripwire)},kind+'\\n');throw n
 globalThis.fetch=()=>deny('network');
 for(const key of ['spawn','spawnSync']){const original=Bun[key];Bun[key]=(...args)=>{
 const argv=Array.isArray(args[0])?args[0]:args[0]?.cmd;
-if(argv?.[0]!==${JSON.stringify(bin)})return deny('subprocess');return original(...args);};}
+const options=Array.isArray(args[0])?args[1]:args[0],fd=options?.stdio?.[3];
+const pinned=process.platform==='linux'?'/proc/self/fd/3':'/dev/fd/3';
+let approved=false;
+if(argv?.[0]===pinned&&Number.isInteger(fd)){
+  try{const opened=fstatSync(fd),fixture=statSync(${JSON.stringify(bin)});approved=opened.dev===fixture.dev&&opened.ino===fixture.ino;}catch{}
+}
+if(!approved)return deny('subprocess');return original(...args);};}
 const owners=new WeakSet(),connect=PGLiteEngine.prototype.connect,init=PGLiteEngine.prototype.initSchema;
 PGLiteEngine.prototype.connect=async function(c){if(c.database_path===${JSON.stringify(db)})owners.add(this);return connect.call(this,c);};
 PGLiteEngine.prototype.initSchema=async function(...args){if(owners.has(this))return deny('owner migration');return init.apply(this,args);};
