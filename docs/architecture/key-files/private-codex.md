@@ -1,5 +1,10 @@
 # Private Codex source modules
 
+- `src/core/brainstorm/codex-publication{,-guard,-prepare}.ts` — protocol 5 for retained native brainstorm page plans. Migration v258 extends the journal protocol guard on both engines. Admission and commit validate the retained canonical request, source authority, optional job claim and evidence revisions; canonical file effects and provenance use the existing coordinator and receipts. Older consumers refuse the new protocol.
+- `src/core/persistence/codex-action-{schema,guard,prepare}.ts` — protocol 3 for recoverable host-owned Codex page actions. Migration 262 binds action ledger rows to prepared writes. Admission and publication check the retained job claim, input and authority identity, and source; the ordinary untrusted page preparer preserves page protections and rechecks the observed revision at commit.
+- `src/core/minions/codex-action-writes.ts` — retains immutable host write authority before effects, reuses canonical action-derived request IDs, and reconciles actual receipts before further inference. Required writes exclude no-ops and quarantined commits. Shared action fixtures cover both storage engines; see `docs/development/private-codex-actions.md`.
+
+
 ## Experimental private Codex source
 
 - `src/core/skillopt/codex-cycle.ts` — private scheduled phase through the real batch coordinator, explicit trusted source/read scope and inherited subscription admission. `codex-cycle-config.ts` validates configuration; `codex-cycle-store.ts` retains frozen selection and source/incarnation cooldowns backed by actual batch receipts; `codex-cycle-context.ts` prevents unrelated workflows from adopting cycle identities. Migration v268 (`codex-cycle-schema.ts`) has storage parity. `cycle-phase.ts` retains default-off and legacy behavior; `cycle.ts` threads explicit source/deadline. `test/helpers/codex-skillopt-cycle-contract.ts` covers dispatcher, queued maintenance, partial publication and honest stamp behavior. See [scheduled cycles](../../development/private-codex-skillopt-cycles.md).
