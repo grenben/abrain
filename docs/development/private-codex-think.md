@@ -55,7 +55,7 @@ retained; this change does not assign a USD price to subscription inference.
 | Direct CLI | No private subscription allowance surface | Host-context calls supported; missing allowance fails before retrieval | Explicit CLI grant wiring; save/take publication now covered by the follow-up checkpoint |
 | Auto-think | Uses runThink with legacy admission/publication | Inherits validated private synthesis when host-admitted | Cycle budgets, canonical receipts, crash recovery and cooldown gates |
 | Calibration A/B | Injected runner and direct result insert | Existing harness remains unchanged | Actual private runner, failed-trial handling, scoped durable receipts |
-| System One decisions | Optional Typesafe/LLM proxy slots | Enabled slots conflict explicitly with this private path before dispatch | Native Codex decision implementation |
+| System One decisions | Optional Typesafe/LLM proxy slots | Enabled slots conflict before private think dispatch; the shared runner also refuses strict-private query, search and background calls before provider transport | Native Codex decision implementation |
 
 The existing `rounds` option is still single-pass scaffolding with an explicit
 warning for values above one. This checkpoint does not claim an iterative think

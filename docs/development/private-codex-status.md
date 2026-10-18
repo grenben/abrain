@@ -17,6 +17,13 @@ queued batch API is exported from `gbrain/core/skillopt`. Fleet and remote
 producers, broader query/graph tools, full dispatch coverage and production
 runtime qualification remain incomplete.
 
+The shared System One decision runner now refuses every provider at its entry
+point when strict private Codex mode is configured. Query, search and background
+callers can reach that runner without passing through private think's earlier
+decision-slot check; none may dispatch a TypeSafe or ordinary LLM decision as a
+hidden paid fallback. Native Codex decision questions, calibration and receipts
+still require their own implementation and acceptance tests.
+
 ## Installation and source evidence (2026-10-09)
 
 - The shell GBrain launcher resolves through `~/.local/bin/gbrain` and

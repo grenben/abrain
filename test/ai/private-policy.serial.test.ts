@@ -3,8 +3,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
+import { runDecide } from '../../src/core/ai/decide/index.ts';
+import { readDecideConfig } from '../../src/core/ai/decide/config.ts';
 import { resolveModelDetailed } from '../../src/core/model-config.ts';
-import { configureGateway, chat, getChatModel, getExpansionModel, resetGateway } from '../../src/core/ai/gateway.ts';
+import { configureGateway, chat, getChatModel, getExpansionModel, resetGateway, __setChatTransportForTests, __setDecideTransportForTests } from '../../src/core/ai/gateway.ts';
 import { invokeAI } from '../../src/core/ai/invocation-guard.ts';
 import { makeSubagentHandler } from '../../src/core/minions/handlers/subagent.ts';
 const root = mkdtempSync(join(tmpdir(), 'private-policy-'));
@@ -14,6 +16,7 @@ const privateConfig = { private_codex: { mode: 'strict', model: 'codex-cli:gpt-t
 function save(value: unknown) { writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify(value)); }
 beforeEach(() => { process.env.GBRAIN_HOME = root; delete process.env.GBRAIN_MODEL; save(privateConfig); });
 afterAll(() => {
+  __setChatTransportForTests(null); __setDecideTransportForTests(null);
   if (oldHome === undefined) delete process.env.GBRAIN_HOME; else process.env.GBRAIN_HOME=oldHome;
   if (oldModel === undefined) delete process.env.GBRAIN_MODEL; else process.env.GBRAIN_MODEL=oldModel;
   resetGateway(); rmSync(root, { recursive: true, force: true });
@@ -53,6 +56,28 @@ describe('strict private routing', () => {
     const handler=makeSubagentHandler({engine:{} as any, makeAnthropic:()=>{constructed++;throw new Error('tripwire');}});
     await expect(handler({} as any)).rejects.toMatchObject({code:'private_native_loop_unsupported'});
     expect(constructed).toBe(0);
+  });
+  test('shared decision runner refuses every provider before query, search or background dispatch', async () => {
+    let calls = 0;
+    configureGateway({ env: { TYPESAFE_API_KEY: 'synthetic' } });
+    __setDecideTransportForTests(async () => { calls++; return new Response('{}'); });
+    __setChatTransportForTests(async () => { calls++; throw new Error('unexpected chat transport'); });
+    try {
+      const config = readDecideConfig({ 'decide.provider': 'typesafe:jev-1.13.0', 'decide.slots.intent.mode': 'on' });
+      for (const [provider, slot, callSite] of [
+        ['typesafe:jev-1.13.0', 'intent', 'search'], ['llm:openai:gpt-test', 'answerable', 'query'],
+        ['llm:codex-cli:gpt-test', 'conflict', 'sweep'],
+      ] as const) {
+        const question = slot === 'answerable'
+          ? { id: 'q:0', kind: 'noul' as const, instructions: 'Is there evidence?' }
+          : { id: 'q:0', kind: 'choice' as const, instructions: 'Classify.', options: { other: 'Other' } };
+        await expect(runDecide({ slot, callSite, provider, state: { query: { class: 'query', text: 'test' } }, questions: [question] },
+          { engine: null, config })).rejects.toMatchObject({ source: 'decide:provider', code: 'private_route_conflict' });
+      }
+      expect(calls).toBe(0);
+    } finally {
+      __setChatTransportForTests(null); __setDecideTransportForTests(null);
+    }
   });
   test('DB cannot activate private mode; ordinary resolver retains its behavior', async () => {
     save({}); expect(readPrivateCodexConfig()).toBeUndefined();

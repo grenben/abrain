@@ -19,6 +19,7 @@ import {
   applyOpenAICompatConfig, applyResolveAuth, authToHeaders, chat, decideTransport, getCurrentBudgetTracker, requireConfig,
 } from '../gateway.ts';
 import { invokeAI, isAIInvocationPolicyError, responseInvocationUsage } from '../invocation-guard.ts';
+import { readPrivateCodexConfig, PrivateRoutingError } from '../private-policy.ts';
 import { recordOnTracker } from '../budget-record.ts';
 import { getRecipe } from '../recipes/index.ts';
 import { typesafeApiKey } from '../recipes/typesafe.ts';
@@ -81,6 +82,9 @@ export async function runDecide(req: DecideRequest, ctx: DecideContext): Promise
   const started = now();
   const cfg = ctx.config ?? await loadDecideConfig(ctx.engine);
   const provider = req.provider ?? cfg.slots[req.slot].provider;
+  // Query, search and background slots reach this runner without private think's gate.
+  // No decide provider has a qualified private Codex contract yet.
+  if (readPrivateCodexConfig()) throw new PrivateRoutingError('decide:provider');
   const lane = req.lane ?? SLOT_SPECS[req.slot].lane;
   const kind = providerKind(provider);
   if (kind === 'none') throw new DecideError('no_provider', 'decide: no provider configured');
