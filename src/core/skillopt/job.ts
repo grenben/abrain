@@ -130,6 +130,11 @@ export async function skillOptJobOptions(engine: BrainEngine, rawData: unknown):
 
 export async function runSkillOptJob(engine: BrainEngine, rawData: unknown, context?: MinionJobContext): Promise<Record<string, unknown>> {
   const data = structuredClone((rawData ?? {}) as Record<string, unknown>);
+  if (data.optimizer_batch_protocol !== undefined) {
+    if (!context) throw new Error('skillopt batch job requires its host job context');
+    const result = await (await import('./codex-batch-job.ts')).runCodexSkillOptBatchJob(engine, data, context);
+    return result;
+  }
   const native = !!readPrivateCodexConfig() || data.optimizer_protocol !== undefined || data.shared_skill !== undefined;
   const scope = native ? await (await import('./codex-job.ts')).codexOptimizerJobScope(engine, data, context) : {};
   const result = await runSkillOpt({ ...await skillOptJobOptions(engine, data), ...scope });

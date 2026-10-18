@@ -88,6 +88,12 @@
       "codex_skillopt_batch_members.codex_skillopt_batch_members_pkey": "p PRIMARY KEY (batch_run_id, ordinal)",
       "codex_skillopt_batch_members.codex_skillopt_batch_members_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
       "codex_skillopt_batch_members.codex_skillopt_batch_members_run_id_key": "u UNIQUE (run_id)",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_data_hash_check": "c CHECK ((data_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id) ON DELETE RESTRICT",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_job_id_key": "u UNIQUE (job_id)",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_pkey": "p PRIMARY KEY (request_id)",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_request_hash_check": "c CHECK ((request_hash ~ '^[a-f0-9]{64}$'::text))",
       "codex_skillopt_batches.codex_skillopt_batches_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
       "codex_skillopt_batches.codex_skillopt_batches_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
       "codex_skillopt_batches.codex_skillopt_batches_check2": "c CHECK (((state <> 'complete'::text) OR (result IS NOT NULL)))",
@@ -545,6 +551,9 @@
       "codex_skillopt_batch_members": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
+      "codex_skillopt_batch_submissions": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
       "codex_skillopt_batches": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
@@ -907,6 +916,8 @@
       "codex_shared_skill_optimizations_request_id_key": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_request_id_key ON public.codex_shared_skill_optimizations USING btree (request_id)",
       "codex_skillopt_batch_members_pkey": "CREATE UNIQUE INDEX codex_skillopt_batch_members_pkey ON public.codex_skillopt_batch_members USING btree (batch_run_id, ordinal)",
       "codex_skillopt_batch_members_run_id_key": "CREATE UNIQUE INDEX codex_skillopt_batch_members_run_id_key ON public.codex_skillopt_batch_members USING btree (run_id)",
+      "codex_skillopt_batch_submissions_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_batch_submissions_job_id_key ON public.codex_skillopt_batch_submissions USING btree (job_id)",
+      "codex_skillopt_batch_submissions_pkey": "CREATE UNIQUE INDEX codex_skillopt_batch_submissions_pkey ON public.codex_skillopt_batch_submissions USING btree (request_id)",
       "codex_skillopt_batches_pkey": "CREATE UNIQUE INDEX codex_skillopt_batches_pkey ON public.codex_skillopt_batches USING btree (run_id)",
       "codex_skillopt_bootstraps_pkey": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_pkey ON public.codex_skillopt_bootstraps USING btree (run_id)",
       "codex_skillopt_cycles_cooldown": "CREATE INDEX codex_skillopt_cycles_cooldown ON public.codex_skillopt_cycles USING btree (source_id, source_incarnation, settled_at DESC)",
@@ -1487,6 +1498,17 @@
           "2 ordinal integer/int4 NOT NULL",
           "3 run_id text/text NOT NULL",
           "4 input_hash text/text NOT NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_batch_submissions": {
+        "columns": [
+          "1 request_id uuid/uuid NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 request_hash text/text NOT NULL",
+          "4 data_hash text/text NOT NULL",
+          "5 job_id bigint/int8 NOT NULL",
+          "6 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },

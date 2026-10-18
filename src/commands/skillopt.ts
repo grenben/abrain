@@ -168,42 +168,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
 
   // ── F4: --all batch mode ────────────────────────────────────────────────
   if (parsed.all) {
-    try {
-      const { runBatchAll } = await import('../core/skillopt/batch.ts');
-      const basePlan = await buildModelsPlan(engine, models);
-      process.stderr.write(formatModelsBanner(basePlan));
-      const result = await runBatchAll({
-        engine,
-        skillsDir,
-        ...scope,
-        maxRuntimeMin: parsed.maxRuntimeMin,
-        mode: parsed.mode,
-        bootstrapReviewed: parsed.bootstrapReviewed,
-        heldOutPath: parsed.heldOutPath,
-        perSkillMaxCostUsd: parsed.maxCostUsd,
-        maxCostSource: parsed.maxCostSource === 'user' || parsed.brainWideMaxCostUsd !== undefined ? 'user' : 'default',
-        brainWideMaxCostUsd: parsed.brainWideMaxCostUsd ?? 10.0,
-        optimizerModel,
-        targetModel,
-        judgeModel,
-        models,
-        modelsStrict: parsed.modelsStrict,
-        modelsBannerBaseline: basePlan,
-        ...(parsed.reflectMaxTokens !== undefined ? { reflectMaxTokens: parsed.reflectMaxTokens } : {}),
-        epochs: parsed.epochs,
-        batchSize: parsed.batchSize,
-        lr: parsed.lr,
-        lrSchedule: parsed.lrSchedule,
-        split: parsed.split,
-        dryRun: parsed.dryRun,
-        noMutate: parsed.noMutate,
-        allowMutateBundled: parsed.allowMutateBundled,
-        force: parsed.force,
-      });
-      process.exit(reportBatchAllResult(result, parsed));
-    } catch (err) {
-      handleErrorAndExit(err, parsed.json, 2);
-    }
+    await runAllSkillOpt(engine, args, parsed, scope, skillsDir, models, modelFlags);
     return;
   }
 
@@ -297,7 +262,14 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
           maxRuntimeMin: parsed.maxRuntimeMin,
           force: parsed.force,
         };
-        const job = scope.backgroundAllowance ? await (await import('../core/skillopt/codex-job.ts')).submitCodexSkillOpt(engine, jobInput, scope, scope.backgroundAllowance)
+        const job = scope.backgroundAllowance && parsed.all ? await (await import('../core/skillopt/codex-batch-job.ts')).submitCodexSkillOptBatch(engine, {
+          skillsDir, models, modelFlags, modelsStrict: parsed.modelsStrict, ...(parsed.reflectMaxTokens !== undefined ? { reflectMaxTokens: parsed.reflectMaxTokens } : {}),
+          epochs: parsed.epochs, batchSize: parsed.batchSize, lr: parsed.lr, lrSchedule: parsed.lrSchedule, split: parsed.split,
+          mode: parsed.mode, dryRun: parsed.dryRun, noMutate: parsed.noMutate, allowMutateBundled: parsed.allowMutateBundled,
+          ...(parsed.heldOutPath ? { heldOutPath: parsed.heldOutPath } : {}), bootstrapReviewed: parsed.bootstrapReviewed,
+          maxCostUsd: parsed.maxCostUsd, maxCostSource: parsed.maxCostSource, maxRuntimeMin: parsed.maxRuntimeMin, force: parsed.force,
+        }, scope, scope.backgroundAllowance)
+          : scope.backgroundAllowance ? await (await import('../core/skillopt/codex-job.ts')).submitCodexSkillOpt(engine, jobInput, scope, scope.backgroundAllowance)
           : await queue.add('skillopt', buildSkillOptJobData(jobInput), {
           queue: 'default',
           idempotency_key: `cli:skillopt:${parsed.skillName}`,
@@ -380,6 +352,51 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
   } catch (err) {
     handleErrorAndExit(err, parsed.json, 2);
   }
+}
+
+async function runAllSkillOpt(
+  engine: BrainEngine, args: string[], parsed: ParsedFlags, scope: LocalOptimizerScope,
+  skillsDir: string, models: Awaited<ReturnType<typeof resolveSkillOptModels>>,
+  modelFlags: { optimizerModel?: string; targetModel?: string; judgeModel?: string },
+): Promise<void> {
+  if (args.includes('--background') && !parsed.dryRun && scope.backgroundAllowance && engine.kind !== 'pglite') {
+    try {
+      const job = await (await import('../core/skillopt/codex-batch-job.ts')).submitCodexSkillOptBatch(engine, {
+        skillsDir, models, modelFlags, modelsStrict: parsed.modelsStrict, ...(parsed.reflectMaxTokens !== undefined ? { reflectMaxTokens: parsed.reflectMaxTokens } : {}),
+        epochs: parsed.epochs, batchSize: parsed.batchSize, lr: parsed.lr, lrSchedule: parsed.lrSchedule, split: parsed.split,
+        mode: parsed.mode, dryRun: false, noMutate: parsed.noMutate, allowMutateBundled: parsed.allowMutateBundled,
+        ...(parsed.heldOutPath ? { heldOutPath: parsed.heldOutPath } : {}), bootstrapReviewed: parsed.bootstrapReviewed,
+        maxCostUsd: parsed.maxCostUsd, maxCostSource: parsed.maxCostSource, maxRuntimeMin: parsed.maxRuntimeMin, force: parsed.force,
+      }, scope, scope.backgroundAllowance);
+      process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; batch job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
+      process.stdout.write(`job_id=${job.id}\n`);
+      if (args.includes('--follow')) {
+        const { spawnCliChild } = await import('../core/cli-force-exit.ts');
+        const child = spawnCliChild(process.argv[0] ?? 'bun', [process.argv[1] ?? '', 'jobs', 'follow', String(job.id)]);
+        await new Promise<void>(resolve => child.on('exit', () => resolve()));
+      }
+      process.exit(0); return;
+    } catch (err) { handleErrorAndExit(err, parsed.json, 2); return; }
+  }
+  try {
+    const { runBatchAll } = await import('../core/skillopt/batch.ts');
+    const basePlan = await buildModelsPlan(engine, models);
+    process.stderr.write(formatModelsBanner(basePlan));
+    const result = await runBatchAll({
+      engine, skillsDir, ...scope, maxRuntimeMin: parsed.maxRuntimeMin, mode: parsed.mode,
+      bootstrapReviewed: parsed.bootstrapReviewed, heldOutPath: parsed.heldOutPath,
+      perSkillMaxCostUsd: parsed.maxCostUsd,
+      maxCostSource: parsed.maxCostSource === 'user' || parsed.brainWideMaxCostUsd !== undefined ? 'user' : 'default',
+      brainWideMaxCostUsd: parsed.brainWideMaxCostUsd ?? 10.0,
+      optimizerModel: models.optimizer.model, targetModel: models.target.model, judgeModel: models.judge.model,
+      models, modelsStrict: parsed.modelsStrict, modelsBannerBaseline: basePlan,
+      ...(parsed.reflectMaxTokens !== undefined ? { reflectMaxTokens: parsed.reflectMaxTokens } : {}),
+      epochs: parsed.epochs, batchSize: parsed.batchSize, lr: parsed.lr, lrSchedule: parsed.lrSchedule,
+      split: parsed.split, dryRun: parsed.dryRun, noMutate: parsed.noMutate,
+      allowMutateBundled: parsed.allowMutateBundled, force: parsed.force,
+    });
+    process.exit(reportBatchAllResult(result, parsed));
+  } catch (err) { handleErrorAndExit(err, parsed.json, 2); }
 }
 
 type RunSkillOptOutcome = NonNullable<RunReceipt['outcome']>;

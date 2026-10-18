@@ -69,12 +69,12 @@ Modes:
                                 get proposed.md for review instead.
   --json                        Machine-readable stdout
 
-Safety:
-  Private single runs and foreground --all batches require explicit admission:
+  Safety:
+  Private runs and --all batches require explicit subscription admission:
   --codex-max-attempts N        Native attempts, including failed calls (1–1000)
   --codex-max-turns N           Accepted turns (at most the attempt limit)
   --codex-deadline UTC          Absolute ISO UTC deadline (new grants: within 24h)
-  --codex-request-id UUID       Reuse unchanged inputs/limits to recover a run
+  --codex-request-id UUID       Reuse unchanged inputs/limits to recover a run/job
   --source ID                  Explicit source for private benchmark reads
   --read-prefix PATH           Allowed slug or prefix/*; repeat for more prefixes
   --read-tool NAME             Repeat: get_page, list_pages or search (keyword only)
@@ -99,14 +99,16 @@ Safety:
 
 Batch + fleet + background:
   --all                         Optimize every skill with a benchmark
-                                Private mode: shared Codex allowance, at most 20 skills.
+                                Private mode: shared allowance, at most 20 skills;
+                                --background queues one preflighted durable batch on PostgreSQL.
                                 API mode: --max-usd per skill; brain-wide USD cap below.
   --brain-wide-max-cost-usd N   Cumulative ceiling for --all (default 10.00)
   --target-models a,b,c         Fleet mode: optimize ONCE per model. Always
                                 runs no-mutate; per-model receipts under
                                 skills/<name>/skillopt/fleet/<slug>/
   --background                  Submit as a Minion job + print job_id; exits.
-                                Combine with --follow to attach.
+                                With --all, preflight and queue one retained batch
+                                on PostgreSQL. Combine with --follow to attach.
   --held-out <path>             Independent held-out test set (JSONL, same shape
                                 as the benchmark). The held-out gate refuses to
                                 promote a candidate whose held-out score is below

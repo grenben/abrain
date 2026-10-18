@@ -44,7 +44,7 @@ export async function withSkillOptAllowance<T>(engine: BrainEngine, args: string
   // These producers have separate material-input/recovery requirements; never reinterpret a grant.
   if (rest.some(a => ['--target-models', '--resume'].includes(a)))
     bad('Fleet mode and legacy --resume are not supported by this grant; recover by repeating the unchanged Codex request UUID.');
-  if (rest.includes('--all') && (shared.target || rest.some(a => ['--background', '--follow', '--bootstrap-from-skill', '--bootstrap-from-routing'].includes(a)))) bad('Private batch mode is foreground and uses individual local skill files.');
+  if (rest.includes('--all') && (shared.target || rest.some(a => ['--bootstrap-from-skill', '--bootstrap-from-routing'].includes(a)))) bad('Private batch mode uses individual local skill files; shared and bootstrap jobs need separate reviewed bundles.');
   if (rest.includes('--all') && rest.some(a => ['--benchmark', '--brain-wide-max-cost-usd'].includes(a))) bad('Private batches use per-skill benchmark files and a shared Codex allowance; use --aux-max-usd for paid auxiliary calls.');
   if (shared.target && rest.some(a => ['--bootstrap-from-skill', '--bootstrap-from-routing'].includes(a))) bad('Shared benchmark publication requires a separate reviewed bundle.');
   if (rest.includes('--follow') && !rest.includes('--background')) bad('--follow requires --background.');

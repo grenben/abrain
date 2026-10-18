@@ -78,6 +78,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     await engine.executeRaw('DELETE FROM codex_skillopt_batch_members');
     await engine.executeRaw('DELETE FROM codex_skillopt_cycles');
     await engine.executeRaw('DELETE FROM codex_skillopt_batches');
+    await engine.executeRaw('DELETE FROM codex_skillopt_batch_submissions');
     await engine.executeRaw('DELETE FROM codex_skillopt_runs');
     await engine.executeRaw('DELETE FROM codex_shared_skill_optimizations');
     await engine.executeRaw('DELETE FROM codex_skillopt_submissions');

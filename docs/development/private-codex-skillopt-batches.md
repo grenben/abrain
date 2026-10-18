@@ -76,13 +76,15 @@ prevent an old owner from releasing its replacement's lease.
 
 ## Scope and verification
 
-Foreground local CLI, direct trusted SDK batches and
+Foreground local CLI, queued PostgreSQL CLI batches, direct trusted SDK batches and
 [scheduled cycle selection](private-codex-skillopt-cycles.md) are implemented. Queued
-standalone batch execution, fleet optimization and shared
-catalog batch publication remain separate integration work. Those producers
-are not silently routed through this file-based batch protocol. Each account
-lane coordinates one database; separate databases still need shared account
-coordination.
+standalone batch submission API, fleet optimization and shared catalog batch
+publication remain separate integration work. The queue worker receives its
+own durable protocol submission, frozen per-skill hashes, request identity and
+job fence, then runs the existing retained batch coordinator. Every skill is
+validated before enqueueing and against its retained hash before execution.
+PGLite keeps its inline path because it has no worker daemon. Each account lane
+coordinates one database; separate databases still need shared account coordination.
 
 `test/helpers/codex-skillopt-batch-contract.ts` runs through actual dispatch,
 CLI, optimizer, queue, action ledger and publication seams with a fake Codex

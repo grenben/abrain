@@ -6,8 +6,9 @@ The target remains: Codex proposes; GBrain authorizes, records, executes and rec
 Latest source checkpoint: [scheduled optimizer cycles](private-codex-skillopt-cycles.md)
 connects maintenance to retained batch manifests, frozen source-scoped selection
 and receipt-backed completion/cooldowns. Foreground `skillopt --all` and trusted
-SDK batches also use retained manifests and child grants. Schema head is 268.
-Queued standalone batches, fleet and remote
+SDK batches also use retained manifests and child grants. Schema head is 269;
+queued PostgreSQL batch jobs now use a permanent request binding. Standalone
+batch submission API, fleet and remote
 producers, broader query/graph tools, full dispatch coverage and production
 runtime qualification remain incomplete.
 
@@ -715,3 +716,17 @@ revision, and deployment/production migration/service restart authorized.
 The new migration is registered for both supported engines but has only been
 applied to disposable tests. The feature remains off by default. Full container
 CI, admin UI, PgBouncer and live subscription acceptance remain unverified.
+
+## Queued optimizer batches
+
+`skillopt --all --background` now preflights selected benchmarks before one job
+is submitted. Migration 269 binds the request, payload and job; the worker checks
+the host lease and retained per-skill hashes before using the existing batch
+coordinator. Retries reuse the job and child receipts. PGLite keeps its inline
+path because it has no worker daemon.
+
+The fake Codex PostgreSQL contract completed two queued skills with 132 attempts,
+then replayed the batch without extra calls. It also rejects malformed input
+before enqueue and changed benchmark data before optimizer admission. Existing
+single-skill queue recovery regressions passed on PGLite. Migration, installation
+and activation on the installed brain remain unperformed.

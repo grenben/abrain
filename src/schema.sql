@@ -3726,3 +3726,15 @@ CREATE INDEX IF NOT EXISTS codex_skillopt_cycles_cooldown
   ON codex_skillopt_cycles(source_id,source_incarnation,settled_at DESC);
 ALTER TABLE codex_skillopt_cycles ENABLE ROW LEVEL SECURITY;
 -- END GENERATED from src/core/skillopt/codex-cycle-schema.ts (CODEX_SKILLOPT_CYCLE_SCHEMA_SQL)
+
+-- BEGIN GENERATED from src/core/skillopt/codex-batch-job-schema.ts (CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL). Edit that file, then run: bun run build:schema
+CREATE TABLE IF NOT EXISTS codex_skillopt_batch_submissions (
+  request_id UUID PRIMARY KEY,
+  protocol INTEGER NOT NULL CHECK (protocol=1),
+  request_hash TEXT NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+  data_hash TEXT NOT NULL CHECK (data_hash ~ '^[a-f0-9]{64}$'),
+  job_id BIGINT NOT NULL UNIQUE REFERENCES minion_jobs(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE codex_skillopt_batch_submissions ENABLE ROW LEVEL SECURITY;
+-- END GENERATED from src/core/skillopt/codex-batch-job-schema.ts (CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL)

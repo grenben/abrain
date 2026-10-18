@@ -14,6 +14,7 @@ import { digest } from '../persistence/digest.ts';
 import { claimOptimizerBatch, fenceOptimizerBatch, completeOptimizerBatch, releaseOptimizerBatch, type BatchInput } from './codex-batch-store.ts';
 import { withOptimizerBatchMember } from './codex-batch-context.ts';
 const invalid = (): never => { throw new CodexProposalError('invalid_input'); };
+const changedExpectedInputs = (): never => { throw new SubscriptionAdmissionError('subscription_identity_conflict'); };
 
 /** Prevalidate the entire batch, retain its manifest, then run one fenced optimizer at a time. */
 export async function runCodexSkillOptBatch(original: BatchAllOpts): Promise<BatchAllResult> {
@@ -55,6 +56,7 @@ export async function runCodexSkillOptBatch(original: BatchAllOpts): Promise<Bat
     const inputHash = digest(plan.input);
     input.entries.push({ skill: skillName, runId, inputHash, input: plan.input }); prepared.push({ runId, opts: child, inputHash });
   }
+  if (opts.codexExpectedEntries && digest(prepared.map(p => ({ skill: p.opts.skillName, inputHash: p.inputHash }))) !== digest(opts.codexExpectedEntries)) changedExpectedInputs();
   const empty = (): BatchAllResult => ({ skills_scanned: names.length, skills_run: 0, accepted: 0, no_improvement: 0, errored: 0,
     brain_wide_cap_reached: false, cumulative_cost_usd: null, per_skill: [], billing: 'subscription', remaining_quota: null });
   if (opts.dryRun) return { ...empty(), dry_run: true };

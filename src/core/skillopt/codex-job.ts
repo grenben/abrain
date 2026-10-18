@@ -80,6 +80,7 @@ export async function codexOptimizerJobScope(engine: BrainEngine, data: Record<s
       host.publicationFence?.jobId !== context.id || !host.checkAuthority || !host.checkAuthorityInTransaction)
     throw new SubscriptionAdmissionError('subscription_required');
   validateCodexOptimizerJob(data); await host.checkAuthority();
+  if (data.optimizer_batch_protocol !== undefined) conflict();
   const [binding] = await engine.executeRaw<Binding>('SELECT * FROM codex_skillopt_submissions WHERE request_id=$1::uuid', [data.optimizer_request_id]);
   if (!binding || binding.protocol !== 1 || Number(binding.job_id) !== Number(context.id) || binding.data_hash !== payloadHash(data)) conflict();
   const config = await loadConfigWithEngine(engine, loadConfig() ?? { engine: engine.kind });

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { CODEX_SKILLOPT_BATCH_SCHEMA_SQL } from '../src/core/skillopt/codex-batch-schema.ts';
 import { CODEX_SKILLOPT_CYCLE_SCHEMA_SQL } from '../src/core/skillopt/codex-cycle-schema.ts';
+import { CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL } from '../src/core/skillopt/codex-batch-job-schema.ts';
 import { SUBSCRIPTION_TREE_SCHEMA_SQL } from '../src/core/ai/subscription-tree-schema.ts';
 import { CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL } from '../src/core/brainstorm/codex-fixture-schema.ts';
 import { SUBSCRIPTION_GROUP_SCHEMA_SQL } from '../src/core/ai/subscription-group-schema.ts';
@@ -150,6 +151,7 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/ai/subscription-tree-schema.ts', expr: 'SUBSCRIPTION_TREE_SCHEMA_SQL', postgres: SUBSCRIPTION_TREE_SCHEMA_SQL, pglite: SUBSCRIPTION_TREE_SCHEMA_SQL },
   { source: 'src/core/skillopt/codex-batch-schema.ts', expr: 'CODEX_SKILLOPT_BATCH_SCHEMA_SQL', postgres: CODEX_SKILLOPT_BATCH_SCHEMA_SQL, pglite: CODEX_SKILLOPT_BATCH_SCHEMA_SQL },
   { source: 'src/core/skillopt/codex-cycle-schema.ts', expr: 'CODEX_SKILLOPT_CYCLE_SCHEMA_SQL', postgres: CODEX_SKILLOPT_CYCLE_SCHEMA_SQL, pglite: CODEX_SKILLOPT_CYCLE_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-batch-job-schema.ts', expr: 'CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL', postgres: CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL, pglite: CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL },
 ];
 
 const fragmentLabel = (f: Fragment) => `${f.source} (${f.expr})`;

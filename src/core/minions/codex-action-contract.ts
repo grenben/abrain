@@ -9,6 +9,7 @@ export const CODEX_DISCOVERY_REGISTRY = 'codex-discovery-v1';
 export const CODEX_READ_PROTOCOL = 'codex-host-read-v1';
 export const CODEX_WRITE_PROTOCOL = 'codex-host-actions-v1';
 export const CODEX_SKILLOPT_JOB_PROTOCOL = 'codex-skillopt-rollout-v1';
+export const CODEX_SKILLOPT_BATCH_JOB_PROTOCOL = 'codex-skillopt-batch-job-v1';
 export const CODEX_ACTION_LIMITS = { turns: 16, prompt: 16000, result: 16000, history: 96000, answer: 8000, content: 12000 } as const;
 export interface CodexReadJob {
   action_protocol: typeof CODEX_READ_PROTOCOL | typeof CODEX_WRITE_PROTOCOL; prompt: string; source_id: string;

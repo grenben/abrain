@@ -17,16 +17,23 @@ import { reserveSubscriptionAttempt, settleSubscriptionAttempt } from '../../src
 import { withSkillOptAllowance } from '../../src/core/skillopt/codex-local-grant.ts';
 import { runSkillOpt } from '../../src/core/skillopt/orchestrator.ts';
 import { skillOptModelOpts } from '../../src/core/skillopt/models-plan.ts';
+import { submitCodexSkillOptBatch } from '../../src/core/skillopt/codex-batch-job.ts';
 interface Fixture { engine(): BrainEngine; root: string; replies(...values: unknown[]): void; calls(): any[] }
 export function codexSkilloptJobContract(f: Fixture) {
   describe('native optimizer background jobs', () => {
-    let sequence = 0, dir: string, skill: string, benchmark: string, queue: MinionQueue;
+    let sequence = 0, dir: string, skill: string, benchmark: string, batchDir: string, queue: MinionQueue;
     const text = '---\nname: synthetic-skill\ndescription: Synthetic benchmark skill.\n---\n# Response\n\nPrefer brevity.\n';
     beforeEach(() => {
       dir = join(f.root, `background-${sequence++}`); mkdirSync(join(dir, 'synthetic-skill'), { recursive: true });
+      batchDir = join(f.root, `background-batch-${sequence}`);
+      for (const name of ['alpha', 'beta']) mkdirSync(join(batchDir, name), { recursive: true });
       skill = join(dir, 'synthetic-skill', 'SKILL.md'); benchmark = join(dir, 'benchmark.jsonl'); writeFileSync(skill, text);
       writeFileSync(benchmark, Array.from({ length: 15 }, (_, i) => JSON.stringify({ task_id: `case-${String(i).padStart(2, '0')}`,
         task: `Synthetic task ${i}.`, judge: { kind: 'rule', checks: [{ op: 'contains', arg: 'evidence' }] } })).join('\n'));
+      for (const name of ['alpha', 'beta']) {
+        writeFileSync(join(batchDir, name, 'SKILL.md'), text);
+        writeFileSync(join(batchDir, name, 'skillopt-benchmark.jsonl'), readFileSync(benchmark, 'utf8'));
+      }
       queue = new MinionQueue(f.engine()); f.replies({ autoOptimizer: true });
     });
     const grant = () => ({ requestId: '123e4567-e89b-42d3-a456-426614174000', maxAttempts: 150, maxTurns: 150, deadline: new Date(Date.now() + 3600000) });
@@ -156,6 +163,51 @@ export function codexSkilloptJobContract(f: Fixture) {
       finally { exit.mockRestore(); out.mockRestore(); }
       expect(exits).toEqual([0]); expect(f.calls()).toHaveLength(f.engine().kind === 'pglite' ? 66 : 0);
       expect(await f.engine().executeRaw('SELECT job_id FROM codex_skillopt_submissions')).toHaveLength(f.engine().kind === 'pglite' ? 0 : 1);
+    });
+    test('queued --all preflights every skill and the fenced worker replays the retained batch', async () => {
+      if (f.engine().kind === 'pglite') return;
+      const g = grant(), exits: number[] = [], output: string[] = [], errors: string[] = [];
+      const exit = spyOn(process, 'exit').mockImplementation(code => { exits.push(Number(code)); return undefined as never; });
+      const out = spyOn(process.stdout, 'write').mockImplementation(value => { output.push(String(value)); return true; });
+      const err = spyOn(process.stderr, 'write').mockImplementation(value => { errors.push(String(value)); return true; });
+      const args = ['--all', '--skills-dir', batchDir, '--epochs', '1', '--batch-size', '5', '--lr', '1', '--lr-schedule', 'constant',
+        '--split', '1:1:1', '--reflect-max-tokens', '2048', '--no-mutate', '--force', '--background', '--json',
+        '--source', 'default', '--read-prefix', 'notes/*', '--codex-request-id', g.requestId, '--codex-max-attempts', '150',
+        '--codex-max-turns', '150', '--codex-deadline', g.deadline.toISOString()];
+      try { await runSkillOptCommand(f.engine(), args); await runSkillOptCommand(f.engine(), args); }
+      finally { exit.mockRestore(); out.mockRestore(); err.mockRestore(); }
+      if (exits.some(code => code !== 0)) throw new Error(`queued batch submission error: ${errors.join('').slice(0, 1000)}`);
+      expect(exits).toEqual([0, 0]); expect(output.filter(s => s.startsWith('job_id=')).length).toBe(2);
+      expect(await f.engine().executeRaw('SELECT job_id FROM codex_skillopt_batch_submissions')).toHaveLength(1);
+      expect(await f.engine().executeRaw('SELECT id FROM minion_jobs WHERE name=\'skillopt\'')).toHaveLength(1);
+      expect(f.calls()).toHaveLength(0);
+      const job = await claim(); const result = await execute(job);
+      expect(result).toMatchObject({ billing: 'subscription', cost_usd: null, remaining_quota: null, skills_run: 2, accepted: 2, subscription: { attempts: 132 } });
+      const attempts = f.calls().length;
+      expect(await execute(job)).toEqual(result); expect(f.calls()).toHaveLength(attempts);
+      expect(await f.engine().executeRaw('SELECT state FROM codex_skillopt_batches')).toEqual([{ state: 'complete' }]);
+      expect((await f.engine().executeRaw('SELECT attempts FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-job:${job.id}:%`])).reduce((n, r) => n + Number(r.attempts), 0)).toBe(132);
+    });
+    test('queued batch preflight rejects a changed benchmark before creating a job', async () => {
+      if (f.engine().kind === 'pglite') return;
+      writeFileSync(join(batchDir, 'beta', 'skillopt-benchmark.jsonl'), 'malformed');
+      const g = grant(), base = await input();
+      const { skillName: _skillName, benchmarkPath: _benchmarkPath, ...batchInput } = base;
+      await expect(submitCodexSkillOptBatch(f.engine(), { ...batchInput, skillsDir: batchDir }, scope(), g)).rejects.toThrow();
+      expect(await f.engine().executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+      expect(await f.engine().executeRaw('SELECT request_id FROM codex_skillopt_batch_submissions')).toHaveLength(0);
+      expect(await f.engine().executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+      expect(f.calls()).toHaveLength(0);
+    });
+    test('queued worker refuses a benchmark changed after producer preflight', async () => {
+      if (f.engine().kind === 'pglite') return;
+      const g = grant(), base = await input();
+      const { skillName: _skillName, benchmarkPath: _benchmarkPath, ...batchInput } = base;
+      await submitCodexSkillOptBatch(f.engine(), { ...batchInput, skillsDir: batchDir }, scope(), g);
+      writeFileSync(join(batchDir, 'beta', 'skillopt-benchmark.jsonl'), readFileSync(join(batchDir, 'beta', 'skillopt-benchmark.jsonl'), 'utf8').replace('Synthetic task 0.', 'Changed after enqueue.'));
+      await expect(execute(await claim())).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect(await f.engine().executeRaw('SELECT run_id FROM codex_skillopt_batches')).toHaveLength(0);
+      expect(f.calls()).toHaveLength(0);
     });
   });
 }
