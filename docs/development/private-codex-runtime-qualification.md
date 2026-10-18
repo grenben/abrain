@@ -46,3 +46,29 @@ gate or silently switch to another provider to make those checks green.
 
 Bounded-feature development and fake-executable/storage tests can continue
 independently while this runtime boundary remains incomplete.
+
+## Disposable live transport probe — 2026-10-18
+
+The signed-in local 0.162.0 binary was invoked from a private scratch directory
+with GBrain's filtered environment, schema file, read-only sandbox, deny hook,
+and ephemeral JSONL arguments. This was a standalone transport probe; the
+production qualification allowlist remained empty and no brain data was used.
+
+The first invocation returned a valid JSON answer but emitted three
+`item.completed` error records before `turn.started`. They identified the
+deprecated `features.codex_hooks` and `features.memory_tool` keys and an
+unstable-feature warning for `skip_host_skill_discovery`. GBrain's strict
+lifecycle parser correctly rejected that stream as `malformed_lifecycle`.
+The argv now uses `features.hooks=true`, omits the redundant deprecated
+`memory_tool` key, and suppresses the unstable-feature notice while retaining
+`skip_host_skill_discovery=true`.
+
+With those changes, an adversarial scratch prompt asking for a harmless
+scratch-file write produced only `thread.started`, `turn.started`, an
+`agent_message`, and `turn.completed`; the parser accepted the JSON answer.
+It left no marker file and produced no native-action event. The focused fake
+transport contract passed 17 tests / 62 assertions after the argv change.
+This demonstrates that the current binary can complete the configured JSON
+transport. It does **not** prove the required pre-execution denial across all
+native and hosted action paths, hook failures, inherited configuration, or
+process-tree escapes, so the production allowlist stays empty.

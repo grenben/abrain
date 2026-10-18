@@ -53,7 +53,9 @@ describe('Codex proposal production transport with fake executable', () => {
     const seen = JSON.parse(await readFile(capture, 'utf8'));
     expect(seen.prompt).toBe('synthetic only'); expect(seen.schema).toEqual(schema);
     expect(seen.image).toEqual(Array.from(png)); expect(seen.schemaMode).toBe(0o600); expect(seen.dirMode).toBe(0o700);
-    for (const flag of ['--output-schema', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--strict-config', 'read-only', 'forced_login_method="chatgpt"', 'web_search="disabled"', 'features.shell_tool=false']) expect(seen.args).toContain(flag);
+    for (const flag of ['--output-schema', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--strict-config', 'read-only', 'forced_login_method="chatgpt"', 'web_search="disabled"', 'features.shell_tool=false', 'features.hooks=true', 'suppress_unstable_features_warning=true']) expect(seen.args).toContain(flag);
+    expect(seen.args).not.toContain('features.codex_hooks=true');
+    expect(seen.args).not.toContain('features.memory_tool=false');
     expect(seen.args.at(-1)).toBe('-'); expect(seen.args).not.toContain('synthetic only');
     expect(seen.env).not.toHaveProperty('OPENAI_API_KEY'); expect(seen.env).not.toHaveProperty('ANTHROPIC_API_KEY');
     expect(seen.env.CODEX_HOME).toBe(root);
