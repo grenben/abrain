@@ -132,7 +132,7 @@ export function makeContextualReindexHandler(opts: MakeContextualReindexHandlerO
 
   return async function contextualReindexHandler(
     ctx: MinionJobContext,
-  ): Promise<{ ok: true; mode_applied: string; chunks_embedded: number }> {
+  ): Promise<{ ok: true; mode_applied: string; chunks_embedded: number; skip_reason?: string }> {
     if (readPrivateCodexConfig()) {
       if (opts.reembedPage) throw new CodexProposalError('invalid_input');
       await preflightSubscriptionJob(engine, 'contextual_reindex_per_chunk', ctx.data ?? {});
@@ -288,7 +288,7 @@ function abortError(): Error {
 function classifyResult(
   pageSlug: string,
   result: ReembedPageResult,
-): { ok: true; mode_applied: string; chunks_embedded: number } {
+): { ok: true; mode_applied: string; chunks_embedded: number; skip_reason?: string } {
   switch (result.kind) {
     case 'success':
       return {
@@ -306,7 +306,7 @@ function classifyResult(
         chunks_embedded: result.chunks_embedded,
       };
     case 'skipped':
-      return { ok: true, mode_applied: 'skipped', chunks_embedded: 0 };
+      return { ok: true, mode_applied: 'skipped', chunks_embedded: 0, skip_reason: result.reason };
     case 'transient_error':
       // Throw so Minion retries. The queue's backoff policy handles
       // rate-limit + network blips.

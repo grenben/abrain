@@ -53,7 +53,7 @@ describe('PHASE_SCOPE coverage', () => {
     // Temporal typed edges adds 'edge_contradictions' for 26; C4 pinned
     // questions adds 'standing_questions' for 27.
     // #6188 adds 'fence_repair' for 28; #6377 adds 'content_repair' for 29;
-    // private Codex adds 'auto_think' for 30.
+    // private Codex adds 'auto_think' and #6865 adds 'unindexed_files' for 31.
     expect(ALL_PHASES.length).toBe(30);
     expect(Object.keys(PHASE_SCOPE).length).toBe(30);
   });

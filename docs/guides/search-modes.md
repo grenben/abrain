@@ -31,26 +31,40 @@ and maintenance commands remain available.
 | `cache.ttl_seconds`           | 3600           | 3600       | 3600           |
 | `intentWeighting`             | true           | true       | true           |
 | `tokenBudget`                 | **4000**       | **12000**  | **off**        |
-| `expansion` (LLM multi-query) | false          | false      | **true**       |
+| `expansion` (LLM multi-query) | false          | false      | false          |
 | `expansion_variant_budget`    | `null` (legacy) | `null` (legacy) | `null` (legacy) |
 | `relationalRetrieval`         | false          | **true**   | **true**       |
 | `relational_rerank_pin`       | 3              | 3          | 3              |
 | `keyword_arm_confidence_floor` | `null` (off)  | `null` (off) | `null` (off)  |
 | `metadata_boost_gate`         | `lexical`      | `lexical`  | `lexical`      |
 | `searchLimit` default         | 10             | 25         | 50             |
-| `reranker` (cross-encoder)    | off            | `voyage:rerank-2.5` | `voyage:rerank-2.5` |
+| `reranker` (cross-encoder)    | off            | `voyage:rerank-3-lite` | `voyage:rerank-3-lite` |
 | `autocut` (rerank-cliff cut)  | off            | off        | off            |
 | `reranker_gate`               | off            | off        | off            |
 
 The `expansion` row is `gbrain query`'s default: `query` (the only verb that
 can expand) expands when a call leaves `expand` unset and the resolved row is
-on, so it expands by default in `tokenmax` and not in `balanced` or
-`conservative`. `--expand` / `expand: true` forces expansion in any mode and
+on. The row is off in all three modes, so `query` does not expand by default.
+`tokenmax` turned it off after the 2026-10-14 expansion-latency eval: on 300 LongMemEval-S questions with
+the reranker, `query` without expansion kept retrieval within the noise floor
+(strict recall@10 298 vs 299 of 300; the reference's own re-run scored 298)
+and its p50 fell from 2,022 to 227 ms (gbrain-evals GBRA-94 report,
+2026-10-14). `--expand` / `expand: true` forces expansion in any mode and
 `--no-expand` / `expand: false` skips it in any mode. The `search.expansion`
 config key overrides the row like any other knob. `gbrain search`, the memory
 verbs and the eval harnesses pin expansion per call, so `search` never
 expands, even with `search.expansion=true`. `gbrain search modes` reports the
 resolved row.
+
+To turn expansion on for one brain without changing its mode, run
+`gbrain config set search.expansion true` on the brain host (`false` pins it
+off). Every `query` call that leaves `expand` unset then follows the key: the CLI, MCP over stdio and
+`gbrain serve --http` all resolve the same row. A call that passes
+`--expand` / `expand: true` or `--no-expand` / `expand: false` still wins. `gbrain config unset search.expansion`
+returns to the mode default. The key is per brain and lives in its database,
+so a thin client (`gbrain init --mcp-only`) can't set it; whoever runs the
+brain host sets it, and the host needs gbrain v0.60.188.0 or later, because
+`query` ignored `search.expansion` before that release.
 
 Keyless retrieval takes the keyword-only path before expansion; configured
 embedding and expansion providers are prerequisites. Image-only retrieval also
@@ -247,7 +261,7 @@ gbrain search diagnose "<query>" --target <slug>
 
 `gbrain search modes` also answers the question the knob table cannot: is
 the resolved reranker actually going to run? Below the attribution table it
-prints one runtime line — `Reranker: voyage:rerank-2.5 (enabled) —
+prints one runtime line — `Reranker: voyage:rerank-3-lite (enabled) —
 VOYAGE_API_KEY present`, `Reranker: off (resolved) — …`, or `Reranker:
 <model> (enabled but NOT running) — <paste-ready fix>` — and each bundle row
 carries `reranker=… topNIn=… autocut=…`. `--json` exposes the same verdict
@@ -258,6 +272,13 @@ back in fusion order, `gbrain search "<query>" --explain` shows
 brain's reranker is actually running"* — *"turn reranking off for now"* —
 your agent runs `gbrain search modes` / `gbrain doctor`, then either exports
 `VOYAGE_API_KEY` or runs `gbrain config set search.reranker.enabled false`.
+
+The default reranker is Voyage `rerank-3-lite`. It replaced `rerank-2.5`
+after gbrain-evals #148 (v0.10.93) measured 60% lower rerank cost at 50
+candidates × 1,400 tokens with quality within noise. It applies only to
+brains that never set `search.reranker.model`; a brain with an explicit
+model keeps it. To go back to the previous default, run
+`gbrain config set search.reranker.model voyage:rerank-2.5`.
 
 TypeSafe's Jev can be the reranker instead of Voyage (`gbrain decide enable
 rerank` sets it and `gbrain decide disable rerank` restores your previous
@@ -356,15 +377,14 @@ on user_asks_about(topic):
             full_page = gbrain get <slug_from_chunk>
 
     elif topic.is_semantic_question or topic.is_concept_or_landscape:
-        # MODE 2: Full hybrid -- adds multi-query LLM expansion on top of
-        # vector + keyword + RRF. Owns concept / landscape / "all-of-X"
-        # questions: expansion recovers synonym- and outcome-phrased
-        # matches a single embedding misses. Costs one LLM expansion call
-        # per query -- worth it for these question shapes.
+        # MODE 2: Full hybrid -- vector + keyword + RRF + reranking. Owns
+        # concept / landscape / "all-of-X" questions. Pass --expand to add
+        # one LLM expansion call when the original wording is weak; it is
+        # off by default because it measured no retrieval gain (GBRA-94).
         results = gbrain query "{natural language question}"
         # e.g., "Who do I know at fintech companies?" -> gbrain query "fintech contacts"
         # e.g., "all the companies doing offshore wind" -> gbrain query "..."
-        # Returns ranked chunks via vector + keyword + expansion + RRF
+        # Returns ranked chunks via vector + keyword + RRF (+ expansion with --expand)
 
         # Same rule: chunks first, then get full page if needed
         if chunk.confirms_relevance:
@@ -393,10 +413,10 @@ on user_asks_about(topic):
 
 1. **Search returns chunks, not full pages.** After `gbrain search` or `gbrain query`, you get excerpts. Always run `gbrain get <slug>` to load the full page when the chunk confirms relevance. Don't answer questions from chunks alone when the full context matters.
 2. **Search works without embeddings.** On day one before any embedding run, `gbrain search` still works (the keyword arm carries it; the vector arm joins once embeddings exist). Don't tell the user "search isn't available yet" -- search is always available.
-3. **Don't use full hybrid for known names.** `gbrain query "Alice Example"` wastes an LLM expansion call. Use `gbrain search "Alice Example"` or better yet `gbrain get alice-example` if you know the slug.
+3. **Don't use full hybrid for known names.** `gbrain query "Alice Example" --expand` wastes an LLM expansion call, and bare `query` returns the larger evidence payload. Use `gbrain search "Alice Example"` or better yet `gbrain get alice-example` if you know the slug.
 4. **Token budget awareness.** A full page via `gbrain get` can be large. Read the search chunks first to confirm relevance before pulling the full page. "Did anyone mention the Series A?" -- search results (chunks) are probably enough. "Tell me everything about Alice" -- get the full page.
 5. **Full hybrid needs embeddings to have been run.** If `gbrain query` returns nothing but `gbrain search` finds results, the embeddings haven't been generated yet. Run the embedding pipeline first.
-6. **A populated `gbrain search` result set is not proof you found everything.** Search runs without query expansion, so synonym- and outcome-phrased matches can be missed even when it returns plenty of hits. For "find every / all / the landscape of" questions, use `gbrain query`; for literal exhaustive enumeration ("list every page of type X"), use `list_pages` pagination. A nonzero count is not a completeness signal.
+6. **A populated `gbrain search` result set is not proof you found everything.** Neither verb expands by default, so synonym- and outcome-phrased matches can be missed even when a search returns plenty of hits. For "find every / all / the landscape of" questions, use `gbrain query`, adding `--expand` (one call to the configured expansion model, which needs an expansion provider) when the wording is likely to differ from the notes; expanded results are still a ranked top-K; for literal exhaustive enumeration ("list every page of type X"), use `list_pages` pagination. A nonzero count is not a completeness signal.
 
 ### How to Verify
 

@@ -298,7 +298,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
         if (scope.backgroundAllowance) process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
         process.stdout.write(`job_id=${job.id}\n`);
         if (args.includes('--follow')) {
-          const { spawn } = await import('child_process');
+          const { spawn } = await import('../core/spawn.ts');
           const cmd = process.argv[0] ?? 'bun';
           const script = process.argv[1] ?? '';
           const child = spawn(cmd, [script, 'jobs', 'follow', String(job.id)], { stdio: 'inherit' });

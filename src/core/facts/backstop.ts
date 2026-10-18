@@ -61,6 +61,7 @@ import { intentContentOrigin } from '../trust/channel.ts';
 import { readTaintInputs, derivedWriteTrust, recordTaintEdges } from '../trust/taint.ts';
 import { applyGateDecision, derivedGateConfig, derivedGateInput, emptyGateTally, type GateTally } from '../trust/derived-gate.ts';
 import { decideFactWrite } from '../write-gate-store.ts';
+import { commitExtractionPlan, planExtraction, planSegmentedExtraction, readPageWatermark, type InputTruncated } from '../extraction-watermark.ts';
 
 // The notability-filter vocabulary lives in notability-filter.ts; re-exported for existing importers.
 export { NOTABILITY_FILTERS, coerceNotabilityFilter, type FactNotabilityFilter } from './notability-filter.ts';
@@ -116,6 +117,13 @@ export interface FactsBackstopCtx {
   notabilityFilter?: FactNotabilityFilter;
   /** Abort signal for shutdown propagation. */
   abortSignal?: AbortSignal;
+  /**
+   * #6778: the durable job's deadline (MinionJobContext.deadlineAtMs). A managed
+   * facts publish waits for its accepted write up to the job-bounded
+   * MaintenanceWriteWait (persistence/maintenance-wait.ts); without a job the
+   * wait is the 30 s base.
+   */
+  deadlineAtMs?: number | null;
   /** Mirrors OperationContext.remote for trust-aware logging paths. */
   remote?: boolean;
   /** Optional entity hints (extract_facts MCP op forwards these). */
@@ -176,11 +184,15 @@ export type FactsBackstopResult =
       would_dedup_same_page?: number;
       /** #6506: candidates skipped because the exact claim was forgotten in this source and visibility. */
       withdrawn_skipped?: number;
+      /** Large pages A7: the extractor read only part of the page (also stored in page_extraction_state). */
+      input_truncated?: InputTruncated;
     };
 
 /** One pipeline run's input: the turn text plus its page provenance and observation date. */
 interface PipelineInput {
   turnText: string;
+  /** What the extractor reads when it is not `turnText`: the appended tail or a bounded window (extraction-watermark.ts). */
+  extractText?: string;
   isDreamGenerated: boolean;
   ref?: string;
   pageSlug?: string;
@@ -188,11 +200,16 @@ interface PipelineInput {
   observationDate?: ObservationDate | null;
 }
 
+/** One page or turn pipeline run's counts (runPipelineWithBody). */
+interface PipelineResult { inserted: number; duplicate: number; superseded: number; fact_ids: number[]; entity_slugs: string[]; skipped_reason?: import('./extract.ts').ExtractFailureReason; write_gate?: GateTally; fence_refused?: number; would_dedup_same_page?: number; withdrawn_skipped?: number }
+
 interface ParsedPageInput {
   slug: string;
   type: PageType;
+  /** A segmented page's (`segmentedPageId`) lead: what eligibility reads; the extraction plan reads its segments. */
   compiled_truth: string;
   frontmatter: Record<string, unknown>;
+  segmentedPageId?: number;
 }
 
 /** k for findCandidateDuplicates — ceiling on candidates considered. */
@@ -565,10 +582,21 @@ async function runPipeline(
   parsedPage: ParsedPageInput,
   ctx: FactsBackstopCtx,
   abortSignal?: AbortSignal,
-): Promise<{ inserted: number; duplicate: number; superseded: number; fact_ids: number[]; entity_slugs: string[]; skipped_reason?: import('./extract.ts').ExtractFailureReason; write_gate?: GateTally; fence_refused?: number; would_dedup_same_page?: number; withdrawn_skipped?: number }> {
-  return runPipelineWithBody(
+): Promise<PipelineResult & { input_truncated?: InputTruncated }> {
+  // Large pages A7: past the watermark the extractor reads only the appended
+  // tail; without a usable one it reads the head and the receipt says so.
+  const { MAX_TURN_TEXT_CHARS } = await import('./extract.ts');
+  const { pageId, stored } = await readPageWatermark(ctx.engine, ctx.sourceId, parsedPage.slug, 'facts_backstop');
+  // A segmented page is planned over its segments; its whole body is never one string, so the turn text is the plan's.
+  const planOpts = { cap: MAX_TURN_TEXT_CHARS, pipeline: 'facts_backstop', emptyTail: 'skip' } as const;
+  const plan = parsedPage.segmentedPageId !== undefined
+    ? await planSegmentedExtraction(ctx.engine, parsedPage.segmentedPageId, stored, planOpts)
+    : planExtraction(parsedPage.compiled_truth, stored, planOpts);
+  if (!plan.text) return { inserted: 0, duplicate: 0, superseded: 0, fact_ids: [], entity_slugs: [] };
+  const result = await runPipelineWithBody(
     {
-      turnText: parsedPage.compiled_truth,
+      turnText: parsedPage.segmentedPageId !== undefined ? plan.text : parsedPage.compiled_truth,
+      ...(plan.mode === 'full' ? {} : { extractText: plan.text }),
       isDreamGenerated: false,  // eligibility check already rejected dream pages
       ref: parsedPage.slug,
       // #4819: page provenance for DB-only rows. The turn-path entry
@@ -579,6 +607,8 @@ async function runPipeline(
     ctx,
     abortSignal,
   );
+  if (pageId !== null && !result.skipped_reason && !abortSignal?.aborted) await commitExtractionPlan(ctx.engine, pageId, plan);
+  return plan.truncated ? { ...result, input_truncated: plan.truncated } : result;
 }
 
 /**
@@ -612,7 +642,7 @@ async function runPipelineWithBody(
   input: PipelineInput,
   ctx: FactsBackstopCtx,
   abortSignal?: AbortSignal,
-): Promise<{ inserted: number; duplicate: number; superseded: number; fact_ids: number[]; entity_slugs: string[]; skipped_reason?: import('./extract.ts').ExtractFailureReason; write_gate?: GateTally; fence_refused?: number; would_dedup_same_page?: number; withdrawn_skipped?: number }> {
+): Promise<PipelineResult> {
   // #4210: outside a withBudgetTracker scope (extract_facts op, sweep,
   // put_page backstop, checkpoint harvest, file/code import) the gateway's
   // chat/embed calls were budget no-ops — real spend, zero audit rows.
@@ -683,7 +713,7 @@ async function runPipelineBodyInner(
   input: PipelineInput,
   ctx: FactsBackstopCtx,
   abortSignal?: AbortSignal,
-): Promise<{ inserted: number; duplicate: number; superseded: number; fact_ids: number[]; entity_slugs: string[]; skipped_reason?: import('./extract.ts').ExtractFailureReason; write_gate?: GateTally; fence_refused?: number; would_dedup_same_page?: number; withdrawn_skipped?: number }> {
+): Promise<PipelineResult> {
   const { extractFactsFromTurnWithOutcome, FactsExtractionError } = await import('./extract.ts');
   const { resolveEntitySlugWithSource } = await import('../entities/resolve.ts');
   const { cosineSimilarity } = await import('./classify.ts');
@@ -718,7 +748,7 @@ async function runPipelineBodyInner(
       ? { allowed: ['high', 'medium'] as const, invalid: 'drop' as const }
       : undefined;
   const extract = () => extractFactsFromTurnWithOutcome({
-    turnText: input.turnText,
+    turnText: input.extractText ?? input.turnText,
     sessionId: ctx.sessionId,
     entityHints: ctx.entityHints,
     source: ctx.source,

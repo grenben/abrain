@@ -1,17 +1,20 @@
 import { registerManagedFilesystemEngine } from './persistence/filesystem-guard.ts';
+import { writerStamp } from './persistence/writer-versions.ts';
+import { noteRequestConfigWrite, requestConfigRows, requestConfigValue } from './config-snapshot.ts';
 import { replaceDerivedLinks, replaceDerivedLinksBatch, type DerivedLinkBatchItem, type DerivedLinkOrigin, type DerivedLinkReplacementOptions } from './derived-links.ts';
 import { trackPgliteDatabase, PgliteClosingError, notifyPgliteOpened } from './pglite-lifecycle.ts';
 import { mutatePageTag } from './page-state/tags.ts';
 import type { PageKey, PageSnapshot, PageSnapshotOptions, PageWriteOptions } from './page-state/types.ts';
 import type { GetVersionsOpts, PageVersionRows } from './page-state/version-types.ts';
 import { assertPageRevision } from './page-state/types.ts';
+import { assertOriginUnclaimed, assertRevivalUnclaimed, classifyOriginUniqueViolation } from './persistence/origin-guard.ts';
 import { lockUnheldPageKeys, withHeldPageKeys, type HeldPageKeys } from './page-state/guards.ts';
 import { readPageSnapshot as readCanonicalPageSnapshot } from './page-state/snapshot.ts';
 import { readPageSnapshotsBatch } from './page-snapshot-batch.ts';
 import { createPageVersion } from './page-state/versions.ts';
 import { moveSlugBindings, recordRenameAlias } from './page-state/rename-alias.ts';
 import { composablePgliteTransaction, transactionMemo } from './page-state/transactions.ts';
-import { dropRowTypeArrayParsers, PgliteStatementCache } from './pglite-statements.ts';
+import { configurePgliteCodecs, PgliteStatementCache } from './pglite-statements.ts';
 import { snapshotSchemaInputs } from './snapshot-schema-inputs.ts';
 import type { PageReadScope } from './types.ts';
 import type { PageReadPolicy } from './types.ts';
@@ -27,7 +30,7 @@ import { join as joinPath, resolve as resolvePath, sep as pathSep } from 'node:p
 // PGLite's WASM/fsBundle/extension assets embedded via `with { type: 'file' }`
 // so a `bun build --compile` binary can serve a PGLite brain (Bun vfs #1340).
 // The embedded `extensions` REPLACE the stock `{ vector, pg_trgm }` imports.
-import { getEmbeddedPgliteOptions } from './pglite-embedded-assets.ts';
+import { getEmbeddedPgliteOptions, withSharedBuffers } from './pglite-embedded-assets.ts';
 import {
   drainBackgroundWorkBeforeDisconnect,
   backgroundWorkSinkCount,
@@ -83,7 +86,7 @@ import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defa
 import { readStoredEmbeddingIdentity } from './stored-embedding-identity.ts';
 import { DELETE_BATCH_SIZE, TRAVERSE_PATH_ROW_CAP, TRAVERSE_WALK_ROW_CAP } from './engine-constants.ts';
 import { PageMissingError } from './engine-errors.ts';
-import { SAFE_FENCE_CHUNKER_VERSION, bodyWriteChunkVersion, chunkWriteInvalidation, currentTextProjectionFilter, requiresSafeChunks, safeChunksFilter } from './search/safe-chunks.ts';
+import { SAFE_FENCE_CHUNKER_VERSION, bodyWriteChunkVersion, currentTextProjectionFilter, requiresSafeChunks, safeChunksFilter } from './search/safe-chunks.ts';
 import { acquireLock, pgliteLockDirFor, releaseLock, type LockHandle } from './pglite-lock.ts';
 import { assertPgliteGraduationOpenable } from './persistence/graduation-custody.ts';
 // Engine-live path (#3596): static import, never a lazy `import()` in the
@@ -149,7 +152,11 @@ import * as sourcesImpl from './engine-sql/sources.ts';
 import * as filesImpl from './engine-sql/files.ts';
 import type { ChunkWindowRequest, ChunkWindowOpts, ChunkWindowPage } from './search/chunk-windows.ts';
 import type { KeywordPageWindow } from './search/keyword-statement.ts';
+import type { EmbeddingState, EmbeddingStateCounts, EmbeddingStateRow } from './embedding-state.ts';
 import * as chunksImpl from './engine-sql/chunks.ts';
+import * as pageBodyImpl from './engine-sql/page-body.ts';
+import type { BodyFlipInput, BodyFlipResult, BodyRegion, BodyStagingInput, BodyStagingState, ManifestRow, ManifestRowInput, SegmentChunkInput,
+  SegmentedPageMeta, SegmentSweepOptions, SegmentSweepResult, SegmentTextInput } from './page-body/types.ts';
 import { searchKeywordCJK } from './engine-sql/cjk-search.ts';
 import * as titlesImpl from './engine-sql/titles.ts';
 import * as keywordPagesImpl from './engine-sql/keyword-pages.ts';
@@ -789,7 +796,7 @@ export class PGLiteEngine implements BrainEngine {
     this.vectorIterativeScan = undefined;
     const opening = this._connectInternal(config).then(async () => {
       try {
-        await dropRowTypeArrayParsers(this.db);
+        await configurePgliteCodecs(this.db);
         if (registerRoots) await registerManagedFilesystemEngine(this, config.database_path);
       }
       catch (error) {
@@ -903,7 +910,7 @@ export class PGLiteEngine implements BrainEngine {
     // Embedded WASM/fsBundle/extension assets (Bun vfs #1340). Resolved once
     // here so both the initial create and the WAL-repair retry below share the
     // same compiled modules. Its `extensions` replaces the stock vector/pg_trgm.
-    const embedded = await getEmbeddedPgliteOptions();
+    const embedded = withSharedBuffers(await getEmbeddedPgliteOptions(), config.pglite_shared_buffers);
     try {
       this._db = this._attachDatabase(await preservingProcessExitCode(() =>
         PGlite.create({
@@ -1233,7 +1240,8 @@ export class PGLiteEngine implements BrainEngine {
       if (opts?.expectedRevision !== undefined || opts?.force !== undefined) {
         assertPageRevision(await tx.readPageSnapshot(slug, { sourceId, includeDeleted: true }), opts);
       }
-      return pagesImpl.putPage((tx as PGLiteEngine).engineSql, slug, page, opts, (s, src) => tx.getPage(s, { sourceId: src }));
+      await assertOriginUnclaimed(tx, { sourceId, slug, sourcePath: page.source_path ?? null, revive: true });
+      return pagesImpl.putPage((tx as PGLiteEngine).engineSql, slug, page, opts, (s, src) => tx.getPage(s, { sourceId: src })).catch(error => { throw classifyOriginUniqueViolation(error) ?? error; });
     };
     return opts?.inline && this._pageTransaction ? write(this) : this.transaction(write);
   }
@@ -1281,7 +1289,7 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async restorePage(slug: string, opts?: { sourceId?: string }): Promise<boolean> {
-    return pagesImpl.restorePage(this.engineSql, slug, opts);
+    return this.transaction(async tx => { await assertRevivalUnclaimed(tx, slug, opts?.sourceId); return pagesImpl.restorePage((tx as PGLiteEngine).engineSql, slug, opts); });
   }
 
   async purgeDeletedPages(
@@ -1410,7 +1418,7 @@ export class PGLiteEngine implements BrainEngine {
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
 
     // v0.26.5: visibility filter (soft-deleted + archived-source).
-    const visibilityClause = buildVisibilityClause('p', 's', opts);
+    const visibilityClause = buildVisibilityClause('p', 's', { ...opts, chunkAlias: 'cc' });
 
     // v0.32.7: CJK query branch. PGLite uses websearch_to_tsquery('english')
     // which can't tokenize CJK; queries return empty. Switch to ILIKE on
@@ -1621,7 +1629,7 @@ export class PGLiteEngine implements BrainEngine {
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
     const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
-    const visibilityClause = buildVisibilityClause('p', 's', opts);
+    const visibilityClause = buildVisibilityClause('p', 's', { ...opts, chunkAlias: 'cc' });
 
     // v0.32.7: CJK branch (same as searchKeyword but without page-dedup).
     if (hasCJK(query)) {
@@ -1803,6 +1811,12 @@ export class PGLiteEngine implements BrainEngine {
     return chunksImpl.getChunks(scopedRead(this.engineSql), column, slug, { sourceIds, sourceId }, opts);
   }
 
+  async getChunkPage(slug: string, opts: { sourceId?: string; sourceIds?: string[]; excludePrivate?: boolean; requireSafeChunks?: boolean; fromIndex: number; limit: number }) {
+    const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : undefined;
+    const column = (await resolveActiveEmbeddingColumnFromEngine(this, { fallbackToLegacy: true })).name;
+    return chunksImpl.getChunkPage(scopedRead(this.engineSql), column, slug, { sourceIds, sourceId: opts.sourceId ?? 'default' }, opts);
+  }
+
   /** S2: quoted identifier of the registry-ACTIVE embedding column for the
    *  health plane (getStats / getHealth) — read-only sites pass fallbackToLegacy
    *  so a broken registry row can't crash diagnostics. Callers prefix the
@@ -1854,6 +1868,16 @@ export class PGLiteEngine implements BrainEngine {
 
   async listChunklessPagesWithContent(opts?: { batchSize?: number; afterPageId?: number; sourceId?: string }): Promise<ChunklessPageRow[]> {
     return chunksImpl.listChunklessPagesWithContent(scopedRead(this.engineSql), opts);
+  }
+
+  async readEmbeddingStateCounts(opts: { mode: 'ops' | 'full'; sourceIds?: string[]; purgeWindowHours: number }): Promise<EmbeddingStateCounts> {
+    const column = (await resolveActiveEmbeddingColumnFromEngine(this, { fallbackToLegacy: true })).name;
+    return chunksImpl.readEmbeddingStateCounts(scopedRead(this.engineSql), column, opts);
+  }
+
+  async listEmbeddingStateRows(opts: { sourceIds?: string[]; states: readonly EmbeddingState[]; limit: number; purgeWindowHours: number }): Promise<EmbeddingStateRow[]> {
+    const column = (await resolveActiveEmbeddingColumnFromEngine(this, { fallbackToLegacy: true })).name;
+    return chunksImpl.listEmbeddingStateRows(scopedRead(this.engineSql), column, opts);
   }
 
   async deleteChunks(slug: string, opts?: { sourceId?: string }): Promise<void> {
@@ -2487,6 +2511,25 @@ export class PGLiteEngine implements BrainEngine {
     return factsImpl.getFactsHealth(unscopedExecutor(this.engineSql, 'facts: unscoped on master (EO4 inventory)'), source_id);
   }
 
+  // Segmented page storage (Wave B): SQL in ./engine-sql/page-body.ts.
+  async allocateBodyOccurrenceIds(count: number): Promise<number[]> { return pageBodyImpl.allocateBodyOccurrenceIds(this.engineSql, count); }
+  async stageSegmentTexts(sourceId: string, texts: readonly SegmentTextInput[], opts?: { stagingId?: string }): Promise<{ inserted: number }> { return pageBodyImpl.stageSegmentTexts(this.engineSql, sourceId, texts, opts); }
+  async readSegmentTexts(sourceId: string, sha256s: readonly Uint8Array[]): Promise<Map<string, Uint8Array>> {
+    return pageBodyImpl.readSegmentTexts(unscopedExecutor(this.engineSql, 'page-body: page-id keyed internal read'), sourceId, sha256s);
+  }
+  async stageManifestRows(rows: readonly ManifestRowInput[]): Promise<void> { return pageBodyImpl.stageManifestRows(this.engineSql, rows); }
+  async readManifest(pageId: number, opts?: { generation?: number; stagingId?: string; region?: BodyRegion; lastN?: number }): Promise<ManifestRow[]> {
+    return pageBodyImpl.readManifest(unscopedExecutor(this.engineSql, 'page-body: page-id keyed internal read'), pageId, opts);
+  }
+  async stageSegmentChunks(pageId: number, generation: number, chunks: readonly SegmentChunkInput[], opts?: { embeddingColumn?: ResolvedColumn }): Promise<number[]> {
+    return pageBodyImpl.stageSegmentChunks(this.engineSql, pageId, generation, chunks, opts);
+  }
+  async createSegmentedPageShell(slug: string, meta: SegmentedPageMeta, opts: { sourceId: string }): Promise<{ id: number }> { return pageBodyImpl.createSegmentedPageShell(this.engineSql, slug, meta, opts); }
+  async flipBodyGeneration(input: BodyFlipInput): Promise<BodyFlipResult> { return pageBodyImpl.flipBodyGeneration(this.engineSql, input); }
+  async openBodyStaging(input: BodyStagingInput): Promise<void> { return pageBodyImpl.openBodyStaging(this.engineSql, input); }
+  async setBodyStagingState(id: string, state: BodyStagingState, opts?: { commitRequestId?: string | null }): Promise<void> { return pageBodyImpl.setBodyStagingState(this.engineSql, id, state, opts); }
+  async sweepSegments(opts?: SegmentSweepOptions): Promise<SegmentSweepResult> { return pageBodyImpl.sweepSegments(this.engineSql, opts); }
+
   // ============================================================
   // v0.28: Takes (typed/weighted/attributed claims) + synthesis_evidence
   // ============================================================
@@ -2717,10 +2760,12 @@ export class PGLiteEngine implements BrainEngine {
     // v0.31.2 (codex P1 #3): source_id threaded so multi-source brains can
     // scope ingest_log queries. Default 'default' matches the column DEFAULT.
     const sourceId = entry.source_id ?? 'default';
+    // v254: the writer's version, host and segment-reader mark (writer-versions.ts writerStamp).
+    const stamp = writerStamp({ mint: false });
     await this.db.query(
-      `INSERT INTO ingest_log (source_id, source_type, source_ref, pages_updated, summary)
-       VALUES ($1, $2, $3, $4::jsonb, $5)`,
-      [sourceId, entry.source_type, entry.source_ref, JSON.stringify(entry.pages_updated), entry.summary]
+      `INSERT INTO ingest_log (source_id, source_type, source_ref, pages_updated, summary, writer_version, writer_host_id, writer_segment_reader)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::uuid, true)`,
+      [sourceId, entry.source_type, entry.source_ref, JSON.stringify(entry.pages_updated), entry.summary, stamp.version, stamp.hostId]
     );
   }
 
@@ -2731,8 +2776,8 @@ export class PGLiteEngine implements BrainEngine {
     const scoped = opts?.sourceIds && opts.sourceIds.length > 0;
     const { rows } = await this.db.query(
       scoped
-        ? `SELECT * FROM ingest_log WHERE source_id = ANY($2::text[]) ORDER BY created_at DESC LIMIT $1`
-        : `SELECT * FROM ingest_log ORDER BY created_at DESC LIMIT $1`,
+        ? `SELECT id, source_id, source_type, source_ref, pages_updated, summary, created_at FROM ingest_log WHERE source_id = ANY($2::text[]) ORDER BY created_at DESC LIMIT $1`
+        : `SELECT id, source_id, source_type, source_ref, pages_updated, summary, created_at FROM ingest_log ORDER BY created_at DESC LIMIT $1`,
       scoped ? [limit, opts?.sourceIds] : [limit]
     );
     // Belt-and-suspenders source_id fallback for any pre-v50 row that
@@ -2785,6 +2830,8 @@ export class PGLiteEngine implements BrainEngine {
 
   // Config
   async getConfig(key: string): Promise<string | null> {
+    const held = await requestConfigValue(this, key);
+    if (held !== undefined) return held;
     const { rows } = await this.db.query('SELECT value FROM config WHERE key = $1', [key]);
     return rows.length > 0 ? (rows[0] as { value: string }).value : null;
   }
@@ -2795,6 +2842,7 @@ export class PGLiteEngine implements BrainEngine {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
       [key, value]
     );
+    noteRequestConfigWrite(this, key, value);
   }
 
   async unsetConfig(key: string): Promise<number> {
@@ -2802,6 +2850,7 @@ export class PGLiteEngine implements BrainEngine {
       'DELETE FROM config WHERE key = $1',
       [key],
     ) as { affectedRows?: number };
+    noteRequestConfigWrite(this, key, null);
     return affectedRows ?? 0;
   }
 
@@ -2816,6 +2865,8 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async getAllConfig(): Promise<Record<string, string>> {
+    const held = await requestConfigRows(this);
+    if (held) return held;
     const { rows } = await this.db.query('SELECT key, value FROM config');
     const out: Record<string, string> = {};
     for (const row of rows as { key: string; value: string }[]) out[row.key] = row.value;
@@ -2857,6 +2908,11 @@ export class PGLiteEngine implements BrainEngine {
       }, { once: true });
     });
     return Promise.race([queryPromise, abortPromise]);
+  }
+
+  /** No statement timeout on PGLite (BrainEngine.keywordBoundedRead): `read` runs on the engine itself. */
+  async keywordBoundedRead<T>(read: (db: Pick<BrainEngine, 'executeRaw'>) => Promise<T>): Promise<T> {
+    return read(this);
   }
 
   /**

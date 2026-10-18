@@ -1,8 +1,10 @@
 import { OperationError } from '../ops/contract.ts';
 import { writerStamp } from './writer-versions.ts';
+import { cursorFenceCause } from './sync-knock-on.ts';
 import type { FenceFailureDetail } from '../fence-repair/refusal.ts';
 import type { WithdrawalFailureDetail } from '../facts/withdrawal.ts';
 import type { Action } from '../agent-output.ts';
+import { classifyPgAccessError } from '../pg-access-classify.ts';
 
 /**
  * #5974: a database refusal during preparation or publication becomes a
@@ -12,11 +14,12 @@ import type { Action } from '../agent-output.ts';
  */
 export type PublicationStage = 'preparation' | 'publication' | 'after_file_publication';
 /**
- * #6513 (wave 16 G3.5): the public `reason` of a refusal gbrain classifies by its raiser and SQLSTATE. A CLOSED enum:
+ * #6513 (wave 16 G3.5): the public `reason` of a refusal gbrain classifies by its raiser and SQLSTATE (#6904: `schema_missing`,
+ * a 42P01/42703 missing relation or column, per `pg-access-classify.ts`). A CLOSED enum:
  * an operator trigger can interpolate a row value at its message prefix, so nothing derived from the message is kept,
  * publicly or owner-side (#5974's rule: fixed identifiers only).
  */
-export const PUBLICATION_REASONS = ['attribution_unclassified_table', 'trust_unclassified_table', 'graduation_in_progress', 'unknown'] as const;
+export const PUBLICATION_REASONS = ['attribution_unclassified_table', 'trust_unclassified_table', 'graduation_in_progress', 'schema_missing', 'unknown'] as const;
 export type PublicationReason = typeof PUBLICATION_REASONS[number];
 export interface PublicationFailureDetail {
   origin: 'database_guard' | 'database_trigger' | 'database';
@@ -28,6 +31,8 @@ export interface PublicationFailureDetail {
   relationship?: string;
   /** Closed enum (`PUBLICATION_REASONS`) for a refusal without a typed code; absent on the typed guard/trigger refusals. */
   reason?: PublicationReason;
+  /** Owner-only, #6904: the relation or column a `schema_missing` refusal names (an identifier, never a value). */
+  missing?: string;
   /** Owner-only: source identifiers can name private sources. */
   sources?: { target: string | null; old: string | null; allowed: string[] };
   stage?: PublicationStage;
@@ -46,7 +51,12 @@ export interface OwnerExceptionDetail extends Pick<PublicationFailureDetail, 'st
 }
 /** A `fact_withdrawn` refusal's `withdrawn` object (`facts/withdrawal.ts`), plus the attempt stamp. */
 export type WithdrawalRefusalDetail = WithdrawalFailureDetail & Pick<PublicationFailureDetail, 'stage' | 'attempt'>;
-export interface PublicationFailure { code: string; message: string; detail?: PublicationFailureDetail | FenceRefusalDetail | WithdrawalRefusalDetail | OwnerExceptionDetail }
+/** #6696 (A12): the page's recorded canonical file is gone (`prepareFileTarget`); a producer refuses the same write before admission. */
+export const CANONICAL_FILE_MISSING = 'canonical_file_missing';
+export interface CanonicalFileDetail { origin: typeof CANONICAL_FILE_MISSING; stage?: PublicationStage; attempt?: { consumer_version: string; consumer_host_id: string | null } }
+/** #6693: a page write refused because its file holds a committed change sync has not imported (`pending_import`) or sync holds the file (`sync_held`). */
+export interface PendingImportDetail { origin: 'pending_import' | 'sync_held'; stage?: PublicationStage; attempt?: { consumer_version: string; consumer_host_id: string | null } }
+export interface PublicationFailure { code: string; message: string; detail?: PublicationFailureDetail | FenceRefusalDetail | WithdrawalRefusalDetail | OwnerExceptionDetail | CanonicalFileDetail | PendingImportDetail }
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_.:-]{0,79}$/;
 const ident = (value: unknown) => typeof value === 'string' && IDENT.test(value) ? value : undefined;
@@ -88,11 +98,29 @@ function publicationReason(sqlstate: string, raiser: string | undefined, message
   return unclassified && message.startsWith(`${raiser} is not classified for table`) ? unclassified : 'unknown';
 }
 
+/**
+ * #6904: a relation or column the write path needs is missing (42P01 / 42703, `schema_missing` in `pg-access-classify.ts`):
+ * the brain schema is behind this build or lost a table, never a gbrain defect. Names the missing identifier from the server's
+ * own parser error; a PL/pgSQL RAISE carries caller text, so it is never parsed (#5974 fixed identifiers).
+ */
+const SCHEMA_MISSING_SQLSTATES = new Set(['42P01', '42703']);
+const MISSING_NAME = /(column|relation)\s+"?([A-Za-z_][A-Za-z0-9_.]*)"?(?:\s+of relation\s+"?([A-Za-z_][A-Za-z0-9_.]*)"?)?\s+does not exist/i;
+function schemaMissing(sqlstate: string, message: string): PublicationFailure {
+  const match = MISSING_NAME.exec(message);
+  const missing = match ? ident(match[3] ? `${match[3]}.${match[2]}` : match[2]) : undefined;
+  const what = match ? `${match[1]!.toLowerCase()} ${missing ?? 'unnamed'}` : 'relation or column';
+  return { code: 'storage_error', message: `Publication failed: the database has no ${what} (${sqlstate}), which this gbrain build needs, so the brain schema is missing a migration or a table. Nothing was committed.`,
+    detail: { origin: 'database', sqlstate, reason: 'schema_missing', ...(missing ? { missing } : {}) } };
+}
+
 /** Null when the error is not a database refusal this module recognizes. */
 export function databaseRefusal(error: unknown): PublicationFailure | null {
   if (error instanceof OperationError || !error || typeof error !== 'object') return null;
   const e = error as Record<string, unknown>;
   const sqlstate = typeof e.code === 'string' && /^[0-9A-Z]{5}$/.test(e.code) ? e.code : null;
+  if (sqlstate && SCHEMA_MISSING_SQLSTATES.has(sqlstate) && classifyPgAccessError(error).reason === 'schema_missing') {
+    return schemaMissing(sqlstate, typeof e.message === 'string' && e.routine !== 'exec_stmt_raise' ? e.message : '');
+  }
   if (sqlstate !== 'P0001' && sqlstate !== GRADUATION_SQLSTATE) return null;
   const where = typeof e.where === 'string' ? e.where : '';
   const raiser = ident(/PL\/pgSQL function (?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)[( ]/.exec(where)?.[1]);
@@ -193,14 +221,16 @@ export function withAttempt(failure: PublicationFailure, stage: PublicationStage
  * reason and problem classes; its row numbers stay owner-side (they can
  * number rows a remote caller never saw).
  */
-const PUBLIC_DETAIL_KEYS: ReadonlySet<string> = new Set(['origin', 'sqlstate', 'raiser', 'table', 'op', 'branch', 'relationship', 'reason', 'stage', 'fence']);
+const PUBLIC_DETAIL_KEYS: ReadonlySet<string> = new Set(['origin', 'sqlstate', 'raiser', 'table', 'op', 'branch', 'relationship', 'reason', 'stage', 'fence', 'cause']);
 
 export function publicFailureDetail(detail: unknown): Record<string, unknown> | undefined {
   if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return undefined;
   // #5929: an allow-list, so a key added to a stored detail is owner-only unless it is listed here.
   // #6513: `reason` is public only as a member of the closed enum, whatever a stored detail holds under that key.
   const rest = Object.fromEntries(Object.entries(detail).filter(([key, value]) => PUBLIC_DETAIL_KEYS.has(key)
-    && (key !== 'reason' || (PUBLICATION_REASONS as readonly unknown[]).includes(value))));
+    && (key !== 'reason' || (PUBLICATION_REASONS as readonly unknown[]).includes(value))
+    // #6643: a cursor fence refusal's `cause` is public only as a member of its closed enum.
+    && (key !== 'cause' || cursorFenceCause({ cause: value }) !== null)));
   if ((rest as { origin?: unknown }).origin === 'fence') {
     const { rows: _rows, issues, ...fence } = ((rest as unknown as FenceFailureDetail).fence ?? {}) as FenceFailureDetail['fence'];
     const publicIssues = Array.isArray(issues) ? issues.map(({ row: _row, ...issue }) => issue) : undefined;

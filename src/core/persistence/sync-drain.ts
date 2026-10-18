@@ -23,7 +23,7 @@ import { ERROR_CATALOGUE, type CatalogueName } from '../error-catalogue.ts';
 import { cliRenderContext, renderAction, type Action, type RenderedAction } from '../agent-output.ts';
 import { managedSyncResumeArgs, syncResumeCommand } from '../sync-reconcile.ts';
 import { isWriteCapacityWait, outstandingCapacityOf } from './admission-retry.ts';
-import { clearDrainStep, DrainPassAbandoned, readDrainStep } from './drain-step.ts';
+import { clearDrainStep, DrainPassAbandoned, markPassAbandoned, readDrainStep } from './drain-step.ts';
 import { PUBLICATION_CEILING_DEFAULT_MS, readPublicationCeilingMs } from './publication-deadline.ts';
 import { isOwnerThisProcess, stampLastSql, WAITING_ON, type ClaimLastSql, type WaitingOn } from './claim-phase.ts';
 import { describeHostConsumer, headBlockedNext, headBlockerText, headClaimability, type HeadBlocker } from './head-blocker.ts';
@@ -39,7 +39,18 @@ export type DrainStopReason = 'deadline' | 'drain_stalled' | 'database_contentio
   /** #6278 (B7): the sync's next admission was refused for the whole no-progress window because other requests held the writer's outstanding-request cap. */
   | 'write_capacity'
   /** #6340: the database connection dropped `CONNECTION_STRIKES` times in a row with no page committed between the drops; the cursor stands, the same command resumes it. */
-  | 'connection_lost';
+  | 'connection_lost'
+  /** #6696 (A7): a cumulative write cap (or the background pause line) refused the next admission after the preflight passed; resumable once capacity returns. */
+  | 'capacity_paused'
+  /** #6712 PR 1: another drainer holds the source's drain lease (or took it from this run); resumable, the next run follows it. */
+  | 'drain_lease_held';
+/** #6696 (A7): the refusal that paused the drain (`capacity_paused`); `fix` is the host's config raise. */
+export interface DrainCapacityPause { code: string; reason: string | null; detail: string | null; message: string; fix?: Action }
+/** A capacity refusal raised by an admission after the run's preflight (the preflight's own refusal stops the command up front). */
+export function isCapacityPause(error: unknown): boolean {
+  return error instanceof OperationError && ['write_quota_exhausted', 'write_capacity_backpressure', 'write_quota_insufficient'].includes(error.code)
+    && (error as { capacityPreflight?: true }).capacityPreflight !== true;
+}
 /** #6278 (B7): what the drain waited on when `write_capacity` stopped it: the counts the last refusal carried and how long it waited. */
 export interface DrainCapacityWait { outstanding: number | null; limit: number | null; scope: 'principal' | 'brain' | null; waited_seconds: number }
 /** #6278: what a stalled head's live claim says it is doing (`claim_phase`, stamped by its owner on every renewal). */
@@ -95,9 +106,9 @@ export interface DrainStall {
    * #6278: why the drain called it a stall: no renewal (`owner_missing`), a preparation or publication past its allowance, or no change at all.
    * #6317: `owner_wedged_here` is a live same-host owner whose preparation passed the ceiling, or whose own heartbeat row says it is wedged
    * (`restart_required`, a root barrier past the ceiling); `preparation_overdue` is kept for an owner on another host.
-   * #6423: `no_admission` is a pass that admitted nothing and left no unfinished request for the whole no-progress window.
+   * #6712 PR 2: a pass that admitted nothing and left no unfinished request is `no_progress` too (`no_admission` is retired).
    */
-  cause?: 'owner_missing' | 'preparation_overdue' | 'publication_overdue' | 'no_progress' | 'owner_wedged_here' | 'no_admission' | 'head_blocked';
+  cause?: 'owner_missing' | 'preparation_overdue' | 'publication_overdue' | 'no_progress' | 'owner_wedged_here' | 'head_blocked';
   /** #6405/#6423: the in-pass governor ended a pass that never returned (the pass was aborted and its late result is ignored). */
   in_pass?: boolean;
   /** #6317: the head owner as the stamp names it, so the stop can say which process to restart. */
@@ -105,6 +116,8 @@ export interface DrainStall {
   owner_kind?: string | null;
   owner_nonce?: string | null;
   last_sql?: ClaimLastSql | null;
+  /** #6712 PR 1: the drain-lease holder a following run waited on (`no_progress`: it heartbeats but commits nothing). */
+  lease_holder?: import('./sync-lease.ts').DrainHolder;
   /** #6317: the owner's heartbeat row, when the stop read one (`owner_wedged_here`). */
   owner_row?: DrainOwnerRow | null;
   /** #6317: whether the stop came at the ceiling (true) or on the owner's own wedged verdict before it (false), and the ceiling judged against. */
@@ -126,6 +139,8 @@ export interface DrainReport {
   retry_after_ms?: number;
   stall?: DrainStall;
   capacity?: DrainCapacityWait;
+  /** #6696 (A7): present on `capacity_paused`. */
+  capacity_pause?: DrainCapacityPause;
   /** #6340 `connection_lost`: how many drops in a row ended the drain and the last error's text (message only, never a URL). */
   connection?: { drops: number; last_error: string };
   /** #6340: HEAD moved past the pinned target while the run drained, so the drain took exactly one more pass for the commits since (never a second). */
@@ -167,6 +182,10 @@ type RunCounts = Pick<SyncResult, 'added' | 'modified' | 'deleted' | 'renamed' |
 const NO_PASS_RESULT: SyncResult = { status: 'partial', reason: 'writer_pending', fromCommit: null, toCommit: '', added: 0, modified: 0, deleted: 0, renamed: 0, chunksCreated: 0, embedded: 0, pagesAffected: [] };
 const REFRESH_WAIT_MS = 5 * 60_000;
 const DEADLINE_MARGIN_MS = 15_000;
+/** #6706: the longest single timer delay; setTimeout fires immediately past 2^31-1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+/** #6706: how long a pass may keep running after the drain's own deadline fired before the drain abandons it and reports. */
+export const DEADLINE_PASS_GRACE_MS = 10_000;
 const PROGRESS_EVERY_MS = 10_000;
 /** #6405/#6423: a pass with no commit, no admission and no change at the head for this long is ended by the in-pass governor. */
 const IN_PASS_NO_PROGRESS_MS = 5 * 60_000;
@@ -254,14 +273,26 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Aborts shortly before a strict out-of-band deadline, so the drain writes the final result instead of the watchdog. */
-function cooperativeDeadline(): { signal?: AbortSignal; dispose(): void } {
-  const deadline = currentRunDeadline();
-  if (!deadline?.strict) return { dispose() {} };
-  const remaining = deadline.atMs - Date.now();
+/**
+ * Aborts shortly before the earlier of a strict out-of-band deadline and the caller's own deadline (#6706: a job's
+ * `timeout_at`), so the drain writes the final result instead of the watchdog.
+ */
+function cooperativeDeadline(callerAtMs?: number): { signal?: AbortSignal; dispose(): void } {
+  const run = currentRunDeadline();
+  const atMs = Math.min(run?.strict ? run.atMs : Infinity, callerAtMs ?? Infinity);
+  if (!Number.isFinite(atMs)) return { dispose() {} };
+  const remaining = atMs - Date.now();
+  const stopAt = Date.now() + Math.max(0, remaining - Math.min(DEADLINE_MARGIN_MS, remaining / 2));
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('run deadline')), Math.max(0, remaining - Math.min(DEADLINE_MARGIN_MS, remaining / 2)));
-  timer.unref?.();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // A past stop instant aborts now; a far one re-arms in steps, because setTimeout fires at once past 2^31-1 ms.
+  const arm = () => {
+    const wait = stopAt - Date.now();
+    if (wait <= 0) { controller.abort(new Error('run deadline')); return; }
+    timer = setTimeout(arm, Math.min(wait, MAX_TIMER_MS));
+    timer.unref?.();
+  };
+  arm();
   return { signal: controller.signal, dispose: () => clearTimeout(timer) };
 }
 
@@ -275,7 +306,7 @@ export interface StallProbe {
    */
   fingerprint(result: SyncResult): Promise<{ key: string; stall: Omit<DrainStall, 'stalled_seconds'>; claim?: DrainClaim | null } | null>;
   /** #6278: the source's head while a pass runs (its oldest running request, else its oldest queued one); null when nothing is unfinished. Bounded; may reject. */
-  head?(): Promise<{ head_state: string; claim: DrainClaim | null; request_id?: string | null; claimable_here?: boolean | null; blocked_by?: HeadBlocker | null; consumer?: string } | null>;
+  head?(): Promise<{ head_state: string; claim: DrainClaim | null; request_id?: string | null; write_request_id?: string | null; claimable_here?: boolean | null; blocked_by?: HeadBlocker | null; consumer?: string } | null>;
   /** #6317: the head owner's heartbeat row on this host, or null (no row: an older owner, PGLite, the table absent, or another host). Never rejects. */
   owner?(claim: DrainClaim): Promise<DrainOwnerRow | null>;
   /** #6317: whether a consumer here could reclaim a lapsed head: this process's own, or a live full row on this host. Never rejects. */
@@ -287,6 +318,8 @@ export interface DrainInput {
   /** #6340: recovers the engine's pool before a connection-class retry (`engine.reconnect`); absent for callers without one. */
   reconnect?(error: unknown): Promise<void>;
   signal?: AbortSignal;
+  /** #6706: absolute epoch ms the drain stops before (cooperatively, `resumable / deadline`); a job passes its `timeout_at`. */
+  deadlineAtMs?: number;
   onProgress?: SyncOpts['onProgress'];
   probe?: StallProbe;
   /** Throttled progress lines on stderr (CLI). */
@@ -304,6 +337,8 @@ export interface DrainInput {
   pauseMs?: number;
   backoffMs?: number;
   progressMs?: number;
+  /** #6706 test seam: how long a pass may run past the drain's own deadline before it is abandoned. */
+  deadlineGraceMs?: number;
 }
 
 /**
@@ -327,8 +362,10 @@ function stallText(index: number, total: number | null, stalledMs: number, claim
 export async function runDrain(input: DrainInput): Promise<SyncResult> {
   const clock = input.clock ?? Date.now;
   const startedAt = clock();
-  const coop = cooperativeDeadline();
+  const coop = cooperativeDeadline(input.deadlineAtMs);
   const signal = coop.signal && input.signal ? AbortSignal.any([input.signal, coop.signal]) : coop.signal ?? input.signal;
+  /** #6706: the drain's own deadline (not the caller's cancellation) stopped it, so the stop is a resumable report. */
+  const deadlineStop = () => !!coop.signal?.aborted && !input.signal?.aborted;
   let passes = 0, attempt = 0, readFailures = 0, refreshWaitedMs = 0, written = 0, waived = 0, index = 0, total: number | null = null;
   let announcedStart = false, lastLine = 0, groups = 0, groupedPages = 0, largestGroup = 0, admittedAhead = 0;
   let lanes: { effective: number; stepDown: string | null; overlapped: number; fallbacks: number } | null = null;
@@ -376,6 +413,8 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
     if (event.phase === 'managed_sync.group' && typeof event.group === 'number') { groups++; groupedPages += event.group; largestGroup = Math.max(largestGroup, event.group); }
     if (event.phase === 'managed_sync.group_ahead') admittedAhead += typeof event.group === 'number' ? 1 : 0;
     if (event.phase === 'managed_sync.lanes' && event.lanes) lanes = { effective: event.lanes.effective, stepDown: event.lanes.stepDown, overlapped: event.lanes.overlapped, fallbacks: event.lanes.fallbacks };
+    // #6696 C4: the checkpoint commit is a commit; the tail after it is governed by its own budget.
+    if (event.phase === 'managed_sync.finish') { lastCommitAt = clock(); drops = 0; noteForwardProgress(); return; }
     if (event.phase !== 'managed_sync.page_committed') return;
     if (event.waived) waived++; else written++;
     lastCommitAt = clock(); drops = 0;
@@ -393,7 +432,7 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
   // the abandoned pass: its signal is aborted (the pass's step boundaries throw, so it admits and writes nothing more) and its
   // late result or rejection is dropped.
   const noProgressMs = input.noProgressMs ?? IN_PASS_NO_PROGRESS_MS, ceilingMs = input.publicationCeilingMs ?? PUBLICATION_CEILING_DEFAULT_MS;
-  const governedPass = (): Promise<{ result: SyncResult } | { stall: DrainStall }> => {
+  const governedPass = (): Promise<{ result: SyncResult } | { stall: DrainStall } | { deadline: true }> => {
     const controller = new AbortController(), passStartedAt = clock();
     const passSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     clearDrainStep();
@@ -401,7 +440,7 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
     let timer: ReturnType<typeof setInterval> | null = null, probing = false, key: string | null = null, keySince = passStartedAt, blockedKey: string | null = null;
     const governEvery = input.governMs ?? Math.min(every, GOVERN_EVERY_MS), blockerAfter = input.governMs ?? GOVERN_EVERY_MS;
     const stopped = new Promise<{ stall: DrainStall }>(resolve => {
-      const stop = (stall: DrainStall) => { if (timer) clearInterval(timer); timer = null; controller.abort(new DrainPassAbandoned(`drain_stalled: ${stall.cause}`)); resolve({ stall }); };
+      const stop = (stall: DrainStall) => { if (timer) clearInterval(timer); timer = null; markPassAbandoned(passSignal); controller.abort(new DrainPassAbandoned(`drain_stalled: ${stall.cause}`)); resolve({ stall }); };
       timer = setInterval(() => {
         const quietSince = Math.max(lastCommitAt, passStartedAt);
         if (probing || clock() - quietSince < Math.min(noProgressMs, ceilingMs, blockerAfter)) return;
@@ -418,8 +457,9 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
           const base = { request_id: head?.request_id ?? 'none', state: head?.head_state ?? 'none', blocked_reason: null, head_request_id: head?.request_id ?? null,
             head_state: head?.head_state ?? null, claimable_here: !read.ok ? null : head?.claimable_here === undefined ? false : head.claimable_here, owner_is_this_host: null, in_pass: true,
             blocked_by: head?.blocked_by ?? null, consumer: head?.consumer ?? null };
-          // #6543 (B2): an intervention-required blocker on a queued head, read on two ticks in a row, stops the drain now; live blockers keep the wait below.
-          const blocker = head?.head_state === 'queued' && head.blocked_by?.intervention ? head.blocked_by : null;
+          // #6543 (B2): an intervention-required blocker on a queued head (or a recovering head stuck on the user), read on two ticks in a row, stops the
+          // drain now; live blockers keep the wait below.
+          const blocker = (head?.head_state === 'queued' || head?.head_state === 'recovering') && head.blocked_by?.intervention ? head.blocked_by : null;
           const seen = blocker ? `${head!.request_id}|${blocker.predicate}|${blocker.ids.join(',')}` : null;
           if (blocker && seen === blockedKey) { stop({ ...base, stalled_seconds: Math.round(quiet / 1000), cause: 'head_blocked' }); return; }
           blockedKey = seen;
@@ -439,14 +479,24 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
           if (quiet < noProgressMs || elapsed < noProgressMs && key !== 'none') return;
           const sql = step?.last_sql ? { label: step.last_sql.label, age_ms: now - step.last_sql.at } : claim?.last_sql ?? null;
           stop({ ...base, stalled_seconds: Math.round(quiet / 1000), phase: claim?.phase ?? null, step: head ? claim?.step ?? null : step?.step ?? null,
-            waiting_on: claim?.waiting_on ?? null, cause: read.ok && !head ? 'no_admission' : claim?.lapsed ? 'owner_missing' : 'no_progress',
+            waiting_on: claim?.waiting_on ?? null, cause: claim?.lapsed ? 'owner_missing' : 'no_progress',
             owner_pid: claim?.owner_pid ?? null, owner_kind: claim?.owner_kind ?? null, owner_nonce: claim?.owner_nonce ?? null, last_sql: sql });
         }).finally(() => { probing = false; });
       }, governEvery);
       timer.unref?.();
     });
     running.catch(() => undefined);
-    return Promise.race([running.then(result => ({ result })), stopped]).finally(() => { if (timer) clearInterval(timer); timer = null; inPass = false; });
+    // #6706: the pass already sees the deadline through its signal; one that has not returned within the grace is abandoned like a
+    // stalled pass (its signal aborted, its late result dropped), so the drain still reports before the caller's hard deadline.
+    let graceTimer: ReturnType<typeof setTimeout> | undefined, onDeadline: (() => void) | undefined;
+    const expired = coop.signal ? new Promise<{ deadline: true }>(resolve => {
+      onDeadline = () => { graceTimer = setTimeout(() => { markPassAbandoned(passSignal); controller.abort(new DrainPassAbandoned('deadline')); resolve({ deadline: true }); }, input.deadlineGraceMs ?? DEADLINE_PASS_GRACE_MS); graceTimer.unref?.(); };
+      if (coop.signal!.aborted) onDeadline(); else coop.signal!.addEventListener('abort', onDeadline, { once: true });
+    }) : null;
+    return Promise.race([running.then(result => ({ result })), stopped, ...(expired ? [expired] : [])]).finally(() => {
+      if (timer) clearInterval(timer); timer = null; inPass = false;
+      clearTimeout(graceTimer); if (onDeadline) coop.signal?.removeEventListener('abort', onDeadline);
+    });
   };
   const finish = (result: SyncResult, outcome: DrainOutcome, stopReason?: DrainStopReason, extra?: Partial<DrainReport>): SyncResult => {
     if (result.managedCursor) { index = result.managedCursor.index; total = result.managedCursor.total; }
@@ -462,12 +512,14 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
   };
   try {
     for (;;) {
+      if (deadlineStop()) return finish(last ?? NO_PASS_RESULT, 'resumable', 'deadline');
       passes++;
       let result: SyncResult;
       try {
         inPass = true;
         const governed = await governedPass();
         if ('stall' in governed) return finish(last ?? NO_PASS_RESULT, 'blocked', 'drain_stalled', { stall: governed.stall });
+        if ('deadline' in governed) return finish(last ?? NO_PASS_RESULT, 'resumable', 'deadline');
         result = governed.result;
         attempt = 0; capacity = null;
         if (last?.runId && result.runId && result.runId !== last.runId) {
@@ -476,9 +528,19 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
         }
         last = result;
       } catch (error) {
+        // #6706: a retryable stop or the drain's own abort that lands after its deadline is the deadline, reported resumable; a fatal error still throws.
+        const retryable = isWriteCapacityWait(error) || isConnectionDrop(error) || error === coop.signal?.reason || error instanceof DrainPassAbandoned
+          || (error instanceof Error && error.name === 'AbortError') || transientDelay(error, attempt + 1, refreshWaitedMs, input.backoffMs ?? 250) !== null;
+        if (deadlineStop() && retryable) return finish(last ?? NO_PASS_RESULT, 'resumable', 'deadline');
         // #6278 (B7): other requests (another writer on the same principal, or the brain) hold the outstanding-request cap, so the pass
         // could not admit its next write. They settle on their own: wait with backoff, say so, and past the no-progress window stop
         // `blocked` with the counts and the writer to inspect, never an uncaught exit without a drain summary.
+        // #6696 (A7): past the preflight, a cumulative cap or the background pause stops the run resumable, never as a failure.
+        if (isCapacityPause(error)) {
+          const e = error as OperationError;
+          return finish(last ?? NO_PASS_RESULT, 'resumable', 'capacity_paused', { capacity_pause: { code: e.code, reason: e.reason ?? null, detail: e.detail ?? null,
+            message: e.message, ...(e.fix ? { fix: e.fix } : {}) } });
+        }
         if (isWriteCapacityWait(error) && !signal?.aborted) {
           capacity ??= { since: clock(), attempts: 0 };
           const counts = outstandingCapacityOf(error), waitedMs = clock() - capacity.since;
@@ -498,8 +560,13 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
           const delay = input.backoffMs !== undefined ? input.backoffMs * 4 ** (drops - 1) : CONNECTION_RETRY_MS[drops - 1]!;
           if (input.announce) serr(`[sync] ${index}/${total ?? '?'} processed · database connection dropped (${errorText(error)}); reconnecting and retrying in ${formatDuration(Math.round(delay / 1000))} (${drops} of ${CONNECTION_STRIKES})`);
           await sleep(delay, signal);
+          if (deadlineStop()) return finish(last ?? NO_PASS_RESULT, 'resumable', 'deadline');
           if (signal?.aborted) throw error;
-          await input.reconnect?.(error).catch(() => undefined);
+          // #6706: a reconnect that hangs past the drain's deadline is not awaited; the stop is reported from the last durable result.
+          await Promise.race([input.reconnect?.(error).catch(() => undefined), ...(coop.signal ? [new Promise<void>(resolve => {
+            if (coop.signal!.aborted) resolve(); else coop.signal!.addEventListener('abort', () => resolve(), { once: true });
+          })] : [])]);
+          if (deadlineStop()) return finish(last ?? NO_PASS_RESULT, 'resumable', 'deadline');
           continue;
         }
         const delay = transientDelay(error, ++attempt, refreshWaitedMs, input.backoffMs ?? 250);
@@ -510,6 +577,8 @@ export async function runDrain(input: DrainInput): Promise<SyncResult> {
       }
       if (!continues(result)) {
         if (TERMINAL_STATUSES.has(result.status)) return finish(result, 'synced');
+        if (result.leaseHeld) return result.drain?.stop_reason === 'drain_stalled' ? finish(result, 'blocked', 'drain_stalled', { stall: result.drain.stall })
+          : finish(result, 'resumable', 'drain_lease_held', { retry_after_ms: result.leaseHeld.retry_after_ms });
         // #6278: the breaker's systemic stop is one diagnostic, not a failed page.
         if (result.breaker) return finish(result, 'blocked', 'preparation_systemic');
         if (result.status === 'blocked_by_failures') return finish(result, 'blocked', 'blocked_by_failures');
@@ -593,7 +662,8 @@ export function drainClaimOf(row: { head_state: string | null; head_claim_phase:
   const own = !!stamp && !!row.head_token && stamp.token === row.head_token;
   const age = (at: unknown) => { const ms = typeof at === 'string' ? Date.parse(at) : NaN; return Number.isFinite(ms) ? Math.max(0, now - ms) : null; };
   const budget = String(row.head_kind ?? '').startsWith('managed_sync_') ? budgets.syncMs : budgets.maintenanceMs;
-  const phase = own ? stamp!.phase === 'publishing' ? 'publishing' : 'preparing' : null;
+  // #6650: an undispatched group follower's stamp names its owner but no phase; it reads as unstamped, never as preparing.
+  const phase = own && (stamp!.phase === 'publishing' || stamp!.phase === 'preparing') ? stamp!.phase : null;
   const waiting = own ? stamp!.waiting_on : null;
   const owner = own && stamp!.owner && typeof stamp!.owner === 'object' ? stamp!.owner as Record<string, unknown> : null;
   return { phase, step: own && typeof stamp!.step === 'string' ? stamp!.step : null,
@@ -681,21 +751,27 @@ export function engineStallProbe(engine: BrainEngine, sourceId?: string): StallP
       return (await listHostConsumers(engine, localHostId()).catch(() => [])).some(row => (row.mode === 'full' || row.mode === 'promoted') && row.liveness === 'live');
     },
     ...(sourceId ? { async head() {
-      const [row] = await engine.executeRaw<{ head_state: string; head_claim_phase: unknown; head_token: string | null; head_lapsed: boolean | null; head_kind: string | null; head_request_id: string | null }>(
-        `SELECT h.state AS head_state, h.id::text AS head_request_id, h.claim_phase AS head_claim_phase, h.execution_token::text AS head_token,
+      const [row] = await engine.executeRaw<{ head_state: string; head_claim_phase: unknown; head_token: string | null; head_lapsed: boolean | null; head_kind: string | null; head_request_id: string | null;
+        head_write_request_id: string | null }>(
+        `SELECT h.state AS head_state, h.id::text AS head_request_id, h.request_id::text AS head_write_request_id, h.claim_phase AS head_claim_phase, h.execution_token::text AS head_token,
            (h.claim_expires_at IS NOT NULL AND h.claim_expires_at < now()) AS head_lapsed, h.intent->>'kind' AS head_kind
          FROM persistence_source_bindings b
          JOIN sources s ON s.id = b.source_id AND s.incarnation = b.source_incarnation
-         JOIN LATERAL (SELECT e.id, e.state, e.claim_phase, e.execution_token, e.claim_expires_at, e.intent FROM persistence_requests e
+         JOIN LATERAL (SELECT e.id, e.request_id, e.state, e.claim_phase, e.execution_token, e.claim_expires_at, e.intent FROM persistence_requests e
            WHERE e.worktree_id = b.worktree_id AND e.state IN ('queued','running','recovering') ORDER BY (e.state <> 'running'), e.sequence LIMIT 1) h ON true
          WHERE b.source_id = $1`, [sourceId], { timeoutMs: HEAD_READ_TIMEOUT_MS, signal: AbortSignal.timeout(HEAD_READ_TIMEOUT_MS + 500) });
       if (!row) return null;
       const { localHostId } = await import('./identity.ts');
       const bound = { timeoutMs: HEAD_READ_TIMEOUT_MS, signal: AbortSignal.timeout(HEAD_READ_TIMEOUT_MS + 500) };
-      return { head_state: row.head_state, request_id: row.head_request_id, claim: drainClaimOf(row, await (budgets ??= readPreparationBudgets(engine))),
+      return { head_state: row.head_state, request_id: row.head_request_id, write_request_id: row.head_write_request_id, claim: drainClaimOf(row, await (budgets ??= readPreparationBudgets(engine))),
         ...await headClaimability(engine, { id: row.head_request_id, state: row.head_state }, localHostId(), bound), consumer: await describeHostConsumer(engine, { signal: bound.signal }) };
     } } : {}),
   };
+}
+
+/** #6706: whether a caller's drain deadline is within the cooperative margin, so no further pass or stage may start. */
+export function deadlinePassed(deadlineAtMs: number | undefined, now = Date.now()): boolean {
+  return deadlineAtMs !== undefined && deadlineAtMs - now <= DEADLINE_MARGIN_MS;
 }
 
 /** The managed-sync drain over one engine; the CLI's managed path. */
@@ -712,23 +788,24 @@ export async function drainManagedSync(engine: BrainEngine, opts: SyncOpts, anno
   const laneRun = bulk.enabled && (bulk.lanes ?? 1) > 1 ? randomUUID() : undefined;
   const { closeLaneRun } = await import('./sync-lanes.ts');
   const publicationCeilingMs = await readPublicationCeilingMs(engine);
-  // #6423: the sync's own waiver runs and admissions use the ordinary pool even where the consumer has a direct route.
-  if (announce) {
-    const { consumerConnectionRoute } = await import('./consumer-lane.ts');
-    if (consumerConnectionRoute(engine).pooler_mode === 'transaction') serr('[sync] this sync admits its writes through a transaction-mode pooler (prepare=false, port 6543); '
-      + `a round trip it never answers stops the drain no_admission after ${formatDuration(IN_PASS_NO_PROGRESS_MS / 1000)}. A session-mode (5432) or direct database URL avoids it.`);
-  }
   let result: SyncResult | undefined;
+  // #6696 (A7): the first pass checks the run's estimated receipts against the capacity left before any admission.
+  let preflighted = false;
   try {
-    result = await runDrain({ signal: opts.signal, onProgress: opts.onProgress, probe: engineStallProbe(engine, opts.sourceId), announce, publicationCeilingMs,
+    result = await runDrain({ signal: opts.signal, deadlineAtMs: opts.deadlineAtMs, onProgress: opts.onProgress, probe: engineStallProbe(engine, opts.sourceId), announce, publicationCeilingMs, governMs: opts.governMs,
       reconnect: error => engine.reconnect({ error }),
       bulk: { enabled: bulk.enabled, reason: bulk.reason, lanes: bulk.lanes ?? 1, lanesMax: bulk.lanesMax, lanesReason: bulk.lanesReason ?? null, lanesCap: bulk.lanesCap },
-      pass: (signal, onProgress) => performManagedSync(engine, { ...opts, signal, onProgress, drainStartedAt, ...(bulk.enabled ? { bulk: { ...bulk, laneRun } } : {}) }) });
+      pass: (signal, onProgress) => {
+        const capacityPreflight = !preflighted;
+        preflighted = true;
+        return performManagedSync(engine, { ...opts, signal, onProgress, drainStartedAt, capacityPreflight, ...(bulk.enabled ? { bulk: { ...bulk, laneRun } } : {}) });
+      } });
   } finally {
     if (laneRun) {
-      const stats = await closeLaneRun(laneRun);
-      const { cancelOrphanedLaneRows } = await import('./sync-window.ts');
-      await cancelOrphanedLaneRows(engine, laneRun, result?.drain?.outcome === 'blocked' ? 10_000 : 0).catch(() => undefined);
+      // #6706: a caller deadline bounds lane teardown too; stats a late close would have added are simply left out of the report.
+      const left = opts.deadlineAtMs === undefined ? null : Math.max(0, opts.deadlineAtMs - Date.now());
+      const stats = left === null ? await closeLaneRun(laneRun)
+        : await Promise.race([closeLaneRun(laneRun), new Promise<undefined>(resolve => { const t: ReturnType<typeof setTimeout> = setTimeout(() => resolve(undefined), left); t.unref?.(); })]);
       const lanes = result?.drain?.bulk?.lanes;
       if (lanes && stats) Object.assign(lanes, { busy: stats.busy, apply_ms_per_page: stats.applyMsPerPage, turn_wait_share: stats.turnWaitShare });
     }
@@ -737,12 +814,12 @@ export async function drainManagedSync(engine: BrainEngine, opts: SyncOpts, anno
   // since the pin (an incremental pin..HEAD discovery, which also re-screens holds whose file a later commit changed), so the
   // invocation ends at HEAD instead of leaving the gap to the next launch. Never a second extra pass: a checkout that keeps
   // committing would otherwise loop forever.
-  if (result.drain?.outcome === 'synced' && result.toCommit && !opts.dryRun && !opts.signal?.aborted && result.status !== 'up_to_date' && !result.staged) {
+  if (result.drain?.outcome === 'synced' && result.toCommit && !opts.dryRun && !opts.signal?.aborted && result.status !== 'up_to_date' && !result.staged && !deadlinePassed(opts.deadlineAtMs)) {
     const head = await headOfSource(engine, opts);
     if (head && head !== result.toCommit) {
       if (announce) serr(`[sync] HEAD moved past the pinned target ${result.toCommit.slice(0, 8)} while the run drained; one more pass imports the commits since (to ${head.slice(0, 8)}).`);
       const pin = result.toCommit;
-      const again = await runDrain({ signal: opts.signal, onProgress: opts.onProgress, probe: engineStallProbe(engine, opts.sourceId), announce: false, publicationCeilingMs,
+      const again = await runDrain({ signal: opts.signal, deadlineAtMs: opts.deadlineAtMs, onProgress: opts.onProgress, probe: engineStallProbe(engine, opts.sourceId), announce: false, publicationCeilingMs, governMs: opts.governMs,
         reconnect: error => engine.reconnect({ error }),
         bulk: { enabled: bulk.enabled, reason: bulk.reason, lanes: bulk.lanes ?? 1, lanesMax: bulk.lanesMax, lanesReason: bulk.lanesReason ?? null, lanesCap: bulk.lanesCap },
         pass: (signal, onProgress) => performManagedSync(engine, { ...opts, signal, onProgress, drainStartedAt, ...(bulk.enabled ? { bulk: { ...bulk, laneRun } } : {}) }) });
@@ -819,7 +896,7 @@ const STOP_DOCS: Record<DrainStopReason, CatalogueName> = {
   recovery_required: 'sync_drain_writer_blocked', owner_unavailable: 'sync_drain_writer_blocked', unexpected_file_bytes: 'sync_drain_writer_blocked',
   unexpected_staging_bytes: 'sync_drain_writer_blocked', blocked_by_failures: 'sync_drain_blocked_by_failures',
   preparation_abandoned: 'sync_drain_preparation_abandoned', preparation_systemic: 'sync_drain_preparation_systemic', write_capacity: 'sync_drain_write_capacity',
-  connection_lost: 'sync_drain_connection_lost',
+  connection_lost: 'sync_drain_connection_lost', capacity_paused: 'sync_drain_capacity_paused', drain_lease_held: 'sync_drain_lease_held',
 };
 
 /** What the agent runs next, or null when the sync is done (DX-A2). */
@@ -829,6 +906,34 @@ export function drainNext(result: SyncResult, resumeCommand: string, sourceId: s
   const d = result.drain;
   const estimate = { eta_seconds: d?.eta_seconds ?? null, rate_pages_per_min: d?.rate_pages_per_min ?? null };
   const docs = d?.stop_reason ? ERROR_CATALOGUE[STOP_DOCS[d.stop_reason]].docs : undefined;
+  if (outcome === 'resumable' && d?.stop_reason === 'capacity_paused') {
+    const pause = d.capacity_pause;
+    const raise = pause?.fix?.argv?.join(' ');
+    return { command: resumeCommand, safe_to_loop: false, retry_after_ms: 0, ...estimate, code: 'capacity_paused',
+      why: `The sync paused: ${pause?.message ?? 'a cumulative write cap refused its next admission'} Nothing failed; the cursor and every accepted write are intact. `
+        + `${pause?.reason === 'lifetime_ids' ? 'Request ids never free, so ' : ''}${raise ? `the brain host runs ${raise} (reversible)` : 'the brain host raises the cap gbrain doctor --only persistence_capacity --json names'}`
+        + `${pause?.reason === 'terminal_bytes' ? ', or receipts compact over time' : ''}; then rerun: ${resumeCommand}`, ...(docs ? { docs } : {}) };
+  }
+  if (outcome === 'resumable' && (d?.stop_reason === 'drain_lease_held' || result.leaseHeld)) {
+    const held = result.leaseHeld;
+    return { command: resumeCommand, safe_to_loop: true, retry_after_ms: held?.retry_after_ms ?? d?.retry_after_ms ?? 0, ...estimate, code: 'sync_drain_lease_held',
+      why: held?.fix.why ?? 'Another drainer holds this source\'s drain lease and resumes the same cursor; rerun after retry_after_ms.',
+      ...(held ? { fix: renderAction({ ...held.fix, argv: resumeCommand.split(' ') }, cliRenderContext()) } : {}), docs: ERROR_CATALOGUE.sync_drain_lease_held.docs };
+  }
+  // #6712 PR 1: the drain-lease holder this run followed heartbeats but has committed nothing (and saved no cursor) for the
+  // stall window. Waiting again would read as a clean exit on every tick, so this stops blocked with the holder named.
+  if (d?.stop_reason === 'drain_stalled' && d.stall?.lease_holder) {
+    const holder = d.stall.lease_holder, who = `the ${holder.kind} drainer${holder.pid ? ` (pid ${holder.pid}${holder.host ? ` on ${holder.host}` : ''})` : ''}`;
+    const breakLock = `gbrain sync --source ${sourceId} --no-pull --break-lock`;
+    return { command: `gbrain sources writer status --source ${sourceId} --json`, safe_to_loop: false, retry_after_ms: 0, ...estimate, code: 'drain_stalled', cause: 'no_progress',
+      why: `Source ${sourceId}'s drain lease is held by ${who}${holder.version ? `, gbrain ${holder.version}` : ''}, which still heartbeats but has committed no page and saved no cursor for ${d.stall.stalled_seconds}s, `
+        + `so this run stopped following it. Inspect the writer (read-only), then stop that process (or wait for it if it is a long discovery) and rerun: ${resumeCommand}. `
+        + `Once it has exited, ${breakLock} releases a lease it left behind; it never breaks a live holder.`,
+      fix: renderAction({ argv: ['gbrain', 'sources', 'writer', 'status', '--source', sourceId, '--json'], consent: [], actor: 'host_admin', requires_exclusive: false,
+        why: 'Status names the source\'s writer, its step and the requests it holds, read-only.',
+        user_message: `Source ${sourceId} is held by ${who}, which has made no progress for ${d.stall.stalled_seconds}s. Stop that process, then run: ${breakLock} and ${resumeCommand}`,
+        verify: { argv: ['gbrain', 'sync', 'status', '--source', sourceId, '--json'] } }, cliRenderContext()), docs: ERROR_CATALOGUE.sync_drain_stalled.docs };
+  }
   if (outcome === 'resumable') {
     const abandoned = d?.stop_reason === 'preparation_abandoned';
     return { command: resumeCommand, safe_to_loop: true, retry_after_ms: d?.retry_after_ms ?? 0, ...estimate,
@@ -914,15 +1019,6 @@ export function drainNext(result: SyncResult, resumeCommand: string, sourceId: s
         + `Run the sync from a process that can write the source's lock directory (the owner's gbrain serve, or this command outside the sandbox), then rerun: ${resumeCommand}`,
       ...(docs ? { docs } : {}) };
   }
-  // #6423: the pass admitted nothing for the whole window; the step and statement name where it waited.
-  if (d?.stop_reason === 'drain_stalled' && d.stall?.cause === 'no_admission') {
-    const stall = d.stall;
-    return { command: resumeCommand, safe_to_loop: false, retry_after_ms: 0, ...estimate, code: 'drain_stalled', cause: 'no_admission',
-      why: `The sync admitted no write for ${stall.stalled_seconds}s${stall.step ? ` while at step ${stall.step}` : ''}${stall.last_sql ? ` (last statement ${stall.last_sql.label})` : ''}, and no request for this source was unfinished, `
-        + 'so it stopped instead of waiting forever. A transaction-mode pooler (port 6543) that never answers a round trip does this. The cursor and its frozen manifest are intact. '
-        + `Point the brain's database URL at the session-mode (port 5432) or direct URL of the same database (GBRAIN_DIRECT_DATABASE_URL routes only the consumer, not the sync's own admissions), check it with gbrain doctor --json, then rerun: ${resumeCommand}`,
-      ...(docs ? { docs } : {}) };
-  }
   const writerBlocked = d?.stop_reason && d.stop_reason !== 'blocked_by_failures' && d.stop_reason !== 'deadline';
   if (writerBlocked) {
     return { command: `gbrain sources writer status ${sourceId}`, safe_to_loop: false, retry_after_ms: 0, ...estimate,
@@ -933,10 +1029,22 @@ export function drainNext(result: SyncResult, resumeCommand: string, sourceId: s
         : `The source's writer needs intervention (${d!.stop_reason}) before more pages can publish. Inspect it, fix what it names, then rerun: ${resumeCommand}`,
       ...(d!.stop_reason === 'drain_stalled' ? { code: 'drain_stalled', cause: d!.stall?.cause } : {}), ...(docs ? { docs } : {}) };
   }
-  const retry = resumeCommand.includes(' --retry-failed') ? resumeCommand : `${resumeCommand} --retry-failed`;
-  return { command: retry, safe_to_loop: false, retry_after_ms: 0, ...estimate,
-    why: 'A page failed to publish. Fix the cause named in managed_write / failures first; rerunning without a fix returns the same failure. Ask the user before skipping content.',
+  return { command: resumeCommand.replace(' --retry-failed', ''), safe_to_loop: false, retry_after_ms: 0, ...estimate,
+    why: 'A page failed to publish. Fix the cause named in managed_write / failures first; the same sync then retries it, and rerunning without a fix returns the same failure. Ask the user before skipping content.',
     ...(docs ? { docs } : {}) };
+}
+
+/**
+ * #6706: what a durable `sync` job does with a drained result. `null` when nothing drained (classic, connector and company-brain
+ * syncs keep master's result); `continue` when `drainNext` says the same run is safe to repeat (a follow-up job may take it);
+ * `needs_operator` when the next step is an inspection or a fix. Decided from `drainNext`, so a new stop reason is classified here.
+ */
+export type JobDisposition = 'synced' | 'continue' | 'needs_operator';
+export function jobDisposition(result: SyncResult, sourceId: string): JobDisposition | null {
+  if (!result.drain) return null;
+  const next = drainNext(result, 'gbrain sync', sourceId);
+  if (!next) return 'synced';
+  return next.safe_to_loop ? 'continue' : 'needs_operator';
 }
 
 /** `outcome`, `drain` and `next` for a JSON envelope; empty for results that are not managed syncs. */
@@ -950,14 +1058,16 @@ export function drainJsonFields(result: SyncResult, resumeCommand: string, sourc
 export function formatDrainSummary(result: SyncResult, resumeCommand: string, sourceId: string): string[] {
   const d = result.drain;
   if (!d) return [];
-  const lines = [`Managed sync ${d.outcome}: ${d.processed} entries this run (${d.written} written, ${d.waived} waived)`
+  // #6712 PR 2 (L5): one headline per state; a drain that finished a run an earlier invocation started says so.
+  const resumed = d.outcome === 'synced' && result.runId && ((result.managedCursor?.progress?.startIndex ?? 0) > 0 || result.cursorAdopted) ? `resumed run ${result.runId} and converged, ` : '';
+  const lines = [`Managed sync ${d.outcome}: ${resumed}${d.processed} entries this run (${d.written} written, ${d.waived} waived)`
     + (d.remaining ? `, ${d.remaining} remaining` : '') + (d.rate_pages_per_min !== null ? `, ${d.rate_pages_per_min} pages/min` : '')
     + (d.remaining && d.eta_seconds !== null ? `, indexing ETA ${formatDuration(d.eta_seconds)}` : '') + '.'];
   if (d.capacity) lines.push(`  Waited ${d.capacity.waited_seconds}s for write capacity: ${d.capacity.outstanding ?? '?'} of ${d.capacity.limit ?? '?'} ${d.capacity.scope ?? 'principal'} outstanding-request slots in use.`);
   if (d.connection) lines.push(`  Database connection dropped ${d.connection.drops} times in a row (${d.connection.last_error}); the cursor and its frozen manifest are intact.`);
   // #6317 (C3): the summary line carries the same step / waiting_on / last_sql triple as the log lines, and the owner process.
-  if (d.stall?.cause === 'no_admission') lines.push(`  Nothing admitted for ${d.stall.stalled_seconds}s${d.stall.step ? `, step=${d.stall.step}` : ''}${d.stall.last_sql ? `, last_sql=${d.stall.last_sql.label}` : ''}, cause=no_admission.`);
-  else if (d.stall) lines.push(`  Oldest unfinished request ${d.stall.head_request_id ?? d.stall.request_id} (${d.stall.head_state ?? d.stall.state})`
+  // #6712 PR 2: a pass that admitted nothing with no unfinished request (the retired no_admission) reads as such, with its step and statement.
+  if (d.stall) lines.push(`${d.stall.head_request_id === null && d.stall.request_id === 'none' ? '  No request of this source was unfinished' : `  Oldest unfinished request ${d.stall.head_request_id ?? d.stall.request_id} (${d.stall.head_state ?? d.stall.state})`}`
     + `${d.stall.blocked_reason ? `, blocked_reason=${d.stall.blocked_reason}` : ''}${d.stall.step ? `, step=${d.stall.step}` : ''}${d.stall.waiting_on ? `, waiting_on=${d.stall.waiting_on}` : ''}`
     + `${d.stall.last_sql ? `, last_sql=${d.stall.last_sql.label}${d.stall.last_sql.age_ms === null ? '' : ` (${Math.round(d.stall.last_sql.age_ms / 1000)}s ago)`}` : ''}`
     + `${d.stall.cause ? `, cause=${d.stall.cause}` : ''}${d.stall.owner_pid ? `, owner=${d.stall.owner_kind ?? 'process'} pid ${d.stall.owner_pid}` : ''}; claimable here: ${d.stall.claimable_here === null ? 'unknown' : d.stall.claimable_here ? 'yes' : 'no'}`
@@ -975,6 +1085,8 @@ export interface ManagedSyncBacklog {
   rate_pages_per_min: number | null;
   eta_seconds: number | null;
   last_progress_at: string | null;
+  /** #6763: when the cursor's discovery ran (frozen with the manifest); the no-progress age origin until `last_progress_at` exists. */
+  discovered_at: string | null;
   /** #6317: entries this cursor advanced past as holds (no page committed for them). */
   held: number;
   resume_command: string;
@@ -987,7 +1099,7 @@ export interface ManagedSyncBacklog {
  * their latest drain window (CEO-A18), readable from any process.
  */
 export async function readManagedSyncBacklog(engine: BrainEngine, sourceIds?: string[]): Promise<ManagedSyncBacklog[]> {
-  const rows = await engine.executeRaw<{ header: { sourceId: string; index: number; total: number; done?: boolean; progress?: { startedAt: number; startIndex: number; lastAt: number; lastIndex: number };
+  const rows = await engine.executeRaw<{ header: { sourceId: string; index: number; total: number; done?: boolean; discoveredAt?: string; progress?: { startedAt: number; startIndex: number; lastAt: number; lastIndex: number };
     counts?: { held?: number }; processingOptions?: { noEmbed?: boolean; noExtract?: boolean; noSchemaPack?: boolean }; syncOptions?: Parameters<typeof managedSyncResumeArgs>[0]['syncOptions'] } }>(
     `SELECT completed_keys->0 AS header FROM op_checkpoints WHERE op='managed-sync' AND COALESCE(completed_keys->0->>'done','false')<>'true'`);
   return rows.map(({ header }) => header).filter(h => h?.sourceId && (!sourceIds || sourceIds.includes(h.sourceId))).map(h => {
@@ -996,7 +1108,7 @@ export async function readManagedSyncBacklog(engine: BrainEngine, sourceIds?: st
     const estimate = p ? drainEstimate(remaining, p.lastIndex - p.startIndex, p.lastAt - p.startedAt) : { rate_pages_per_min: null, eta_seconds: null };
     const args = managedSyncResumeArgs({ sourceId: h.sourceId, processingOptions: h.processingOptions, syncOptions: h.syncOptions });
     return { source_id: h.sourceId, index: Number(h.index), total: Number(h.total), remaining, ...estimate,
-      last_progress_at: p ? new Date(p.lastAt).toISOString() : null, held: Number(h.counts?.held ?? 0), resume_command: syncResumeCommand(args), resume_args: args };
+      last_progress_at: p ? new Date(p.lastAt).toISOString() : null, discovered_at: h.discoveredAt ?? null, held: Number(h.counts?.held ?? 0), resume_command: syncResumeCommand(args), resume_args: args };
   });
 }
 

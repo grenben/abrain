@@ -47,6 +47,7 @@
  * row numbers under the page lock, and fails the request when an insert is
  * lost.
  */
+import { backgroundPaused, readBackgroundPauseShare } from '../persistence/admission-origin.ts';
 import type { BrainEngine, NewFact } from '../engine.ts';
 import type { GBrainConfig } from '../config.ts';
 import type { Page } from '../types.ts';
@@ -60,8 +61,9 @@ import { opError, OperationError } from '../ops/contract.ts';
 import { readFix } from '../ops/op-fix.ts';
 import { authorizeStoredRequest, authorizeWrite } from '../persistence/authority.ts';
 import { digest, jsonBytes } from '../persistence/digest.ts';
+import { receiptReservation } from '../persistence/receipt-bytes.ts';
 import { getWriteRequestById } from '../persistence/journal.ts';
-import { readJournalLimits } from '../persistence/limits.ts';
+import { journalLimitKey, oneYearCapacity, readJournalLimits } from '../persistence/limits.ts';
 import { principalKey } from '../persistence/model.ts';
 import { PERSISTENCE_IPC_MAX_BYTES } from '../persistence/ipc.ts';
 import { resolveManagedFactsEmbedding } from '../persistence/facts-maintenance.ts';
@@ -69,10 +71,12 @@ import { maintenanceCallerPreflight, maintenancePreflight, submitDatabaseMainten
 import { loadConfig } from '../config.ts';
 import { waitForWrite } from '../persistence/service.ts';
 import { catalogueError } from '../error-catalogue.ts';
-import { CONVERSATION_EXTRACTOR_VERSION, NON_EXTRACTABLE_AUDIT_SOURCE, TERMINAL_AUDIT_SOURCE, stampExtractorVersion } from './audit-sources.ts';
+import { AUDIT_ROW_SOURCES, CONVERSATION_EXTRACTOR_VERSION, NON_EXTRACTABLE_AUDIT_SOURCE, TERMINAL_AUDIT_SOURCE, stampExtractorVersion } from './audit-sources.ts';
 import { ALLOWED_TYPES, pageTypesForAllowed, type AllowedType } from './conversation-types.ts';
 import { withWriteTrust } from '../persistence/context.ts';
 import { conversationDerivation } from '../persistence/derived-facts.ts';
+import { RELINKED_DERIVED_ROW, inheritRelinkedEntities } from './conversation-relink-carry.ts';
+import { recordReextractMemo } from './conversation-memo.ts';
 import { recordTaintEdges } from '../trust/taint.ts';
 import { applyGateDecision, derivedGateConfig, derivedGateInput } from '../trust/derived-gate.ts';
 import { decideFactWrite, recordFlaggedRow } from '../write-gate-store.ts';
@@ -242,43 +246,42 @@ export async function conversationIntentByteLimit(engine: BrainEngine): Promise<
 }
 
 /**
- * Before model work: stop admitting once this writer's outstanding requests,
- * reserved receipt bytes or permanent request ids would pass
- * OUTSTANDING_ADMISSION_SHARE of their limit. The writer is the local CLI
- * principal the user's own CLI writes share, so the last 20% stays theirs:
- * reserved receipt bytes free only when receipts compact (after the retention
- * window), request ids never. `needed` is the run's planned batch requests
- * up front, 1 before each new batch; the suggested `--limit` is in pages.
+ * Before model work: stop admitting once this writer's outstanding requests
+ * pass OUTSTANDING_ADMISSION_SHARE of their limit (`maintenance_backpressure`,
+ * retryable: they settle), or its reserved receipt bytes or permanent request
+ * ids would pass the background pause line (`write_capacity_backpressure`,
+ * host-only, A5): the writer is the local CLI principal the user's own CLI
+ * writes share, so the rest stays theirs. Reserved receipt bytes free only
+ * when receipts compact, request ids never. `needed` is the run's planned
+ * batch requests up front, 1 before each new batch.
  */
 export async function assertConversationAdmissionHeadroom(engine: BrainEngine, authority: MaintenanceAuthority, needed = 1): Promise<void> {
   const limits = await readJournalLimits(engine);
   const [counter] = await engine.executeRaw<{ outstanding_count: number | string; terminal_bytes: number | string; lifetime_ids: number | string }>(
     'SELECT outstanding_count, terminal_bytes, lifetime_ids FROM persistence_counters WHERE key=$1', [principalKey(authority.writer.principal)]);
   const sourceId = authority.writer.sourceId;
-  const share = (limit: number) => Math.max(1, Math.floor(limit * OUTSTANDING_ADMISSION_SHARE));
   const outstanding = Number(counter?.outstanding_count ?? 0);
-  if (outstanding >= share(limits.principalOutstanding)) {
+  if (outstanding >= Math.max(1, Math.floor(limits.principalOutstanding * OUTSTANDING_ADMISSION_SHARE))) {
     throw catalogueError('maintenance_backpressure',
       `Conversation fact extraction stopped admitting: ${outstanding} of this writer's ${limits.principalOutstanding} outstanding requests are still pending.`,
       `Let the pending requests settle (gbrain sources writer status --source ${sourceId} --json shows them; a resident gbrain serve or the next CLI run publishes them), then rerun the same command. Pages already published keep their facts.`);
   }
-  const reservation = Math.max(16_384, jsonBytes(authority.writer) + 8192);
-  const cumulative = [
-    { resource: 'reserved receipt bytes', key: 'persistence.limits.principal_terminal_bytes', used: Number(counter?.terminal_bytes ?? 0),
-      limit: limits.principalTerminalBytes, per: reservation,
-      why: 'each request reserves its receipt for the retention window (persistence.receipt_retention_days), and the reservation frees only when receipts compact' },
-    { resource: 'permanent request ids', key: 'persistence.limits.principal_lifetime_ids', used: Number(counter?.lifetime_ids ?? 0),
-      limit: limits.principalLifetimeIds, per: 1, why: 'request ids are never reused or freed' },
-  ];
-  for (const r of cumulative) {
-    const ceiling = share(r.limit);
+  // #6696 (A5): the cumulative caps follow the background pause, with the host-only, resource-specific fix: waiting frees no request id.
+  const pause = await readBackgroundPauseShare(engine);
+  const reservation = receiptReservation({ authority: authority.writer });
+  const key = principalKey(authority.writer.principal);
+  for (const r of [
+    { resource: 'terminal_bytes' as const, setting: 'principalTerminalBytes' as const, used: Number(counter?.terminal_bytes ?? 0), per: reservation },
+    { resource: 'lifetime_ids' as const, setting: 'principalLifetimeIds' as const, used: Number(counter?.lifetime_ids ?? 0), per: 1 },
+  ]) {
+    const limit = limits[r.setting];
+    const ceiling = Math.floor(limit * pause);
     if (r.used + needed * r.per <= ceiling) continue;
     const room = Math.max(0, Math.floor((ceiling - r.used) / r.per)) * batchCaps.factPages;
-    const planned = needed > 1 ? `${needed} planned` : 'the next';
-    throw catalogueError('maintenance_backpressure',
-      `Conversation fact extraction stopped before admitting ${planned} request(s): this writer's ${r.resource} would pass 80% of its limit (${r.used} used of ${r.limit}).`,
-      `The last 20% stays free for this CLI writer's other writes; ${r.why}. ${room > 0 ? `Run a smaller batch that fits: gbrain extract-conversation-facts --source-id ${sourceId} --limit ${room}. ` : ''}`
-        + `Check the writer with gbrain sources writer status --source ${sourceId} --json; raising ${r.key} (gbrain config set ${r.key} <n>) is the user's call.`);
+    throw backgroundPaused(key, r.resource, r.used, limit, pause, journalLimitKey(r.setting),
+      await oneYearCapacity(engine, key, r.resource === 'lifetime_ids' ? 'LifetimeIds' : 'TerminalBytes', r.used, limit), {
+        what: `Conversation fact extraction stopped before admitting ${needed > 1 ? `${needed} planned` : 'the next'} request(s)`,
+        alternative: room > 0 ? `A smaller batch fits: gbrain extract-conversation-facts --source-id ${authority.writer.sourceId} --limit ${room}.` : undefined });
   }
 }
 
@@ -405,6 +408,7 @@ export async function replaceConversationFacts(tx: BrainEngine, sourceId: string
   rows: Array<Omit<ConversationFactRow, 'row_num' | 'source_markdown_slug'>>): Promise<{ deleted: number; inserted: number; ids: number[] }> {
   const deleted = await clearConversationFacts(tx, sourceId, slug);
   if (!rows.length) return { deleted, inserted: 0, ids: [] };
+  rows = await inheritRelinkedEntities(tx, sourceId, slug, rows);
   const [top] = await tx.executeRaw<{ n: number | string | null }>(
     'SELECT max(row_num) AS n FROM facts WHERE source_id=$1 AND source_markdown_slug=$2', [sourceId, slug]);
   const start = top?.n == null ? 0 : Number(top.n) + 1;
@@ -424,18 +428,30 @@ export const LABEL_RETIRED_MARKER = 'retired: conversation-labels';
  * history other records depend on: a row an open loop (`open_loops.fact_id`,
  * no FK) or another fact's `superseded_by` references is expired, never
  * deleted, and rows `gbrain repair conversation-labels` retired stay expired.
- * Every other extractor row of the page is deleted. Returns the rows removed
- * from the active batch.
+ * A row `gbrain facts relink --conversation` linked is expired too, so the
+ * replacement inherits its entity (conversation-relink-carry.ts); the previous
+ * clear's expired relinked rows go first. Every other extractor row of the
+ * page is deleted. Returns the rows removed from the active batch.
  */
+/** The page's conversation facts, audit rows aside: what a clear would lose that a window extraction may not see again. */
+export async function countConversationFacts(db: BrainEngine, sourceId: string, slug: string): Promise<number> {
+  const [row] = await db.executeRaw<{ count: string }>(`SELECT count(*)::text AS count FROM facts f WHERE f.source_id=$1 AND f.source_markdown_slug=$2
+    AND f.source LIKE '${CONVERSATION_FACTS_SOURCE_PREFIX}%' AND NOT (f.source = ANY($3::text[]))`, [sourceId, slug, [...AUDIT_ROW_SOURCES]]);
+  return Number(row?.count ?? 0);
+}
+
 export async function clearConversationFacts(db: BrainEngine, sourceId: string, slug: string): Promise<number> {
   const page = `f.source_id=$1 AND f.source_markdown_slug=$2 AND f.source LIKE '${CONVERSATION_FACTS_SOURCE_PREFIX}%'`;
   const referenced = 'EXISTS (SELECT 1 FROM open_loops o WHERE o.fact_id=f.id) OR EXISTS (SELECT 1 FROM facts g WHERE g.superseded_by=f.id)';
+  await db.executeRaw(`DELETE FROM facts f WHERE ${page} AND f.expired_at IS NOT NULL AND ${RELINKED_DERIVED_ROW} AND NOT (${referenced})`, [sourceId, slug]);
+  const [relinked] = await db.executeRaw<{ count: string }>(`WITH up AS (UPDATE facts f SET expired_at=now()
+    WHERE ${page} AND f.expired_at IS NULL AND ${RELINKED_DERIVED_ROW} RETURNING 1) SELECT COUNT(*)::text AS count FROM up`, [sourceId, slug]);
   const [expired] = await db.executeRaw<{ count: string }>(`WITH up AS (UPDATE facts f SET expired_at=now()
     WHERE ${page} AND f.expired_at IS NULL AND (${referenced}) RETURNING 1) SELECT COUNT(*)::text AS count FROM up`, [sourceId, slug]);
   const [deleted] = await db.executeRaw<{ count: string }>(`WITH del AS (DELETE FROM facts f
-    WHERE ${page} AND NOT (${referenced}) AND COALESCE(f.context,'') NOT LIKE '%${LABEL_RETIRED_MARKER}%' RETURNING 1)
+    WHERE ${page} AND NOT (${referenced}) AND COALESCE(f.context,'') NOT LIKE '%${LABEL_RETIRED_MARKER}%' AND NOT (${RELINKED_DERIVED_ROW}) RETURNING 1)
     SELECT COUNT(*)::text AS count FROM del`, [sourceId, slug]);
-  return Number(expired?.count ?? 0) + Number(deleted?.count ?? 0);
+  return Number(relinked?.count ?? 0) + Number(expired?.count ?? 0) + Number(deleted?.count ?? 0);
 }
 
 
@@ -489,6 +505,7 @@ async function applyEntry(tx: BrainEngine, row: WriteRequest, entry: Conversatio
     if (flags[i] && ids.length === kept.length) await recordFlaggedRow(tx, flags[i]!, { table: 'facts', id, sourceId: row.source_id });
   }
   const outcome = entry.rows.find(fact => OUTCOME_SOURCES.has(fact.source));
+  if (outcome?.source === TERMINAL_AUDIT_SOURCE) await recordReextractMemo(tx, row.source_id, entry.slug); // #6764
   return { ...base, status: 'committed', deleted, facts_inserted: kept.filter(fact => !OUTCOME_SOURCES.has(fact.source)).length,
     page_outcome: outcome ? (outcome.source === TERMINAL_AUDIT_SOURCE ? 'complete' : 'non_extractable') : null, newest_end: entry.newest_end,
     vectors_dropped: vectors ? 0 : entry.rows.filter(fact => fact.embedding).length };
@@ -756,5 +773,5 @@ export async function flushManagedBatch(state: ManagedRunState, opts: { afterErr
 /** Managed admission backpressure and exhausted request ids stop the whole run, not one page. */
 export function stopsRun(err: unknown): boolean {
   return (!!err && typeof err === 'object' && RUN_STOPPING.has(err))
-    || (err instanceof OperationError && (err.code === 'maintenance_backpressure' || err.code === 'queue_capacity'));
+    || (err instanceof OperationError && (err.code === 'maintenance_backpressure' || err.code === 'queue_capacity' || err.code === 'write_quota_exhausted' || err.code === 'write_capacity_backpressure'));
 }

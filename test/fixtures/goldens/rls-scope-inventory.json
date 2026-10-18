@@ -813,6 +813,34 @@
         ],
         "flagOnScopes": []
       },
+      "getChunkPage#default": {
+        "flagOffLanes": [
+          "pool"
+        ],
+        "flagOffOpensTransaction": false,
+        "flagOn": "scoped",
+        "flagOnLanes": [
+          "pool",
+          "tx"
+        ],
+        "flagOnScopes": [
+          "default"
+        ]
+      },
+      "getChunkPage#sourceIds+excludePrivate": {
+        "flagOffLanes": [
+          "pool"
+        ],
+        "flagOffOpensTransaction": false,
+        "flagOn": "scoped",
+        "flagOnLanes": [
+          "pool",
+          "tx"
+        ],
+        "flagOnScopes": [
+          "src-a,src-b"
+        ]
+      },
       "getChunkWindows#default": {
         "flagOffLanes": [
           "pool"
@@ -1772,6 +1800,34 @@
           "src-a"
         ]
       },
+      "listEmbeddingStateRows#default": {
+        "flagOffLanes": [
+          "pool"
+        ],
+        "flagOffOpensTransaction": false,
+        "flagOn": "scoped",
+        "flagOnLanes": [
+          "pool",
+          "tx"
+        ],
+        "flagOnScopes": [
+          "*"
+        ]
+      },
+      "listEmbeddingStateRows#sourceIds": {
+        "flagOffLanes": [
+          "pool"
+        ],
+        "flagOffOpensTransaction": false,
+        "flagOn": "scoped",
+        "flagOnLanes": [
+          "pool",
+          "tx"
+        ],
+        "flagOnScopes": [
+          "src-a"
+        ]
+      },
       "listEnrichCandidates#default": {
         "flagOffLanes": [
           "pool"
@@ -2428,12 +2484,12 @@
       },
       "purgeDeletedPages#default": {
         "flagOffLanes": [
-          "pool"
+          "tx"
         ],
-        "flagOffOpensTransaction": false,
+        "flagOffOpensTransaction": true,
         "flagOn": "unscoped",
         "flagOnLanes": [
-          "pool"
+          "tx"
         ],
         "flagOnScopes": []
       },
@@ -2493,6 +2549,48 @@
         ],
         "flagOnScopes": [
           "default"
+        ]
+      },
+      "readEmbeddingStateCounts#full": {
+        "flagOffLanes": [
+          "pool"
+        ],
+        "flagOffOpensTransaction": false,
+        "flagOn": "scoped",
+        "flagOnLanes": [
+          "pool",
+          "tx"
+        ],
+        "flagOnScopes": [
+          "*"
+        ]
+      },
+      "readEmbeddingStateCounts#full+sourceIds": {
+        "flagOffLanes": [
+          "pool"
+        ],
+        "flagOffOpensTransaction": false,
+        "flagOn": "scoped",
+        "flagOnLanes": [
+          "pool",
+          "tx"
+        ],
+        "flagOnScopes": [
+          "src-a"
+        ]
+      },
+      "readEmbeddingStateCounts#ops": {
+        "flagOffLanes": [
+          "pool"
+        ],
+        "flagOffOpensTransaction": false,
+        "flagOn": "scoped",
+        "flagOnLanes": [
+          "pool",
+          "tx"
+        ],
+        "flagOnScopes": [
+          "*"
         ]
       },
       "readPageSnapshot#default": {
@@ -2753,23 +2851,23 @@
       },
       "restorePage#default": {
         "flagOffLanes": [
-          "pool"
+          "tx"
         ],
-        "flagOffOpensTransaction": false,
+        "flagOffOpensTransaction": true,
         "flagOn": "unscoped",
         "flagOnLanes": [
-          "pool"
+          "tx"
         ],
         "flagOnScopes": []
       },
       "restorePage#sourceId": {
         "flagOffLanes": [
-          "pool"
+          "tx"
         ],
-        "flagOffOpensTransaction": false,
+        "flagOffOpensTransaction": true,
         "flagOn": "unscoped",
         "flagOnLanes": [
-          "pool"
+          "tx"
         ],
         "flagOnScopes": []
       },
@@ -3292,23 +3390,28 @@
           "tx>sp"
         ],
         "flagOffOpensTransaction": true,
-        "flagOn": "unscoped",
+        "flagOn": "scoped",
         "flagOnLanes": [
           "tx",
           "tx>sp"
         ],
-        "flagOnScopes": []
+        "flagOnScopes": [
+          "src-a"
+        ]
       },
       "updateSlug#noop": {
         "flagOffLanes": [
           "tx"
         ],
         "flagOffOpensTransaction": true,
-        "flagOn": "unscoped",
+        "flagOn": "scoped",
         "flagOnLanes": [
-          "tx"
+          "tx",
+          "tx>sp"
         ],
-        "flagOnScopes": []
+        "flagOnScopes": [
+          "default"
+        ]
       },
       "updateSourceConfig#default": {
         "flagOffLanes": [
@@ -3447,7 +3550,7 @@
       }
     },
     "static": {
-      "callSites": 29,
+      "callSites": 33,
       "directMethods": {
         "_searchKeywordCJK": 1,
         "countChunklessPagesWithContent": 1,
@@ -3459,17 +3562,21 @@
         "findDuplicatePages": 1,
         "getAllSlugs": 1,
         "getBacklinks": 1,
+        "getChunkPage": 1,
         "getChunkWindows": 1,
         "getChunks": 1,
         "getLinks": 1,
+        "keywordBoundedRead": 1,
         "listChunklessPagesWithContent": 1,
         "listCorpusSample": 1,
+        "listEmbeddingStateRows": 1,
         "listLinkSources": 1,
         "listPages": 1,
         "listPrefixSampledPages": 1,
         "listStaleChunks": 1,
         "listStaleFrontmatterKeyPages": 1,
         "listStalePagesForExtraction": 1,
+        "readEmbeddingStateCounts": 1,
         "readPageSnapshot": 1,
         "readPageSnapshotsBatch": 1,
         "runVectorAttempt": 1,
@@ -3492,6 +3599,7 @@
         "addTakesBatch": "none",
         "addTimelineEntriesBatch": "none",
         "addTimelineEntry": "none",
+        "allocateBodyOccurrenceIds": "none",
         "applyForwardReferenceBootstrap": "none",
         "batchLoadEmotionalInputs": "none",
         "batchRetry": "none",
@@ -3505,6 +3613,7 @@
         "countStalePagesForExtraction": "direct",
         "countStaleTakes": "none",
         "countUnconsolidatedFacts": "none",
+        "createSegmentedPageShell": "none",
         "createVersion": "none",
         "deleteChunks": "none",
         "deleteCodeEdgesForChunks": "none",
@@ -3529,6 +3638,7 @@
         "findOntologyConflicts": "none",
         "findOrphanPages": "none",
         "findTrajectory": "none",
+        "flipBodyGeneration": "none",
         "getAdjacencyBoosts": "none",
         "getAllConfig": "none",
         "getAllSlugs": "direct",
@@ -3538,6 +3648,7 @@
         "getCalibrationCurve": "none",
         "getCalleesOf": "none",
         "getCallersOf": "none",
+        "getChunkPage": "direct",
         "getChunkWindows": "direct",
         "getChunks": "direct",
         "getChunksWithEmbeddings": "none",
@@ -3577,6 +3688,7 @@
         "invalidateContentDriftEmbeddings": "none",
         "invalidateStaleSignatureEmbeddings": "none",
         "jitOffRead": "none",
+        "keywordBoundedRead": "direct",
         "keywordStatementTimeoutSetting": "none",
         "listActiveTakesForPages": "none",
         "listAllPageRefs": "none",
@@ -3584,6 +3696,7 @@
         "listChunklessPagesWithContent": "direct",
         "listConfigKeys": "none",
         "listCorpusSample": "direct",
+        "listEmbeddingStateRows": "direct",
         "listEnrichCandidates": "none",
         "listEvalCandidates": "none",
         "listEvalCaptureFailures": "none",
@@ -3611,13 +3724,17 @@
         "mergeOntologyFact": "none",
         "migrateFactsToCanonical": "none",
         "onCheckout": "none",
+        "openBodyStaging": "none",
         "purgeDeletedPages": "none",
         "putContradictionCacheEntry": "none",
         "putDreamVerdict": "none",
         "putPage": "none",
         "putRawData": "none",
+        "readEmbeddingStateCounts": "direct",
+        "readManifest": "none",
         "readPageSnapshot": "direct",
         "readPageSnapshotsBatch": "direct",
+        "readSegmentTexts": "none",
         "reconnect": "none",
         "refreshPageBody": "none",
         "registerBeforeDisconnect": "none",
@@ -3649,6 +3766,7 @@
         "searchTakesVector": "none",
         "searchTitles": "direct",
         "searchVector": "direct",
+        "setBodyStagingState": "none",
         "setConfig": "none",
         "setEmotionalWeightBatch": "none",
         "setPageAliases": "none",
@@ -3656,11 +3774,15 @@
         "softDeletePage": "none",
         "softDeletePages": "none",
         "sql": "none",
+        "stageManifestRows": "none",
+        "stageSegmentChunks": "none",
+        "stageSegmentTexts": "none",
         "stripStaleFrontmatterKeys": "none",
         "sumStaleChunkChars": "none",
         "supersedeTake": "none",
         "sweepContradictionCache": "none",
         "sweepDreamVerdicts": "none",
+        "sweepSegments": "none",
         "transaction": "none",
         "transactionDirect": "none",
         "transactionOn": "none",

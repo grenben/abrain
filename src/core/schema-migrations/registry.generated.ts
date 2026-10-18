@@ -243,34 +243,21 @@ import { v239 } from './v239-extract-rollup-halt-reasons.ts';
 import { v240 } from './v240-pages-name-lookup-indexes.ts';
 import { v241 } from './v241-persistence-request-slug-intent-index.ts';
 import { v242 } from './v242-extract-atoms-partial-input.ts';
-import { v243 } from './v243-codex-subscription-admission.ts';
-import { v244 } from './v244-codex-subscription-jobs.ts';
-import { v245 } from './v245-extract-subscription-cost.ts';
-import { v246 } from './v246-codex-publication-plans.ts';
-import { v247 } from './v247-codex-action-write-bindings.ts';
-import { v248 } from './v248-codex-upgrade-receipts.ts';
-import { v249 } from './v249-codex-job-parking.ts';
-import { v250 } from './v250-codex-take-proposal-evidence.ts';
-import { v251 } from './v251-codex-calibration-evidence.ts';
-import { v252 } from './v252-codex-think-publications.ts';
-import { v253 } from './v253-codex-auto-think-runs.ts';
-import { v254 } from './v254-codex-think-ab-trials.ts';
-import { v255 } from './v255-precise-auxiliary-spend.ts';
-import { v256 } from './v256-codex-proposal-cache.ts';
-import { v257 } from './v257-codex-eval-results.ts';
-import { v258 } from './v258-codex-brainstorm-runs.ts';
-import { v259 } from './v259-codex-brainstorm-fixtures.ts';
-import { v260 } from './v260-codex-subscription-groups.ts';
-import { v261 } from './v261-codex-skillopt-rollouts.ts';
-import { v262 } from './v262-codex-skillopt-runs.ts';
-import { v263 } from './v263-codex-skillopt-submissions.ts';
-import { v264 } from './v264-codex-shared-skill-optimization.ts';
-import { v265 } from './v265-codex-bootstrap-runs.ts';
-import { v266 } from './v266-codex-subscription-tree.ts';
-import { v267 } from './v267-codex-skillopt-batches.ts';
-import { v268 } from './v268-codex-skillopt-cycles.ts';
-import { v269 } from './v269-codex-skillopt-batch-submissions.ts';
-import { v270 } from './v270-codex-bootstrap-jobs.ts';
+import { v243 } from './v243-persistence-consumer-process-start.ts';
+import { v244 } from './v244-chunk-projected-spans.ts';
+import { v245 } from './v245-page-search-vector-bounded-timeline.ts';
+import { v246 } from './v246-page-embedding-budget.ts';
+import { v247 } from './v247-page-extraction-state.ts';
+import { v248 } from './v248-segmented-page-storage.ts';
+import { v249 } from './v249-belief-ledger.ts';
+import { v250 } from './v250-persistence-request-id-index.ts';
+import { v251 } from './v251-take-horizons.ts';
+import { v252 } from './v252-segmented-chunk-gc-index.ts';
+import { v253 } from './v253-page-view-digests.ts';
+import { v254 } from './v254-segment-reader-marks.ts';
+import { v255 } from './v255-page-body-staging-texts.ts';
+import { v256 } from './v256-chunk-retirement-index.ts';
+import { v257 } from './v257-pages-live-origin-key.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -527,17 +514,4 @@ export const MIGRATIONS: Migration[] = [
   v255,
   v256,
   v257,
-  v258,
-  v259,
-  v260,
-  v261,
-  v262,
-  v263,
-  v264,
-  v265,
-  v266,
-  v267,
-  v268,
-  v269,
-  v270,
 ];

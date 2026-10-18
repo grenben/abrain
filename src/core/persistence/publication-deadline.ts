@@ -21,6 +21,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { BrainEngine } from '../engine.ts';
 import { gucMilliseconds, resolveSessionTimeouts } from '../db.ts';
+import { declareDurablePersistence } from './protocol.ts';
 
 export const PUBLICATION_CEILING_KEY = 'persistence.publication_ceiling_ms';
 /** `persistence.publication_ceiling_ms`' default (60000 to 3600000 accepted). */
@@ -46,6 +47,9 @@ export async function readPublicationCeilingMs(engine: Pick<BrainEngine, 'getCon
   return ceiling.value;
 }
 
+/** Test seam: the next readPublicationCeilingMs reads the config again. */
+export function _resetPublicationCeilingForTest(): void { ceiling = { ...ceiling, at: 0 }; }
+
 /** The idle-in-transaction bound a publish transaction gets: the ceiling, never above the pool's own session value. */
 export function publicationIdleTimeoutMs(ceilingMs = ceiling.value): number {
   const session = gucMilliseconds(resolveSessionTimeouts().idle_in_transaction_session_timeout);
@@ -60,6 +64,14 @@ export function publicationIdleTimeoutMs(ceilingMs = ceiling.value): number {
 export async function bindPublicationTimeouts(tx: BrainEngine): Promise<void> {
   if (tx.kind !== 'postgres') return;
   await tx.executeRaw("SELECT set_config('idle_in_transaction_session_timeout',$1,true)", [`${publicationIdleTimeoutMs()}ms`]);
+}
+
+/**
+ * #6712 L6: the publication's opening statement: the idle bound above (Postgres only, for the same reason) and
+ * `declareDurablePersistence` in one round trip. A refused SET fails the publication's transaction as above.
+ */
+export async function declarePublication(tx: BrainEngine, bound: Pick<BrainEngine, 'kind'> = tx): Promise<string | null> {
+  return declareDurablePersistence(tx, undefined, undefined, bound.kind === 'postgres' ? `${publicationIdleTimeoutMs()}ms` : undefined);
 }
 
 /**

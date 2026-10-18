@@ -8,7 +8,8 @@ import type { BrainEngine } from '../core/engine.ts';
 import type { MinionQueue } from '../core/minions/queue.ts';
 import { loadAllSources, parseSourceConfig, sourceConfigHasRemoteUrl, sourceLocalPathSkipWarning, type SourceRow } from '../core/sources-load.ts';
 import { isConnectorSourceKind } from '../core/persistence/connector-identity.ts';
-import { attemptedConnectorSourceIds } from '../core/persistence/connector-state.ts';
+import { attemptedConnectorSourceIds, type ConnectorAccountMismatch } from '../core/persistence/connector-state.ts';
+import { connectorAccountMismatches, connectorAccountMismatchSkipWarning } from '../core/persistence/connector-account-mismatch.ts';
 import { AUTOPILOT_GIT_PULL_KEY, automaticGitPullDisabled, automaticSyncPull } from '../core/persistence/automatic-sync-policy.ts';
 import { isSyncDisabledConfig } from '../core/sync-policy.ts';
 import { automaticSyncSkip, loadActivationPendingSourceIds, reportAutomaticSyncSkip, skipActivationPendingSync } from '../core/sync-policy.ts';
@@ -261,6 +262,8 @@ export async function dispatchFreshnessSyncs(
     const { isFederatedV2Enabled } = await import('../core/feature-flags.ts');
     if (await isFederatedV2Enabled(engine)) {
       const attempted = await attemptedConnectorSourceIds(engine).catch(() => null);
+      // #6803: unreadable mismatch records fail open; the connector sync refuses again on its own.
+      const mismatched = await connectorAccountMismatches(engine).catch(() => new Map<string, ConnectorAccountMismatch>());
       const sources = await loadAllSources(engine);
       // #6451: one status line per tick when the operator turned automatic pulls off.
       if (await automaticGitPullDisabled(engine)) {
@@ -273,7 +276,7 @@ export async function dispatchFreshnessSyncs(
       const now = Date.now();
       for (const src of sources) {
         if (isConnectorSourceKind(parseSourceConfig(src.config).kind)) {
-          await dispatchConnectorFreshnessSync(queue, src, attempted, activationPending, { intervalMs, now, slot, timeoutMs, jsonMode });
+          await dispatchConnectorFreshnessSync(queue, src, attempted, activationPending, mismatched, { intervalMs, now, slot, timeoutMs, jsonMode });
           continue;
         }
         if (!src.local_path) continue;
@@ -299,6 +302,8 @@ export async function dispatchFreshnessSyncs(
         const lastSyncMs = src.last_sync_at ? new Date(src.last_sync_at).getTime() : 0;
         const ageMs = now - lastSyncMs;
         if (ageMs < intervalMs) continue; // fresh enough
+        // #6706: a live sync job (any submitter) is already draining this source; coalescing into another submitter's row is refused.
+        if (await (await import('../core/persistence/sync-movement.ts')).liveSyncJob(engine, src.id) !== null) continue;
         try {
           const job = await queue.add(
             'sync',
@@ -314,7 +319,9 @@ export async function dispatchFreshnessSyncs(
               idempotency_key: `autopilot-sync:${src.id}:${slot}`,
               max_attempts: 2,
               timeout_ms: timeoutMs,
-              maxWaiting: 1,
+              // #6706: single-flight per source. A sync job drains until synced or its deadline, so a tick while one runs
+              // coalesces into it (waiting or live-lock active) instead of starting a second drainer on the same cursor.
+              maxPending: 1,
             },
           );
           if (jsonMode) {
@@ -346,11 +353,18 @@ async function dispatchConnectorFreshnessSync(
   src: SourceRow,
   attempted: Set<string> | null,
   activationPending: Awaited<ReturnType<typeof loadActivationPendingSourceIds>>,
+  mismatched: ReadonlyMap<string, ConnectorAccountMismatch>,
   { intervalMs, now, slot, timeoutMs, jsonMode }: { intervalMs: number; now: number; slot: string; timeoutMs: number; jsonMode: boolean },
 ): Promise<void> {
   if (isSyncDisabledConfig(src.config)) return;
   if (skipActivationPendingSync(activationPending, src.id, 'freshness_sync_skipped', jsonMode, (l) => process.stderr.write(l + '\n'))) return;
   if (connectorAwaitingFirstSync(src, attempted, jsonMode)) return;
+  const mismatch = mismatched.get(src.id);
+  if (mismatch) {
+    const reason = connectorAccountMismatchSkipWarning(src.id, mismatch);
+    process.stderr.write((jsonMode ? JSON.stringify({ event: 'freshness_source_path_skipped', source_id: src.id, code: 'connector_account_changed', reason }) : reason) + '\n');
+    return;
+  }
   const ageMs = now - (src.last_sync_at ? new Date(src.last_sync_at).getTime() : 0);
   if (ageMs < intervalMs) return;
   try {

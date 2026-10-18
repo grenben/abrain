@@ -240,17 +240,25 @@ for (const backend of backends) describe(`[${backend}] #6511 page purge journal 
 
   if (backend === 'postgres') test('[R1 b] on Postgres a bounded chunk read the server ends is the same deadline', async () => {
     await seed('bounded');
-    await engine.executeRaw(`INSERT INTO persistence_requests(principal_kind,principal_id,request_id,operation,source_id,source_incarnation,slug,digest,intent,authority,state,
-        intent_bytes,terminal_reservation,outcome,completed_at)
-      SELECT 'local_cli','seed-bounded',gen_random_uuid(),'put_page','default',(SELECT incarnation FROM sources WHERE id='default'),'bounded/row-'||g,'d',
-        jsonb_build_object('content',repeat('filler text ',200)),'{}'::jsonb,'committed',0,0,'{}'::jsonb,now() FROM generate_series(1,4000) g`);
-    const clock = startClaimPhase(Date.now(), undefined, 1);
-    const bounded = boundedReads(engine, clock);
-    const error = await sweepRequestsCarrying(bounded, 'default', [CLAIM], { now: () => 0 }).then(() => null, (e: unknown) => e);
+    // Another session holds the journal, so the chunk read is sent inside its budget and waits until the server ends
+    // it at the bound. (A budget that has already run out is refused before the read is sent: the next test.)
+    const error = await engine.transaction(async tx => {
+      await tx.executeRaw('LOCK TABLE persistence_requests IN ACCESS EXCLUSIVE MODE');
+      const bounded = boundedReads(engine, startClaimPhase(Date.now(), undefined, 300));
+      return sweepRequestsCarrying(bounded, 'default', [CLAIM], { now: () => 0 }).then(() => null, (e: unknown) => e);
+    });
     expect(error).toBeInstanceOf(PreparationDeadlineError);
     expect((error as PreparationDeadlineError).code).toBe('preparation_deadline');
     expect((error as PreparationDeadlineError).sqlstate).toBe('57014');
-    await engine.executeRaw("DELETE FROM persistence_requests WHERE principal_id='seed-bounded'");
+  }, 60_000);
+
+  if (backend === 'postgres') test('[R1 b] on Postgres a chunk read issued after the deadline is the deadline, however fast the read would be', async () => {
+    await seed('late');
+    const bounded = boundedReads(engine, startClaimPhase(Date.now() - 5_000, undefined, 1_000));
+    const error = await sweepRequestsCarrying(bounded, 'default', [CLAIM], { now: () => 0 }).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(PreparationDeadlineError);
+    expect((error as PreparationDeadlineError).code).toBe('preparation_deadline');
+    expect((error as PreparationDeadlineError).sqlstate).toBeNull();
   }, 60_000);
 
   test('[R2] a carrying request admitted and cancelled after the preparation scan is redacted by the tail re-check; one still queued is left in place', async () => {
@@ -268,8 +276,11 @@ for (const backend of backends) describe(`[${backend}] #6511 page purge journal 
       const cancelled = await cancelWriteRequest(engine, { kind: principal.principal_kind as never, id: principal.principal_id }, cancelledId);
       expect(cancelled?.state).toBe('cancelled');
       queuedWrite = call('put_page', { slug: `race/queued-${n}`, content: `---\ntitle: Q\ntype: note\n---\nLater: ${CLAIM}.\n`, request_id: queuedId });
-      await Bun.sleep(50);
-      expect((await engine.executeRaw<{ state: string }>('SELECT state FROM persistence_requests WHERE request_id=$1::uuid', [queuedId]))[0]!.state).toBe('queued');
+      let queuedRows: { state: string }[] = [];
+      for (const deadline = Date.now() + 10_000; queuedRows.length === 0 && Date.now() < deadline; await Bun.sleep(25)) {
+        queuedRows = await engine.executeRaw<{ state: string }>('SELECT state FROM persistence_requests WHERE request_id=$1::uuid', [queuedId]);
+      }
+      expect(queuedRows[0]?.state).toBe('queued');
     } }, requestId);
     const purged = await purge(slug, requestId);
     expect(purged).toMatchObject({ status: 'purged', state: 'committed' });

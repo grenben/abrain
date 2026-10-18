@@ -5,41 +5,54 @@ import { prepareAutomaticLinks } from './links-preparation.ts';
 import { preparationConfigView } from './config-snapshot.ts';
 import { withCoordinatedWrite } from './context.ts';
 import { maintenanceAttribution } from './attribution.ts';
-import { unrecordedCanonicalTimeline } from './canonical-projections.ts';
+import { storedCanonicalTimeline, unrecordedCanonicalTimeline } from './canonical-projections.ts';
 import { runMentionPass, type MentionPassResult } from '../mentions/pass.ts';
 import { formatMentionSummary, linkPhaseDeadline, mentionJsonFields, previewMentionPass } from '../mentions/stale.ts';
 import { plannerStatsForLinkDrain } from '../planner-stats.ts';
+import { STALE_TIME_BUDGET_MS, formatStaleCounts, staleExtractionCounts, type StaleExtractionCounts } from '../extraction-lag.ts';
 
 export interface ManagedLinkExtraction { pages: number; created: number; removed: number; timeline: number; skipped: number; remaining: number;
   /** The mention pass (absent when the caller ran links only, as sync does). */
-  mentions?: MentionPassResult; mention_due?: number; mention_last_pass_at?: string | null; }
+  mentions?: MentionPassResult; mention_due?: number; mention_last_pass_at?: string | null;
+  /** #6803 (D3): the terminal counts (`gbrain extract --stale` only; sync's tail does not read them). */
+  counts?: StaleExtractionCounts; }
 
-/** `gbrain extract --stale` on a managed brain, locally or inside the PGLite owner. */
-export async function runManagedStaleExtraction(engine: BrainEngine, opts: { sourceId?: string; dryRun?: boolean }): Promise<ManagedLinkExtraction> {
-  if (!opts.dryRun) return extractManagedStaleLinks(engine, { sourceId: opts.sourceId });
+/**
+ * `gbrain extract --stale` on a managed brain, locally or inside the PGLite owner: a plain run stops at the
+ * `STALE_TIME_BUDGET_MS` budget and the next resumes, `catchUp` runs until nothing is stale (#6803 D2).
+ */
+export async function runManagedStaleExtraction(engine: BrainEngine,
+  opts: { sourceId?: string; dryRun?: boolean; catchUp?: boolean; timeBudgetMs?: number; counts?: boolean }): Promise<ManagedLinkExtraction> {
+  const counts = async () => opts.counts === false ? {} : { counts: await staleExtractionCounts(engine, opts.sourceId) };
+  if (!opts.dryRun) {
+    const result = await extractManagedStaleLinks(engine, { sourceId: opts.sourceId, ...(opts.catchUp ? {} : { timeBudgetMs: opts.timeBudgetMs ?? STALE_TIME_BUDGET_MS }) });
+    return { ...result, ...await counts() };
+  }
   const remaining = await engine.countStalePagesForExtraction({ sourceId: opts.sourceId, versionTs: await effectiveLinkExtractorWatermark(engine) });
   const m = await previewMentionPass(engine, opts.sourceId);
-  return { pages: 0, created: 0, removed: 0, timeline: 0, skipped: 0, remaining, mention_due: m.due, mention_last_pass_at: m.last_pass_at };
+  return { pages: 0, created: 0, removed: 0, timeline: 0, skipped: 0, remaining, mention_due: m.due, mention_last_pass_at: m.last_pass_at, ...await counts() };
 }
 
 /** The `extract --stale` report for a managed brain, in the same text and JSON shapes as the unmanaged sweep. */
 export function formatManagedStaleExtraction(result: ManagedLinkExtraction, dryRun: boolean, json: boolean): string {
+  const counts = result.counts;
   if (json) {
-    return JSON.stringify(dryRun ? { action: 'extract_stale_dry_run', stale_pages: result.remaining, mention_due_pages: result.mention_due ?? 0,
+    return JSON.stringify({ ...(dryRun ? { action: 'extract_stale_dry_run', stale_pages: result.remaining, mention_due_pages: result.mention_due ?? 0,
       mention_last_pass_at: result.mention_last_pass_at ?? null } : {
       action: 'extract_stale_done', links_created: result.created, links_removed: result.removed, timeline_created: result.timeline,
       pages_processed: result.pages, stale_remaining: result.remaining + (result.mentions?.remaining ?? 0),
       ...(result.skipped ? { skipped_changed: result.skipped } : {}), ...(result.mentions ? mentionJsonFields(result.mentions) : {}),
-    });
+    }), ...(counts ?? {}) });
   }
+  const countsLine = counts ? `\n${formatStaleCounts(counts)}` : '';
   if (dryRun) {
     return `(dry run) ${result.remaining} page(s) need link/timeline extraction; ${result.mention_due ?? 0} page(s) need a mention pass ` +
-      `(last pass: ${result.mention_last_pass_at ?? 'never'}). Run without --dry-run to extract.`;
+      `(last pass: ${result.mention_last_pass_at ?? 'never'}). Run without --dry-run to extract.${countsLine}`;
   }
   const mentionLine = result.mentions ? formatMentionSummary(result.mentions) : null;
   return `Extract --stale: ${result.created} link(s) created, ${result.removed} removed, ${result.timeline} timeline entr(ies) from ${result.pages} page(s).` +
     (result.skipped ? ` Skipped ${result.skipped} page(s) edited during extraction or with unresolved attendance; they stay stale.` : '') +
-    (result.remaining ? ` ${result.remaining} page(s) remain stale.` : '') + (mentionLine ? `\n${mentionLine}` : '');
+    (result.remaining ? ` ${result.remaining} page(s) remain stale (raw total).` : '') + (mentionLine ? `\n${mentionLine}` : '') + countsLine;
 }
 
 /** #5984: pages a managed link extraction derives at once on Postgres. */
@@ -83,9 +96,11 @@ export async function extractManagedStaleLinks(engine: BrainEngine,
   const derive = async (slug: string, sourceId: string, stamp?: string) => {
     opts.signal?.throwIfAborted();
     done.add(`${sourceId}\0${slug}`);
+    // A segmented body stays unread: links and the canonical timeline read it block by block, before the transaction.
     const snapshot = await engine.readPageSnapshot(slug, { sourceId });
     if (!snapshot || isQuarantined(snapshot.page.frontmatter)) return;
     const prepared = await prepareAutomaticLinks(settings, slug, snapshot.page, sourceId);
+    const canonical = await storedCanonicalTimeline(engine, snapshot.page, slug);
     const outcome = await engine.transaction(async tx => withCoordinatedWrite(tx, [sourceId], async () => {
       await tx.lockPageKeys(prepared.pageKeys);
       const current = await tx.readPageSnapshot(slug, { sourceId });
@@ -96,7 +111,7 @@ export async function extractManagedStaleLinks(engine: BrainEngine,
       }
       const written = await prepared.apply(tx);
       if (written.errors) return null;
-      const timeline = (await unrecordedCanonicalTimeline(tx, current.page.id, current.page, slug)).map(entry => ({ slug, date: entry.date,
+      const timeline = (await unrecordedCanonicalTimeline(tx, current.page.id, canonical, slug)).map(entry => ({ slug, date: entry.date,
         source: entry.source, summary: entry.summary, detail: entry.detail || '', source_id: sourceId }));
       const added = timeline.length ? await tx.addTimelineEntriesBatch(timeline, { auditSite: 'extract.stale' }) : 0;
       const at = stamp ?? new Date().toISOString();

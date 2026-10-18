@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runEvalLongMemEval } from '../src/commands/eval-longmemeval.ts';
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
+import { enableDecideEvalOverride } from '../src/core/ai/decide/config.ts';
 import { countCJKAwareWords } from '../src/core/cjk.ts';
 import { CALL_PLAN_CHARS_PER_TOKEN, gateCommand, shellQuote } from '../src/eval/longmemeval/call-plan.ts';
 import { withEnv } from './helpers/with-env.ts';
@@ -169,7 +170,7 @@ describe('eval longmemeval --call-plan', () => {
     expect(p.rows.expansion).toMatchObject({ model: 'anthropic:claude-haiku-4-5-20251001', max_out_tokens: '64000' });
     expect(p.rows.synopsis!.max_out_tokens).toBe('200');
     expect(p.rows.trajectory_extract!.max_out_tokens).toBe('2000');
-    expect(p.rows.rerank).toMatchObject({ model: 'voyage:rerank-2.5', calls: String(QUESTIONS.length), max_out_tokens: '0' });
+    expect(p.rows.rerank).toMatchObject({ model: 'voyage:rerank-3-lite', calls: String(QUESTIONS.length), max_out_tokens: '0' });
     expect(p.text.endsWith(`GSTACK_EVAL_CALLS v1 end: lines=${p.parsed.rows.length}\n`)).toBe(true);
     expect(p.err).toContain('no provider was called');
   }, 60_000);
@@ -228,7 +229,11 @@ describe('eval longmemeval --call-plan', () => {
 
   test('lanes it cannot bound refuse with nothing written', async () => {
     expect(await refusal(['--via-operation', 'query'])).toContain('cannot bound --via-operation');
-    expect(await withEnv({ GBRAIN_DECIDE_SLOTS: undefined }, () => refusal(['--decide', 'intent=on', '--no-trajectory']))).toContain('cannot bound the decide lane');
+    try {
+      expect(await withEnv({ GBRAIN_DECIDE_SLOTS: undefined }, () => refusal(['--decide', 'intent=on', '--no-trajectory']))).toContain('cannot bound the decide lane');
+    } finally {
+      enableDecideEvalOverride(false);
+    }
     expect(await refusal(['--search-pin', 'search.cross_modal.llm_intent=true'])).toContain('llm_intent');
     configureGateway({ ...GATEWAY, expansion_model: 'openai:gpt-5.6' });
     try {

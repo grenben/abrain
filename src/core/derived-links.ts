@@ -1,11 +1,12 @@
 import type { BrainEngine, LinkBatchInput } from './engine.ts';
 import { assertPageRevision, PageRevisionConflictError, RevisionBackfillPendingError, type PageSnapshot } from './page-state/types.ts';
 import { pipelined } from './page-state/transactions.ts';
+import { beliefCoveredSources, unmanagedBeliefPoint } from './belief/projection-point.ts';
 import { executeRawJsonb } from './sql-query.ts';
 import { pageSnapshotKey } from './page-snapshot-batch.ts';
 import { sanitizeForJsonb } from './batch-rows.ts';
 import { replaceWantedLinks, type WantedLinksReplacement } from './wanted-links-store.ts';
-import { applyTemporalEvidence, relationshipKeysForOrigin } from './link-temporal-apply.ts';
+import { applyTemporalEvidence, relationshipKeysForOrigin, type TemporalBody } from './link-temporal-apply.ts';
 import { primeRelationSemantics } from './link-semantics-pack.ts';
 import { effectiveRangesEnabled, LINK_EXTRACTION_GENERATION_KEY, type LineGrammarSettings } from './line-grammar.ts';
 
@@ -38,6 +39,8 @@ export interface DerivedLinkReplacementOptions {
    * so a page is never published from one setting and ranged from another.
    */
   lineGrammar?: LineGrammarSettings;
+  /** The origin body's temporal inputs, read at preparation; a segmented origin's body is never read inside the publication. */
+  temporalBody?: TemporalBody;
 }
 
 export class DerivedLinkRepairRequiredError extends Error {
@@ -145,21 +148,24 @@ const lockedExtractionGeneration = async (tx: BrainEngine) => (await tx.executeR
   'SELECT value FROM config WHERE key = $1 FOR SHARE', [LINK_EXTRACTION_GENERATION_KEY]))[0]?.value ?? null;
 
 export async function replaceDerivedLinks(
-  engine: Pick<BrainEngine, 'transaction'>,
+  engine: Pick<BrainEngine, 'transaction' | 'executeRaw'>,
   origin: DerivedLinkOrigin,
   links: LinkBatchInput[],
   opts: DerivedLinkReplacementOptions = {},
 ): Promise<{ created: number; removed: number }> {
   const { producers, rows } = derivedLinkRows(origin, links, opts);
-  return engine.transaction(async tx => {
+  const beliefs = unmanagedBeliefPoint(origin.sourceId, [origin.slug], 'derived_links');
+  const result = await engine.transaction(async tx => {
     await pipelined(tx, [
       async () => { if (!opts.semanticsPrimed) await primeRelationSemantics(tx); },
       () => tx.lockPageKeys(derivedLinkLockKeys(origin, rows)),
     ]);
     if (opts.lineGrammar && await lockedExtractionGeneration(tx) !== opts.lineGrammar.generation) throw new DerivedLinkSettingsChangedError();
     const snapshot = origin.snapshot !== undefined ? origin.snapshot : await tx.readPageSnapshot(origin.slug, { sourceId: origin.sourceId });
-    return publishDerivedLinks(tx, origin, producers, rows, opts, snapshot);
+    return beliefs.run(tx, () => publishDerivedLinks(tx, origin, producers, rows, opts, snapshot));
   });
+  await beliefs.commit(engine);
+  return result;
 }
 
 export interface DerivedLinkBatchItem { origin: DerivedLinkOrigin; links: LinkBatchInput[]; opts?: DerivedLinkReplacementOptions }
@@ -174,12 +180,13 @@ export interface DerivedLinkBatchItem { origin: DerivedLinkOrigin; links: LinkBa
  * one by one through replaceDerivedLinks.
  */
 export async function replaceDerivedLinksBatch(
-  engine: Pick<BrainEngine, 'transaction'>,
+  engine: Pick<BrainEngine, 'transaction' | 'executeRaw'>,
   items: readonly DerivedLinkBatchItem[],
 ): Promise<Array<{ created: number; removed: number }>> {
   const prepared = items.map(item => ({ origin: item.origin, opts: item.opts ?? {}, ...derivedLinkRows(item.origin, item.links, item.opts ?? {}) }));
   if (!prepared.length) return [];
-  return engine.transaction(async tx => {
+  const beliefs = prepared.map(item => unmanagedBeliefPoint(item.origin.sourceId, [item.origin.slug], 'derived_links'));
+  const results = await engine.transaction(async tx => {
     await pipelined(tx, [
       async () => { if (prepared.some(item => !item.opts.semanticsPrimed)) await primeRelationSemantics(tx); },
       () => tx.lockPageKeys(prepared.flatMap(item => derivedLinkLockKeys(item.origin, item.rows))),
@@ -190,13 +197,17 @@ export async function replaceDerivedLinksBatch(
     }
     const { snapshots } = await tx.readPageSnapshotsBatch(prepared.filter(item => item.origin.snapshot === undefined)
       .map(item => ({ slug: item.origin.slug, sourceId: item.origin.sourceId })), { maxBytes: Number.MAX_SAFE_INTEGER });
+    const covered = await beliefCoveredSources(tx, prepared.map(item => item.origin.sourceId));
     const results: Array<{ created: number; removed: number }> = [];
-    for (const { origin, producers, rows, opts } of prepared) {
+    for (const [i, { origin, producers, rows, opts }] of prepared.entries()) {
       const snapshot = origin.snapshot !== undefined ? origin.snapshot : snapshots.get(pageSnapshotKey(origin.sourceId, origin.slug)) ?? null;
-      results.push(await publishDerivedLinks(tx, origin, producers, rows, opts, snapshot));
+      const publish = () => publishDerivedLinks(tx, origin, producers, rows, opts, snapshot);
+      results.push(await (covered.has(origin.sourceId) ? beliefs[i]!.run(tx, publish) : publish()));
     }
     return results;
   });
+  for (const point of beliefs) await point.commit(engine);
+  return results;
 }
 
 /**
@@ -258,7 +269,7 @@ async function publishDerivedLinks(tx: BrainEngine, origin: DerivedLinkOrigin, p
     () => opts.lineGrammar ? Promise.resolve(opts.lineGrammar.effectiveRanges) : effectiveRangesEnabled(tx),
   ]) as [unknown, Awaited<ReturnType<typeof relationshipKeysForOrigin>>, unknown[], unknown[], unknown[], Existing[], boolean];
   const withTemporal = async (result: { created: number; removed: number }) => {
-    await applyTemporalEvidence(tx, snapshot.page, rows, temporalKeysBefore, { inlineRanges });
+    await applyTemporalEvidence(tx, snapshot.page, rows, temporalKeysBefore, { inlineRanges, body: opts.temporalBody });
     return result;
   };
   if (ambiguous.length) throw new DerivedLinkRepairRequiredError();

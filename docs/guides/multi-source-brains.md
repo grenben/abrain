@@ -191,7 +191,17 @@ predate unknown-parameter warnings cannot be detected; upgrade the host first.
 
 The most-used subcommands (run `gbrain sources --help` for the full,
 always-current reference — it also covers `status`, `current`,
-`set-cr-mode`, and the `push`/`pull` durability surface):
+`set-cr-mode`, and the `push`/`pull` durability surface).
+
+Changing the contextual retrieval mode, per source with `gbrain sources
+set-cr-mode <id> <mode>` or brain-wide with `gbrain config set
+search.contextual_retrieval <mode>`, does not restamp existing pages: each
+keeps the mode recorded when it was imported, and the new mode applies to
+pages imported from then on. Both commands print this after the write, with
+`gbrain repair contextual-mode [--source <id>] --apply` for pages that have no
+recorded mode (preview it first without `--apply`; see
+[repair](repair.md)).
+
 
 ```
 gbrain sources add <id> --path <p> [--name <n>] [--federated|--no-federated] [--force]
@@ -380,7 +390,7 @@ rewrites it on the next import. No command is needed.
 files, for example `~/vault/notes/people/alice-example.md` and
 `~/vault/notes/notes/people/alice-example.md`, sync refuses instead of
 guessing. Rename or move one of the two files, commit, then run
-`gbrain sync --source vault-notes --no-pull --retry-failed`. The other
+`gbrain sync --source vault-notes --no-pull`. The other
 refusal reasons are listed in [write refusal reasons](write-refusals.md).
 
 ## Citation format for agents

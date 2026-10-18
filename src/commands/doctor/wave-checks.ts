@@ -127,6 +127,14 @@ export const WAVE_CHECKS: readonly WaveCheckSpec[] = [
     run: async (engine, scope) => (await import('./checks/persistence-requests.ts')).lostCallerWritesCheck(engine, scope.sourceIds),
   },
   {
+    id: 'persistence_terminal_failures', resolution: 'operator', registration: 'doctor.ts',
+    hostOnly: 'Request ids, roots and recovery records are brain-host persistence state outside any source scope.',
+    count: d => Number(d.count ?? 0),
+    impact: 'A write receipt that did not commit blocks work now (a recovery record or a checkpoint blocker), or an unresolved receipt is a gbrain-defect class',
+    instruction: 'Run the fix doctor prints, then drill down with `gbrain sources writer failures <source> --group-by category --json` on the brain host (docs/guides/troubleshooting.md#terminal-write-failures).',
+    run: async (engine, scope) => (await (await import('./checks/persistence-requests.ts')).terminalFailuresCheck(engine, scope.sourceIds))!,
+  },
+  {
     id: 'persistence_session_timeouts', resolution: 'operator', registration: 'wave',
     count: d => d.reason === 'session_timeouts_not_applied' ? 1 : 0,
     hostOnly: 'The connection URL and its pooler are brain-host configuration outside any source scope.',
@@ -187,6 +195,14 @@ export const WAVE_CHECKS: readonly WaveCheckSpec[] = [
     run: async engine => (await import('./checks/orphan-bindings.ts')).checkForeignOwnershipMarkers(engine),
   },
   {
+    id: 'coordination_lock_location', resolution: 'operator', registration: 'wave',
+    hostOnly: 'Coordination lock reservations are private files beside the source checkouts on the brain host.',
+    count: d => Number(d.count ?? 0),
+    impact: 'GBRAIN_COORDINATION_HOME names another directory than a checkout\'s recorded coordination lock, which stays in use',
+    instruction: 'Make the recorded lock directory doctor names survive container recreation and unset GBRAIN_COORDINATION_HOME for that checkout if it was meant to move the lock (docs/architecture/topologies.md#coordination-home-ignored); never edit or delete the reservation.',
+    run: async engine => (await import('./checks/coordination-lock.ts')).checkCoordinationLockLocation(engine),
+  },
+  {
     id: 'unbound_source', resolution: 'operator', registration: 'wave',
     count: d => (d.sources ?? []).filter((source: { bound?: boolean }) => source.bound).reduce((sum: number, source: { pages?: number }) => sum + Number(source.pages ?? 0), 0),
     impact: 'Some pages written database-only while their source was unbound now sit outside canonical files',
@@ -199,6 +215,20 @@ export const WAVE_CHECKS: readonly WaveCheckSpec[] = [
     impact: 'A cumulative managed-write limit is at or above 80%',
     instruction: 'Raise the named journal limit with the `gbrain config set` command doctor prints, on the brain host.',
     run: async engine => (await import('./checks/persistence-capacity.ts')).checkPersistenceCapacity(engine),
+  },
+  {
+    id: 'persistence_compaction', resolution: 'operator', registration: 'doctor.ts',
+    count: d => (d.live_consumers ?? 0) > 0 ? 1 : 0,
+    impact: 'A resident consumer has not compacted write receipts within its staleness window, so receipt bytes are not coming back',
+    instruction: 'Check the consumer with `gbrain sources writer status --json`; preview an on-demand pass with `gbrain repair receipt-compaction --json` and apply it after the user agrees.',
+    run: async engine => (await import('./checks/persistence-compaction.ts')).checkPersistenceCompaction(engine),
+  },
+  {
+    id: 'persistence_counter_drift', resolution: 'operator', registration: 'doctor.ts',
+    count: d => (d.drift ?? []).length,
+    impact: 'Receipt-bytes counters differ from the receipts they account for',
+    instruction: 'Report the drift with `gbrain doctor --only persistence_counter_drift --json`; the check changes nothing.',
+    run: async engine => (await import('./checks/persistence-compaction.ts')).checkPersistenceCounterDrift(engine),
   },
   {
     id: 'parked_effects', resolution: 'operator', registration: 'doctor.ts',
@@ -220,6 +250,13 @@ export const WAVE_CHECKS: readonly WaveCheckSpec[] = [
     instruction: 'Run `gbrain upgrade` on each host doctor names (by host UUID), then restart its gbrain processes; an older writer may still delete database-only timeline rows.',
     count: d => Number(d.count ?? 0),
     run: async engine => (await import('./checks/writer-version.ts')).writerVersionCheck(engine),
+  },
+  {
+    id: 'segmented_storage', resolution: 'operator', registration: 'wave',
+    impact: 'A recent writer older than this release keeps segmented page storage off, so pages over 1 MiB are written inline up to 24 MiB',
+    instruction: 'Run `gbrain upgrade` on each host doctor names (by host UUID), then restart its gbrain processes; the hold clears seven days after that writer\'s last request.',
+    count: d => (Array.isArray(d.blockers) ? d.blockers.length : 0),
+    run: async engine => (await import('./checks/segmented-storage.ts')).segmentedStorageCheck(engine),
   },
   {
     id: 'self_capture', resolution: 'operator', registration: 'wave',
@@ -254,6 +291,14 @@ export const WAVE_CHECKS: readonly WaveCheckSpec[] = [
     count: d => Number(d.count ?? 0),
     impact: 'Some files gbrain wrote under a Google source directory outside ~/.gbrain are readable by other local users',
     run: async (engine, scope) => (await import('./checks/google-file-modes.ts')).checkGoogleFileModes(engine, scope.sourceIds),
+  },
+  {
+    id: 'google_calendar_readable', resolution: 'operator', registration: 'wave',
+    hostOnly: 'Connector state and the account address live on the brain host.',
+    count: d => Number(d.count ?? 0),
+    impact: 'A Google source is configured with a calendar its account cannot read, so it imports no events',
+    instruction: 'List the readable calendars with `gbrain google calendars --account <email>`, then `gbrain sources set-calendar <source> <calendar-id>` and `gbrain sync --source <source>` (docs/guides/google-connect.md#unreadable-calendar).',
+    run: async (engine, scope) => (await import('./checks/google-calendar.ts')).googleCalendarReadableCheck(engine, scope.sourceIds),
   },
   {
     id: 'atom_provenance_drift', resolution: 'repair', registration: 'doctor.ts',
@@ -312,6 +357,13 @@ export const WAVE_CHECKS: readonly WaveCheckSpec[] = [
     impact: 'Some pages store a parser-reserved frontmatter key (type, title, tags, slug) left by an older import; writes compare around it, the sweep is hygiene',
     run: async (engine, scope) => (await import('./checks/frontmatter-keys.ts')).staleFrontmatterKeysCheck(engine, scope.sourceIds),
   },
+  {
+    id: 'maintenance_write_drift', resolution: 'repair', registration: 'wave',
+    hostOnly: 'The live file check reads the canonical checkout on the brain host; resolving drift is a host-side, explicit-only repair.',
+    count: d => Number(d.count ?? 0) + Number(d.concept_skips ?? 0),
+    impact: 'Some pages have a canonical file that differs from the database, so every coordinated write to them refuses source_changed until someone resolves them',
+    run: async (engine, scope) => (await import('./checks/maintenance-drift.ts')).maintenanceWriteDriftCheck(engine, scope.sourceIds),
+  },
 ];
 
 /** A check that could not run reports unknown, never ok. */
@@ -358,9 +410,10 @@ export const REMOTE_HOST_ACTION = 'host operator action required: on the brain h
  */
 export async function remoteWaveHandoff(engine: BrainEngine, sourceIds?: string[]): Promise<Check[]> {
   const findings = await runWaveChecks(engine, { sourceIds, remote: true });
-  return findings.map(({ spec, state }) => {
+  return findings.map(({ spec, check, state }) => {
     const host_action = { check_id: spec.id, state: state === 'finding' ? 'action_required' : state, preview_command: 'gbrain doctor --remediation-plan' };
-    if (state === 'ok') return { name: spec.id, status: 'ok' as const, message: 'No host action needed.', details: { host_action } };
+    if (state === 'ok') return { name: spec.id, status: 'ok' as const, message: 'No host action needed.', details: { host_action },
+      ...(check.severity ? { severity: check.severity } : {}), ...(check.readiness_state ? { readiness_state: check.readiness_state } : {}) };
     if (state === 'unknown') return { name: spec.id, status: 'warn' as const, details: { host_action },
       message: `Unknown: this check could not run for the remote caller; ${REMOTE_HOST_ACTION}.` };
     return { name: spec.id, status: 'warn' as const, details: { host_action }, message: `${spec.impact}; ${REMOTE_HOST_ACTION}.` };

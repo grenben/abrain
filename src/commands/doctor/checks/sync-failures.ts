@@ -7,6 +7,8 @@ import { makeRemediationStep } from '../../../core/remediation-step.ts';
 import { classifyManagedSyncOrphans, type ManagedSyncOrphan } from '../../../core/persistence/managed-sync-orphans.ts';
 import { readManagedMode } from '../../../core/persistence/ownership.ts';
 import { legacyLedgerNote } from '../../../core/persistence/legacy-sync-failures.ts';
+import { classifyRecordedFault } from '../../../core/persistence/terminal-classify.ts';
+import { agentFix } from '../check-fix.ts';
 
 /** #6518 [R18 vi]: the fast check cannot verify a mirror row; a warning there is uncertainty, never recovery. */
 const MIRROR_UNVERIFIED = (count: number) => `${count} mirrored managed sync failure(s) could not be verified without a database connection: `
@@ -38,17 +40,20 @@ export async function checkSyncFailures(engine: BrainEngine | null, opts: { sour
     catch (error) { orphanReadError = (error as { code?: string })?.code ?? (error instanceof Error ? error.message : String(error)); }
   }
   const orphanSources = new Set(orphans.map(orphan => orphan.source_id));
-  const repairPreview = `gbrain repair managed-sync-orphans${orphanSources.size === 1 ? ` --source ${orphans[0]!.source_id}` : ''}`;
+  const repairArgv = ['gbrain', 'repair', 'managed-sync-orphans', ...(orphanSources.size === 1 ? ['--source', orphans[0]!.source_id] : [])];
+  const repairPreview = repairArgv.join(' ');
   const orphanNoteFor = (lead: string) => orphans.length ? ` ${lead} (${orphans.map(orphan => `${orphan.source_id}:${orphan.cursor_key.slice(0, 12)} ${orphan.reason}`).join(', ')}) cannot be resumed or cleared by any sync: `
     + `preview ${repairPreview} and apply with the hash it prints (docs/guides/repair.md#managed-sync-orphans). Retiring them says nothing about whether the current source's files are imported; gbrain sync status --source <id> --json does.` : '';
   const orphanNote = orphanNoteFor(`${orphans.length} of these`);
+  const orphanFix = orphans.length && opts.remote === false ? { fix: agentFix(repairArgv, 'Previews the sync bookkeeping no sync can resume or clear (with each row\'s class) and prints the apply command with its hash; writes nothing.', 'sync_failures',
+    { docs: 'docs/guides/repair.md#managed-sync-orphans' }) } : {};
   const remoteOrphanNote = orphans.length ? ` ${orphans.length} managed sync bookkeeping row(s) cannot be resumed or cleared by any sync; ask the host operator to preview gbrain repair managed-sync-orphans.` : '';
   const unreadNote = orphanReadError ? ` The managed sync bookkeeping could not be classified (${orphanReadError}); this is not proof that none is orphaned. Run gbrain doctor --only sync_failures again with the brain reachable.` : '';
   if (!severity.unresolved) {
     if (orphans.length || orphanReadError) {
       const base = `${entries.length ? 'All historical sync failures are acknowledged.' : 'No current sync failures on active sources.'}`;
       return { name: 'sync_failures', status: 'warn', message: base + (opts.remote !== false ? remoteOrphanNote + unreadNote : orphanNoteFor(`${orphans.length} managed sync bookkeeping row(s)`) + unreadNote) + archivedNote,
-        ...(opts.remote === false && orphans.length ? { details: { orphans } } : {}) };
+        ...(opts.remote === false && orphans.length ? { details: { orphans } } : {}), ...orphanFix };
     }
     if (mirrorRows.length) return { name: 'sync_failures', status: 'warn', message: `No unresolved unmanaged sync failures.${mirrorNote}${archivedNote}` };
     return entries.length || archivedCount ? { name: 'sync_failures', status: 'ok', message: `${entries.length ? 'All historical sync failures are acknowledged.' : 'No sync failures on active sources.'}${archivedNote}` } : null;
@@ -71,10 +76,15 @@ export async function checkSyncFailures(engine: BrainEngine | null, opts: { sour
   const resumable = managed.filter(row => !orphanKeys.has(row.cursor_key));
   const retries = [...new Set(resumable.map(row => managedSyncRetryCommand(row)))];
   const recovery = requiresManagedRetry
-    ? `${resumable.length || !orphans.length ? `Fix the cause, then run ${retries.length ? retries.join(' ; ') : 'gbrain sync --no-pull --retry-failed with the same source and options'}. Completed full runs do not resolve a different unfinished cursor.` : ''}${orphanNote}${unreadNote}`.trim()
+    ? `${resumable.length || !orphans.length ? `Fix the cause, then run ${retries.length ? retries.join(' ; ') : 'gbrain sync --no-pull with the same source and options (it retries the recorded failure)'}. Completed full runs do not resolve a different unfinished cursor.` : ''}${orphanNote}${unreadNote}`.trim()
     : `Fix the file(s) and re-run 'gbrain sync', or use 'gbrain sync --skip-failed' to acknowledge legacy file failures.${orphanNote}${unreadNote}`;
   const legacyNote = managedBrain ? legacyLedgerNote(unresolvedLegacy) : '';
+  // #6712 PR 2 (L5): each managed failure with the classifier's category and the public category beside it.
+  const failures = managed.map(row => {
+    const v = classifyRecordedFault({ source_id: row.source_id, code: row.code, request_id: row.request_id, error_detail: row.write_error_detail ?? null, message: row.message });
+    return { source_id: row.source_id, path: row.path, code: row.code, category: v.category, public_category: v.public_category, class: v.class, needs_human: v.needs_human };
+  });
   return { name: 'sync_failures', status: severity.status, message: `${summary} ${details.join('; ')} ${recovery}${legacyNote}`,
-    remediation, remediation_status: remediation ? 'remediable' : 'blocked', ...(orphans.length ? { details: { orphans } } : {}),
+    remediation, remediation_status: remediation ? 'remediable' : 'blocked', ...(orphans.length || failures.length ? { details: { ...(orphans.length ? { orphans } : {}), ...(failures.length ? { failures } : {}) } } : {}), ...orphanFix,
     ...(engine ? {} : { message: `${summary} Durable sync state is unavailable without a database connection; the local ledger is only a compatibility mirror.${mirrorNote}` }) };
 }

@@ -20,7 +20,7 @@
  * facts respect visibility for remote callers (world-only).
  */
 
-import { annotateTemporalRow, temporalLinkJoinSql, TEMPORAL_LINK_SELECT_SQL, type TemporalAnnotation } from '../link-validity.ts';
+import { annotateTemporalRow, LIVENESS_EXEMPT_LINK_TYPES, temporalLinkJoinSql, TEMPORAL_LINK_SELECT_SQL, type TemporalAnnotation } from '../link-validity.ts';
 import type { BrainEngine, FactRow } from '../engine.ts';
 import type { TrustTier } from '../trust/tier.ts';
 import type { ReadEligibility } from '../eligibility/policy.ts';
@@ -30,6 +30,7 @@ import { loadPageTrust } from '../eligibility/stamp.ts';
 import { loadRelationshipNotes, relationshipNoteKey } from '../link-relationship-notes.ts';
 import { normalizeAlias } from '../search/alias-normalize.ts';
 import { slugify } from '../entities/resolve.ts';
+import { exactMatchPreference } from '../entities/exact-match-preference.ts';
 import { safeSynopsis } from '../context/retrieval-reflex.ts';
 import { stampEvidence, markKeywordHits } from '../search/evidence.ts';
 import type { Link, SearchResult } from '../types.ts';
@@ -37,15 +38,18 @@ import type { NewerMentions } from '../mentions/newer-mentions.ts';
 import { linkableTypesFor, loadLinkableTypes, loadSourcePack, readMentionPolicy, type MentionPolicy, type PackTypes } from '../mentions/policy.ts';
 import { readMentionCoverage, type MentionCoverage } from '../mentions/coverage.ts';
 import { encodeCursor, readReferrerGroups, PAGE_DEFAULT_LIMIT, type ReferenceRow } from '../mentions/referrers.ts';
+import { readRowReferences, referencesUnavailableNotice, type RecordGroupView, type ReferencesUnavailable, type RowReferences } from './entity-references.ts';
+import type { Notice } from '../agent-output.ts';
 import { readCardIdentity, type CardIdentity } from './entity-card-identity.ts';
 import { factEntitySlugs } from '../mentions/siblings.ts';
+import { boundedBodyPrefixSql, overlaidBoundedRows } from '../page-window/bounded-lead.ts';
 
 const EDGE_CAP = 10;
 const OPEN_THREADS_CAP = 3;
 const OPEN_THREAD_TIMELINE_WINDOW_DAYS = 90;
 const SUGGESTION_CAP = 3;
 const FACT_FETCH_CAP = 100;
-const RECENT_FACTS_CAP = 5;
+export const RECENT_FACTS_CAP = 5;
 
 export interface EntityCardEdge {
   type: string;
@@ -79,7 +83,8 @@ export interface EntityOpenThread {
 }
 
 export interface EntityCard {
-  entity: { slug: string; title: string; type: string | null };
+  /** #6723: `source_id` is the source the page lives in; (source_id, slug) is the entity's identity. */
+  entity: { slug: string; title: string; type: string | null; source_id: string };
   /** page_aliases reverse lookup (normalized forms). Empty on pre-migration brains. */
   aka: string[];
   /** Privacy-safe synopsis — same fence boundary as get_page. */
@@ -105,12 +110,23 @@ export interface EntityCard {
    * a relationship that ended. Absent when there is nothing to say.
    */
   relationship_note?: string;
+  /** F3: this page's own frontmatter `status` (a string up to 40 characters), only when set. `context_pack` cards only. */
+  page_status?: string;
   /** Pages dated after this page that mention it, newest first, bounded. `context_pack` cards only (mentions/newer-mentions.ts). */
   newer_mentions?: NewerMentions;
   /** Distinct pages with any inbound link (every link source, mentions included). `entity` verb only. */
   referenced_by_count?: number;
   /** Those pages grouped by pack-canonical type, newest first; capped per group and per card. `entity` verb only. */
   referenced_by?: ReferenceGroupView[];
+  /**
+   * The referring pages of the enrolled record types (`entity.record_types`), one group per type, newest page date first
+   * (the order never says which record governs). `entity` and `context_pack` only, and only when types are enrolled.
+   */
+  records?: RecordGroupView[];
+  /** `context_pack` cards: the same reference fields for each identity sibling, side by side, never merged. */
+  sibling_records?: Array<{ slug: string; title: string } & RowReferences>;
+  /** The reference count and records could not be read (deadline or failure); unread, not empty. */
+  references_unavailable?: ReferencesUnavailable;
   /** Whether every page in this source has been scanned for this entity's names. `entity` verb only. */
   coverage?: MentionCoverage;
   /** Parallel to `aka`: each entry's origin (frontmatter, declared, subject) and the page that declares it. `entity` verb only. */
@@ -144,6 +160,8 @@ export interface EntitySuggestion {
   slug: string;
   title: string;
   create_safety: string;
+  /** #6723: the source the suggested page lives in. */
+  source_id?: string;
 }
 
 export interface EntityCardResult {
@@ -152,10 +170,24 @@ export interface EntityCardResult {
   suggestions?: EntitySuggestion[];
   /** On a miss with `includeReferences`: the source's mention coverage (a miss may be a not-yet-indexed name). */
   coverage?: MentionCoverage;
+  /** #6723: the source of the resolved page (absent on a miss). */
+  source_id?: string;
+  /**
+   * #6724: the full fact rows the card read (newest first, visibility and
+   * eligibility already applied), for context_pack's `entity_facts`. Never part
+   * of the card: the `entity` verb does not return it.
+   */
+  factRows?: FactRow[];
 }
 
 export interface EntityCardOpts {
   remote: boolean;
+  /**
+   * #6723: the sources to resolve the name in, probed in this order (home
+   * first); the first source with a hit owns the card and every read behind
+   * it. Absent: the positional source alone.
+   */
+  sources?: readonly string[];
   /**
    * Compute `referenced_by`, `referenced_by_count` and `coverage` (the `entity`
    * verb). Ambient callers (context_pack, delta) leave it off.
@@ -163,6 +195,8 @@ export interface EntityCardOpts {
   includeReferences?: boolean;
   /** The serving surface ceiling; on `verbs` a continuation names the starter surface. */
   surfaceCeiling?: 'verbs' | 'starter' | 'full';
+  /** Receives the degraded notice when the card's references or records could not be read. */
+  emitNotice?: (n: Notice) => void;
   /**
    * #5575 (ENG-8, CEO-20): the eligibility for the card's facts and timeline
    * rows. Always hides quarantined-page projections and rows awaiting
@@ -223,7 +257,7 @@ export async function entityLookupScope(engine: BrainEngine, sourceId: string, r
 
 /**
  * Candidate selection for one name: `hit` with the best page row (its
- * `compiled_truth` included) and up to SUGGESTION_CAP runners-up; `miss` with
+ * bounded, withdrawal-overlaid `compiled_truth` prefix included) and up to SUGGESTION_CAP runners-up; `miss` with
  * keyword near-miss suggestions; `withheld` when every match is a quarantined
  * page `omitQuarantined` leaves out (no suggestion names it).
  */
@@ -238,7 +272,7 @@ export async function selectEntityCandidates(
   sourceId: string,
   trimmed: string,
   scope: EntityLookupScope,
-  opts: { omitQuarantined?: boolean } = {},
+  opts: { omitQuarantined?: boolean; suggest?: boolean } = {},
 ): Promise<EntityCandidates> {
   const { privatePagesFilterFragment } = await import('../search/private-visibility.ts');
   // Predicate text lives ONCE (private-visibility.ts) — both card queries
@@ -276,7 +310,7 @@ export async function selectEntityCandidates(
   let rows: CardPageRow[] = [];
   try {
     rows = await engine.executeRaw<CardPageRow>(
-      `SELECT slug, source_id, title, type, frontmatter, compiled_truth, updated_at,
+      `SELECT slug, source_id, title, type, frontmatter, ${boundedBodyPrefixSql('pages')} AS compiled_truth, updated_at,
               GREATEST(last_retrieved_at, (SELECT r.last_retrieved_at FROM page_retrievals r WHERE r.page_id = pages.id)) AS last_retrieved_at
          FROM pages
         WHERE deleted_at IS NULL
@@ -301,7 +335,7 @@ export async function selectEntityCandidates(
   if (missing.length) {
     try {
       const extra = await engine.executeRaw<CardPageRow>(
-        `SELECT slug, source_id, title, type, frontmatter, compiled_truth, updated_at,
+        `SELECT slug, source_id, title, type, frontmatter, ${boundedBodyPrefixSql('pages')} AS compiled_truth, updated_at,
               GREATEST(last_retrieved_at, (SELECT r.last_retrieved_at FROM page_retrievals r WHERE r.page_id = pages.id)) AS last_retrieved_at
            FROM pages
           WHERE deleted_at IS NULL AND source_id = $1 AND slug = ANY($2::text[])${privatePredicate}`,
@@ -334,18 +368,48 @@ export async function selectEntityCandidates(
     if (live.length === 0) return { kind: 'withheld' };
     candidates.splice(0, candidates.length, ...live);
   }
-  if (candidates.length === 0) return { kind: 'miss', suggestions: await nearMissSuggestions(engine, sourceId, trimmed, scope.excludePrivate) };
+  if (candidates.length === 0) {
+    return { kind: 'miss', suggestions: opts.suggest === false ? [] : await nearMissSuggestions(engine, sourceId, trimmed, scope.excludePrivate) };
+  }
 
+  // Large pages: the hit carries a bounded, withdrawal-overlaid body prefix (its summary and lead read only that).
+  const [row] = await overlaidBoundedRows(engine, [candidates[0].row]);
   return {
     kind: 'hit',
-    row: candidates[0].row,
+    row,
     runnersUp: candidates.slice(1, 1 + SUGGESTION_CAP).map(c => ({
       slug: c.slug,
       title: c.row.title ?? c.slug,
       // A page that resolved through the precision arms exists by definition.
       create_safety: 'exists',
+      source_id: sourceId,
     })),
   };
+}
+
+/**
+ * #6723: resolve a name across sources in the given order (home first, then
+ * the rest of the caller's grant). The first source with a hit owns the
+ * result; a source is read with its own lookup scope (pack, linkable types).
+ * Without a hit anywhere, the first source's miss (its near-miss suggestions)
+ * or withheld result is returned. Sources outside the list are never read.
+ */
+export async function selectAcrossSources(
+  engine: BrainEngine,
+  sources: readonly string[],
+  trimmed: string,
+  remote: boolean,
+  opts: { omitQuarantined?: boolean; scopes?: Map<string, Promise<EntityLookupScope>> } = {},
+): Promise<{ sourceId: string; scope: EntityLookupScope; selected: EntityCandidates }> {
+  let first: { sourceId: string; scope: EntityLookupScope; selected: EntityCandidates } | undefined;
+  for (const sourceId of sources) {
+    if (opts.scopes && !opts.scopes.has(sourceId)) opts.scopes.set(sourceId, entityLookupScope(engine, sourceId, remote));
+    const scope = await (opts.scopes?.get(sourceId) ?? entityLookupScope(engine, sourceId, remote));
+    const selected = await selectEntityCandidates(engine, sourceId, trimmed, scope, { omitQuarantined: opts.omitQuarantined, suggest: first === undefined });
+    if (selected.kind === 'hit') return { sourceId, scope, selected };
+    first ??= { sourceId, scope, selected };
+  }
+  return first!;
 }
 
 export async function buildEntityCard(
@@ -358,32 +422,31 @@ export async function buildEntityCard(
   if (!trimmed) return { found: false, suggestions: [] };
 
   // Covers entity, context_pack, and delta (all route through buildEntityCard).
-  const scope = await entityLookupScope(engine, sourceId, opts.remote);
-  const selected = await selectEntityCandidates(engine, sourceId, trimmed, scope, { omitQuarantined: opts.omitQuarantined });
+  // #6723: the source with the hit owns the card; every read below uses it.
+  const sources = opts.sources?.length ? opts.sources : [sourceId];
+  const { sourceId: hitSource, scope, selected } = await selectAcrossSources(engine, sources, trimmed, opts.remote, { omitQuarantined: opts.omitQuarantined });
   if (selected.kind === 'withheld') return { found: false, suggestions: [] };
   if (selected.kind === 'miss') {
     return {
       found: false, suggestions: selected.suggestions,
-      ...(opts.includeReferences ? { coverage: await readMentionCoverage(engine, [sourceId]).catch(() => undefined) } : {}),
+      ...(opts.includeReferences ? { coverage: await readMentionCoverage(engine, [...sources]).catch(() => undefined) } : {}),
     };
   }
 
   const { row, runnersUp } = selected;
-  const card = await assembleCard(engine, sourceId, row, opts.remote, scope.excludePrivate, opts.eligibility ?? {});
+  const { card, facts: factRows } = await assembleCard(engine, hitSource, row, opts.remote, scope.excludePrivate, opts.eligibility ?? {});
   if (opts.includeReferences) {
-    Object.assign(card, await cardReferences(engine, sourceId, row, opts, scope.excludePrivate, scope.entityTypes),
-      await readCardIdentity(engine, sourceId, row, { excludePrivate: scope.excludePrivate, excludeQuarantined: opts.omitQuarantined === true, surfaceCeiling: opts.surfaceCeiling, aka: card.aka }));
+    Object.assign(card, await cardReferences(engine, hitSource, row, opts, scope.excludePrivate, scope.entityTypes),
+      await readCardIdentity(engine, hitSource, row, { excludePrivate: scope.excludePrivate, excludeQuarantined: opts.omitQuarantined === true, surfaceCeiling: opts.surfaceCeiling, aka: card.aka }));
+    await attachCardRecords(engine, hitSource, card, opts, scope.excludePrivate);
   }
   return {
     found: true,
     card,
+    source_id: hitSource,
+    factRows,
     ...(runnersUp.length ? { suggestions: runnersUp } : {}),
   };
-}
-
-function exactMatchPreference(row: CardPageRow, exactSlugs: string[], entityTypes: ReadonlySet<string>): number {
-  if (exactSlugs.includes(row.slug)) return 0;
-  return entityTypes.has(row.type ?? '') ? 1 : 2;
 }
 
 /**
@@ -393,7 +456,7 @@ function exactMatchPreference(row: CardPageRow, exactSlugs: string[], entityType
  * read leaves the card without them rather than failing the lookup.
  */
 async function cardReferences(engine: BrainEngine, sourceId: string, row: CardPageRow, opts: EntityCardOpts, excludePrivate: boolean,
-  entityTypes: ReadonlySet<string>): Promise<Pick<EntityCard, 'referenced_by_count' | 'referenced_by' | 'coverage'>> {
+  entityTypes: ReadonlySet<string>): Promise<Pick<EntityCard, 'referenced_by_count' | 'referenced_by' | 'coverage' | 'references_unavailable'>> {
   try {
     const { pack } = await loadLinkableTypes(engine, sourceId);
     const { total, groups } = await readReferrerGroups(engine, { slug: row.slug, sourceId, referrerSources: [sourceId], excludePrivate, pack,
@@ -410,8 +473,22 @@ async function cardReferences(engine: BrainEngine, sourceId: string, row: CardPa
     });
     return { referenced_by_count: total, referenced_by, coverage };
   } catch {
-    return {};
+    opts.emitNotice?.(referencesUnavailableNotice('read_failed'));
+    return { references_unavailable: 'read_failed' };
   }
+}
+
+/** The full card's record view for the page and each identity sibling (records only: the card has its own count). */
+async function attachCardRecords(engine: BrainEngine, sourceId: string, card: EntityCard, opts: EntityCardOpts, excludePrivate: boolean): Promise<void> {
+  const siblings = card.identity_siblings?.pages ?? [];
+  const refs = await readRowReferences(engine, sourceId, [card.entity.slug, ...siblings.map(p => p.slug)].map(slug => ({ slug, sourceId })),
+    { remote: opts.remote, excludePrivate, surfaceCeiling: opts.surfaceCeiling, eligibility: opts.eligibility, surface: 'full_card', emitNotice: opts.emitNotice });
+  const [own, ...rest] = refs.rows;
+  if (own?.records) card.records = own.records;
+  siblings.forEach((p, i) => { if (rest[i]?.records) Object.assign(p, { records: rest[i]!.records }); });
+  if (!own?.references_unavailable || card.references_unavailable) return;
+  card.references_unavailable = own.references_unavailable;
+  if (refs.notice) opts.emitNotice?.(refs.notice);
 }
 
 async function assembleCard(
@@ -421,7 +498,7 @@ async function assembleCard(
   remote: boolean,
   excludePrivate: boolean,
   eligibility: ReadEligibility,
-): Promise<EntityCard> {
+): Promise<{ card: EntityCard; facts: FactRow[] }> {
   const pageSlug = row.slug;
   const visibility = remote ? (['world'] as ('private' | 'world')[]) : undefined;
   // Facts saved about this entity may sit under a sibling page or the bare subject slug (siblings.ts).
@@ -459,7 +536,8 @@ async function assembleCard(
            JOIN pages t ON t.id = l.to_page_id
            ${temporalLinkJoinSql('l', excludePrivate)}
           WHERE t.slug = $1 AND t.source_id = $2 AND f.source_id = $2 AND f.deleted_at IS NULL
-            AND COALESCE(l.link_source, '') <> 'mentions'${inboundPrivacy}`,
+            AND COALESCE(l.link_source, '') <> 'mentions'${inboundPrivacy}
+          ORDER BY l.id`,
         [pageSlug, sourceId],
       )
       .then(rs => rs.map(r => annotateTemporalRow(r)))
@@ -504,7 +582,8 @@ async function assembleCard(
   ]);
 
   // Live relationships first so ended ones never push a current edge past the cap.
-  const rank = (status?: string) => (status === 'live' || status === 'disputed' ? 0 : status === 'event' || status === 'reference' || !status ? 1 : 2);
+  const rank = ({ status, type }: EntityCardEdge) => (status === 'live' || status === 'disputed' ? 0
+    : status === 'event' || status === 'reference' || !status || LIVENESS_EXEMPT_LINK_TYPES.includes(type) ? 1 : 2);
   const edgeOf = (l: { link_type: string; context?: string | null } & Partial<TemporalAnnotation>, direction: 'out' | 'in', slug: string): EntityCardEdge => {
     const last = l.stints?.[l.stints.length - 1];
     return {
@@ -518,8 +597,8 @@ async function assembleCard(
     .map(l => edgeOf(l, 'out', l.to_slug));
   const inCandidates = inEdges.map(l => edgeOf(l as typeof l & Partial<TemporalAnnotation>, 'in', l.from_slug));
   const edges: EntityCardEdge[] = [
-    ...[...outCandidates].sort((a, b) => rank(a.status) - rank(b.status)),
-    ...[...inCandidates].sort((a, b) => rank(a.status) - rank(b.status)),
+    ...[...outCandidates].sort((a, b) => rank(a) - rank(b)),
+    ...[...inCandidates].sort((a, b) => rank(a) - rank(b)),
   ].slice(0, EDGE_CAP);
   const summary = safeSynopsis(row, { keepVisibility: remote ? ['world'] : ['private', 'world'] });
   const relationshipNote = await loadRelationshipNotes(engine, [{ slug: pageSlug, source_id: sourceId, summary }], { excludePrivate })
@@ -535,8 +614,11 @@ async function assembleCard(
     // belongs to this card when its counterparty page is THIS (source, slug):
     // a Gmail-source loop whose person page lives in `default` shows on the
     // default card, a pre-v236 row (NULL counterparty source) on its own
-    // source's card (#5504).
-    const loopRows = await engine.executeRaw<{
+    // source's card (#5504). Loops carry no visibility or grant of their own
+    // (summaries derive from private mail, often another source), so a
+    // world-only card never reads them; open_loops serves remote callers
+    // inside their grant.
+    const loopRows = remote ? [] : await engine.executeRaw<{
       id: number;
       loop_type: string;
       summary: string;
@@ -599,8 +681,8 @@ async function assembleCard(
   }
 
   const pageTrust = (await loadPageTrust(engine, [{ source_id: sourceId, slug: pageSlug }]).catch(() => null))?.byKey.get(`${sourceId}\u0000${pageSlug}`);
-  return {
-    entity: { slug: pageSlug, title: row.title ?? pageSlug, type: row.type ?? null },
+  return { facts, card: {
+    entity: { slug: pageSlug, title: row.title ?? pageSlug, type: row.type ?? null, source_id: sourceId },
     ...(pageTrust ?? { trust_tier: 'unknown' as const, origin: 'unrecorded' }),
     ...(isQuarantined(row.frontmatter) ? { quarantined: true as const } : {}),
     aka,
@@ -621,7 +703,7 @@ async function assembleCard(
       id: String(f.id), fact: f.fact, kind: f.kind, valid_from: f.valid_from ? toIso(f.valid_from as Date | string) : null,
       ...(f.entity_slug && f.entity_slug !== pageSlug ? { entity_slug: f.entity_slug } : {}),
     })) } : {}),
-  };
+  } };
 }
 
 /** The card's `aka`: the page's normalized aliases (page_aliases reverse lookup); empty on a pre-migration brain. */
@@ -660,6 +742,7 @@ async function nearMissSuggestions(
       slug: r.slug,
       title: r.title ?? r.slug,
       create_safety: r.create_safety ?? 'unknown',
+      source_id: r.source_id ?? sourceId,
     }));
   } catch {
     return [];

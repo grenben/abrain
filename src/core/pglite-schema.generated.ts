@@ -86,6 +86,10 @@ BEGIN
      OR (OLD.content_hash IS DISTINCT FROM NEW.content_hash)
   THEN
     NEW.generation := OLD.generation + 1;
+  ELSIF OLD.compiled_truth IS NULL AND NEW.compiled_truth IS NULL THEN
+    IF OLD.body_generation IS DISTINCT FROM NEW.body_generation THEN
+      NEW.generation := OLD.generation + 1;
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -296,7 +300,10 @@ CREATE TABLE IF NOT EXISTS ingest_log (
   source_ref    TEXT    NOT NULL,
   pages_updated JSONB   NOT NULL DEFAULT '[]',
   summary       TEXT    NOT NULL DEFAULT '',
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  writer_version TEXT,
+  writer_host_id UUID,
+  writer_segment_reader BOOLEAN
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingest_log_source_type_created
@@ -636,16 +643,21 @@ CREATE INDEX IF NOT EXISTS idx_pages_search ON pages USING GIN(search_vector);
 CREATE OR REPLACE FUNCTION update_page_search_vector() RETURNS trigger SET search_path = pg_catalog, public AS \$\$
 DECLARE
   timeline_text TEXT;
+  timeline_lead_text TEXT;
 BEGIN
-  SELECT coalesce(string_agg(summary || ' ' || detail, ' '), '')
+  SELECT coalesce(string_agg(summary || ' ' || detail, ' ' ORDER BY id), '')
   INTO timeline_text
   FROM timeline_entries
   WHERE page_id = NEW.id;
 
+  IF NEW.timeline IS NULL THEN
+    timeline_lead_text := NEW.timeline_lead;
+  END IF;
+
   NEW.search_vector :=
     setweight(to_tsvector('english', gbrain_fts_input(coalesce(NEW.title, ''))), 'A') ||
-    setweight(to_tsvector('english', gbrain_fts_input(coalesce(NEW.timeline, ''))), 'C') ||
-    setweight(to_tsvector('english', gbrain_fts_input(coalesce(timeline_text, ''))), 'C');
+    setweight(to_tsvector('english', gbrain_fts_input(left(coalesce(NEW.timeline, timeline_lead_text, ''), 65536))), 'C') ||
+    setweight(to_tsvector('english', gbrain_fts_input(left(coalesce(timeline_text, ''), 32768))), 'C');
 
   RETURN NEW;
 END;
@@ -840,7 +852,6 @@ CREATE TABLE IF NOT EXISTS subagent_tool_executions (
   provider_id         TEXT,
   ordinal             INTEGER,
   gbrain_tool_use_id  UUID,
-  host_binding       JSONB,
   started_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   ended_at            TIMESTAMPTZ,
   CONSTRAINT subagent_tool_executions_stable_id UNIQUE (job_id, message_idx, ordinal),
@@ -976,11 +987,8 @@ CREATE TABLE IF NOT EXISTS calibration_profiles (
   active_bias_tags        TEXT[]       NOT NULL,
   model_id                TEXT         NOT NULL,
   cost_usd                NUMERIC(10,4),
-  judge_model_agreement   REAL,
-  codex_evidence          JSONB
+  judge_model_agreement   REAL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS calibration_profiles_codex_request
-  ON calibration_profiles(source_id,holder,(codex_evidence->>'subscription_run_id')) WHERE codex_evidence IS NOT NULL;
 CREATE INDEX IF NOT EXISTS calibration_profiles_holder_recent_idx
   ON calibration_profiles (source_id, holder, generated_at DESC);
 CREATE INDEX IF NOT EXISTS calibration_profiles_bias_tags_gin
@@ -1011,8 +1019,7 @@ CREATE TABLE IF NOT EXISTS take_proposals (
   acted_by                    TEXT,
   promoted_row_num            INTEGER,
   predicted_brier             REAL,
-  predicted_brier_bucket_n    INTEGER,
-  codex_evidence              JSONB
+  predicted_brier_bucket_n    INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS take_proposals_idempotency_idx
   ON take_proposals (source_id, page_slug, content_hash, prompt_version, md5(claim_text));
@@ -1140,17 +1147,21 @@ CREATE TABLE IF NOT EXISTS page_write_guards (
     PRIMARY KEY (source_incarnation, slug)
   );
 CREATE OR REPLACE FUNCTION gbrain_advance_page_revision() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$fn\$
+    DECLARE body_moved boolean := false;
     BEGIN
       IF OLD.knowledge_revision IS NULL THEN
         NEW.knowledge_revision := COALESCE(NEW.knowledge_revision, gen_random_uuid());
         NEW.text_projection_revision := NULL;
         RETURN NEW;
       END IF;
+      IF NEW.compiled_truth IS NULL AND OLD.compiled_truth IS NULL THEN
+        body_moved := NEW.body_generation IS DISTINCT FROM OLD.body_generation;
+      END IF;
       IF (NEW.source_id, NEW.slug, NEW.type, NEW.page_kind, NEW.title, NEW.compiled_truth,
           NEW.timeline, NEW.frontmatter, NEW.deleted_at)
          IS DISTINCT FROM
          (OLD.source_id, OLD.slug, OLD.type, OLD.page_kind, OLD.title, OLD.compiled_truth,
-          OLD.timeline, OLD.frontmatter, OLD.deleted_at) THEN
+          OLD.timeline, OLD.frontmatter, OLD.deleted_at) OR body_moved THEN
         IF NEW.knowledge_revision = OLD.knowledge_revision AND NOT (
           COALESCE(current_setting('gbrain.materializing_revision', true), '') = OLD.knowledge_revision::text
           AND (NEW.source_id, NEW.slug, NEW.type, NEW.page_kind, NEW.title, NEW.frontmatter, NEW.deleted_at)
@@ -1198,6 +1209,19 @@ CREATE TABLE IF NOT EXISTS extract_atoms_page_state (
 CREATE INDEX IF NOT EXISTS extract_atoms_page_state_tombstoned_idx
   ON extract_atoms_page_state (source_incarnation, content_hash, page_id) WHERE tombstoned;
 CREATE INDEX IF NOT EXISTS extract_atoms_page_state_page_idx ON extract_atoms_page_state (page_id);
+CREATE TABLE IF NOT EXISTS page_embedding_budget (
+  page_id INTEGER PRIMARY KEY REFERENCES pages(id) ON DELETE CASCADE,
+  state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'held', 'capped')),
+  reason TEXT,
+  embedding_signature TEXT,
+  spent_usd DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (spent_usd >= 0),
+  reserved_usd DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (reserved_usd >= 0),
+  reserved_at TIMESTAMPTZ,
+  unpriced_calls INTEGER NOT NULL DEFAULT 0 CHECK (unpriced_calls >= 0),
+  cap_usd DOUBLE PRECISION CHECK (cap_usd IS NULL OR cap_usd >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS page_embedding_budget_state_idx ON page_embedding_budget (state) WHERE state <> 'open';
 CREATE TABLE IF NOT EXISTS chronicle_page_state (
   source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
   page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -1244,6 +1268,119 @@ CREATE TABLE IF NOT EXISTS dream_synthesis_completions (
   completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (source_id, idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS page_extraction_state (
+  page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  pipeline TEXT NOT NULL CHECK (pipeline IN ('facts_backstop','extract_atoms','conversation_facts')),
+  pipeline_version INTEGER NOT NULL,
+  watermark_bytes BIGINT CHECK (watermark_bytes >= 0),
+  watermark_sha256 TEXT,
+  input_truncated JSONB,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (page_id, pipeline)
+);
+CREATE INDEX IF NOT EXISTS page_extraction_state_truncated_idx
+  ON page_extraction_state (pipeline, page_id) WHERE input_truncated IS NOT NULL;
+CREATE TABLE IF NOT EXISTS page_view_digests (
+  page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL,
+  view TEXT NOT NULL CHECK (view IN ('read','markdown')),
+  audience TEXT NOT NULL CHECK (audience IN ('trusted','remote')),
+  total_bytes BIGINT NOT NULL CHECK (total_bytes >= 0),
+  total_lines BIGINT NOT NULL CHECK (total_lines >= 0),
+  sha256 TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (page_id, revision, view, audience)
+);
+-- Wave B segmented page storage (migration v248): segment texts, the
+-- generation-ranged body manifest and body stagings (src/core/page-body/).
+-- Before the persistence region so the managed-writer guard covers them.
+CREATE SEQUENCE IF NOT EXISTS page_body_occurrence_id_seq;
+CREATE TABLE IF NOT EXISTS page_segment_texts (
+  source_id  TEXT    NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  sha256     BYTEA   NOT NULL CHECK (octet_length(sha256) = 32),
+  byte_len   INTEGER NOT NULL CHECK (byte_len BETWEEN 1 AND 1048576),
+  line_count INTEGER NOT NULL CHECK (line_count >= 0),
+  body       BYTEA   NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_id, sha256)
+);
+CREATE TABLE IF NOT EXISTS page_body_manifest (
+  page_id           INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  occurrence_id     BIGINT  NOT NULL,
+  gen_from          BIGINT  NOT NULL,
+  gen_to            BIGINT,
+  seq               INTEGER NOT NULL,
+  region            TEXT    NOT NULL CHECK (region IN ('truth','timeline')),
+  source_id         TEXT    NOT NULL,
+  sha256            BYTEA   NOT NULL,
+  byte_start        BIGINT  NOT NULL,
+  byte_len          INTEGER NOT NULL,
+  line_start        BIGINT  NOT NULL,
+  line_count        INTEGER NOT NULL,
+  cut_kind          TEXT    NOT NULL CHECK (cut_kind IN ('heading','day','message','blank','forced','region_end','eof')),
+  entry_state       JSONB   NOT NULL,
+  protected_regions JSONB   NOT NULL DEFAULT '[]',
+  facts_slots       JSONB   NOT NULL DEFAULT '[]',
+  static_proj_bytes BIGINT  NOT NULL,
+  static_proj_lines INTEGER NOT NULL,
+  outline           JSONB   NOT NULL DEFAULT '[]',
+  date_min          DATE,
+  date_max          DATE,
+  hash_state        BYTEA   NOT NULL,
+  staging_id        UUID,
+  staging_key       UUID GENERATED ALWAYS AS (COALESCE(staging_id, '00000000-0000-0000-0000-000000000000'::uuid)) STORED,
+  PRIMARY KEY (page_id, occurrence_id, gen_from, staging_key),
+  FOREIGN KEY (source_id, sha256) REFERENCES page_segment_texts(source_id, sha256)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS page_body_manifest_live_seq ON page_body_manifest (page_id, seq) WHERE gen_to IS NULL AND staging_id IS NULL;
+CREATE INDEX IF NOT EXISTS page_body_manifest_live_bytes ON page_body_manifest (page_id, byte_start) WHERE gen_to IS NULL;
+CREATE INDEX IF NOT EXISTS page_body_manifest_text ON page_body_manifest (source_id, sha256);
+CREATE INDEX IF NOT EXISTS page_body_manifest_staging ON page_body_manifest (staging_id) WHERE staging_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS page_body_stagings (
+  id                 UUID PRIMARY KEY,
+  kind               TEXT NOT NULL CHECK (kind IN ('upload','import','sync','put','append','edit','resegment')),
+  principal_kind     TEXT NOT NULL,
+  principal_id       TEXT NOT NULL,
+  client_request_id  UUID NOT NULL,
+  source_id          TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  source_incarnation UUID NOT NULL,
+  slug               TEXT NOT NULL,
+  page_id            INTEGER REFERENCES pages(id) ON DELETE CASCADE,
+  mode               TEXT NOT NULL CHECK (mode IN ('create','replace','append')),
+  base_revision      UUID,
+  base_generation    BIGINT,
+  declared_bytes     BIGINT NOT NULL CHECK (declared_bytes >= 0),
+  declared_sha256    BYTEA,
+  received_bytes     BIGINT NOT NULL DEFAULT 0,
+  next_part          INTEGER NOT NULL DEFAULT 0,
+  reserved_bytes     BIGINT NOT NULL,
+  state              TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','sealed','prepared','committed','aborted','expired')),
+  commit_request_id  UUID,
+  idle_expires_at    TIMESTAMPTZ NOT NULL,
+  hard_expires_at    TIMESTAMPTZ NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (principal_kind, principal_id, client_request_id)
+);
+CREATE INDEX IF NOT EXISTS page_body_stagings_expiry ON page_body_stagings (hard_expires_at) WHERE state IN ('open','sealed','prepared');
+CREATE TABLE IF NOT EXISTS page_body_staging_parts (
+  staging_id UUID    NOT NULL REFERENCES page_body_stagings(id) ON DELETE CASCADE,
+  part_no    INTEGER NOT NULL CHECK (part_no >= 0),
+  byte_start BIGINT  NOT NULL,
+  byte_len   INTEGER NOT NULL CHECK (byte_len BETWEEN 1 AND 4194304),
+  sha256     BYTEA   NOT NULL,
+  body       BYTEA   NOT NULL,
+  PRIMARY KEY (staging_id, part_no)
+);
+CREATE TABLE IF NOT EXISTS page_body_staging_texts (
+  staging_id UUID  NOT NULL REFERENCES page_body_stagings(id) ON DELETE CASCADE,
+  source_id  TEXT  NOT NULL,
+  sha256     BYTEA NOT NULL,
+  PRIMARY KEY (staging_id, sha256)
+);
+CREATE INDEX IF NOT EXISTS page_body_staging_texts_text ON page_body_staging_texts (source_id, sha256);
+
+
 
 -- Durable concurrent persistence (migration 151).
 CREATE TABLE IF NOT EXISTS persistence_brain (
@@ -1344,6 +1481,8 @@ CREATE INDEX IF NOT EXISTS persistence_requests_compactable
   ON persistence_requests(completed_at) WHERE recovery IS NULL AND NOT compacted AND state IN ('committed','conflict','failed','cancelled');
 CREATE INDEX IF NOT EXISTS persistence_requests_slug_intent
   ON persistence_requests(source_id,slug,sequence) WHERE intent IS NOT NULL AND NOT compacted;
+CREATE INDEX IF NOT EXISTS persistence_requests_request_id
+  ON persistence_requests(source_id,request_id);
 CREATE INDEX IF NOT EXISTS persistence_requests_principal ON persistence_requests(principal_kind,principal_id,sequence DESC);
 CREATE TABLE IF NOT EXISTS persistence_effects (
     id bigserial PRIMARY KEY,
@@ -1372,6 +1511,9 @@ CREATE TABLE IF NOT EXISTS persistence_consumers (
     persistence_home text NOT NULL,
     minted_under jsonb,
     version text NOT NULL,
+    boot_id text,
+    process_start text,
+    segment_reader boolean,
     PRIMARY KEY(host_id,pid,nonce)
   );
 
@@ -1381,14 +1523,22 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM persistence_brain WHERE singleton=1 AND enabled) THEN
     IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
   END IF;
-  row_data := CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
-  IF TG_OP='UPDATE' THEN old_data := to_jsonb(OLD); END IF;
+  IF TG_TABLE_NAME='page_segment_texts' THEN
+    -- Only the source decides; the segment body (up to 1 MiB of bytea) never becomes JSON.
+    IF TG_OP='DELETE' THEN row_data := jsonb_build_object('source_id',OLD.source_id); ELSE row_data := jsonb_build_object('source_id',NEW.source_id); END IF;
+    IF TG_OP='UPDATE' THEN old_data := jsonb_build_object('source_id',OLD.source_id); END IF;
+  ELSE
+    row_data := CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+    IF TG_OP='UPDATE' THEN old_data := to_jsonb(OLD); END IF;
+  END IF;
   IF TG_TABLE_NAME='pages' AND TG_OP='UPDATE' THEN
     IF (NEW.source_id,NEW.slug,NEW.type,NEW.page_kind,NEW.title,NEW.compiled_truth,NEW.timeline,NEW.frontmatter,NEW.deleted_at,NEW.knowledge_revision)
       IS NOT DISTINCT FROM
        (OLD.source_id,OLD.slug,OLD.type,OLD.page_kind,OLD.title,OLD.compiled_truth,OLD.timeline,OLD.frontmatter,OLD.deleted_at,OLD.knowledge_revision)
       -- The trust tier is guarded content (trust/schema.ts); read by key so brains before the column keep working.
-      AND row_data->'trust_tier' IS NOT DISTINCT FROM old_data->'trust_tier' THEN RETURN NEW; END IF;
+      AND row_data->'trust_tier' IS NOT DISTINCT FROM old_data->'trust_tier'
+      -- A segmented page's body identity (page-body/schema.ts); read by key for brains before the column.
+      AND row_data->'body_generation' IS NOT DISTINCT FROM old_data->'body_generation' THEN RETURN NEW; END IF;
   ELSIF TG_TABLE_NAME='sources' THEN
     IF TG_OP='UPDATE' AND (NEW.id,NEW.incarnation,NEW.local_path,NEW.archived)
       IS NOT DISTINCT FROM (OLD.id,OLD.incarnation,OLD.local_path,OLD.archived) THEN
@@ -1440,7 +1590,7 @@ END \$fn\$;
 DO \$body\$
 DECLARE target text;
 BEGIN
-  FOREACH target IN ARRAY ARRAY['pages','tags','slug_aliases','page_aliases','facts','takes','timeline_entries','sources'] LOOP
+  FOREACH target IN ARRAY ARRAY['pages','tags','slug_aliases','page_aliases','facts','takes','timeline_entries','sources','page_segment_texts','page_body_manifest'] LOOP
     IF to_regclass(target) IS NOT NULL THEN
       EXECUTE format('DROP TRIGGER IF EXISTS managed_writer_guard ON %I',target);
       EXECUTE format('CREATE TRIGGER managed_writer_guard BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION gbrain_require_managed_writer()',target);
@@ -1450,8 +1600,11 @@ END \$body\$;
 ;
 -- Verified text projection work (migration 153).
 DROP TRIGGER IF EXISTS trg_pages_search_vector ON pages;
-CREATE TRIGGER trg_pages_search_vector BEFORE INSERT OR UPDATE OF title,timeline ON pages
-    FOR EACH ROW EXECUTE FUNCTION update_page_search_vector();
+DO \$trg\$ BEGIN
+    EXECUTE format('CREATE TRIGGER trg_pages_search_vector BEFORE INSERT OR UPDATE OF %s ON pages FOR EACH ROW EXECUTE FUNCTION update_page_search_vector()',
+      CASE WHEN EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'pages'::regclass AND attname = 'timeline_lead' AND NOT attisdropped)
+        THEN 'title,timeline,timeline_lead' ELSE 'title,timeline' END);
+  END \$trg\$;
 CREATE TABLE IF NOT EXISTS page_projection_jobs (
     source_incarnation UUID NOT NULL REFERENCES sources(incarnation) ON DELETE CASCADE,
     slug TEXT NOT NULL,
@@ -2300,661 +2453,105 @@ DO \$rls\$ BEGIN
   END IF;
 END \$rls\$;
 
-CREATE TABLE IF NOT EXISTS codex_subscription_runs (
-  run_id TEXT PRIMARY KEY,
-  account_lane TEXT NOT NULL,
-  max_attempts INTEGER NOT NULL CHECK (max_attempts BETWEEN 1 AND 1000),
-  max_turns INTEGER NOT NULL CHECK (max_turns BETWEEN 1 AND 1000),
-  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-  accepted_turns INTEGER NOT NULL DEFAULT 0 CHECK (accepted_turns >= 0),
-  repairs INTEGER NOT NULL DEFAULT 0 CHECK (repairs BETWEEN 0 AND 1),
-  deadline TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS codex_subscription_attempts (
-  attempt_id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
-  account_lane TEXT NOT NULL,
-  request_hash TEXT NOT NULL,
-  owner_id TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('active','unresolved','succeeded','failed')),
-  input_tokens BIGINT CHECK (input_tokens >= 0),
-  cached_input_tokens BIGINT CHECK (cached_input_tokens >= 0),
-  output_tokens BIGINT CHECK (output_tokens >= 0),
-  accepted BOOLEAN NOT NULL DEFAULT false,
-  failure_code TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  settled_at TIMESTAMPTZ
-);
-CREATE UNIQUE INDEX IF NOT EXISTS codex_subscription_account_active
-  ON codex_subscription_attempts(account_lane) WHERE state IN ('active','unresolved');
-
-ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS codex_claim_token BIGINT;
-CREATE OR REPLACE FUNCTION enforce_codex_job_protocol() RETURNS trigger SET search_path = pg_catalog, public AS \$protocol\$
-BEGIN
-  IF NEW.status = 'active' AND (OLD.status <> 'active' OR NEW.lock_token IS DISTINCT FROM OLD.lock_token)
-     AND EXISTS (SELECT 1 FROM codex_subscription_runs WHERE run_id LIKE 'codex-job:' || NEW.id::text || ':%')
-     AND NEW.codex_claim_token IS DISTINCT FROM NEW.claim_generation THEN
-    RAISE EXCEPTION 'Codex subscription job protocol 1 required: upgrade this worker before claiming subscription jobs';
-  END IF;
-  RETURN NEW;
-END;
-\$protocol\$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS codex_job_protocol ON minion_jobs;
-CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON minion_jobs
-  FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol();
-
-ALTER TABLE subagent_tool_executions ADD COLUMN IF NOT EXISTS host_binding JSONB;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3));
-CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$\$
-  DECLARE target text; version integer; floor integer; active boolean; record jsonb;
-  BEGIN
-    IF TG_OP='DELETE' THEN target:=OLD.target_kind; version:=OLD.protocol_version;
-    ELSE target:=NEW.target_kind; version:=NEW.protocol_version; END IF;
-    SELECT writer_protocol_floor,skill_bundles_enabled INTO floor,active FROM persistence_brain WHERE singleton=1 FOR SHARE;
-    PERFORM gbrain_require_persistence_protocol(GREATEST(floor,version,CASE WHEN target='skill_bundle' THEN 2 ELSE 1 END));
-    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
-    IF TG_OP='UPDATE' AND (NEW.target_kind<>OLD.target_kind OR NEW.protocol_version<>OLD.protocol_version) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: a request target is immutable' USING ERRCODE='42501';
-    END IF;
-    IF NEW.operation IN ('put_skill','delete_skill','adopt_skillpack') AND target<>'skill_bundle' THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: skill operations require a typed target' USING ERRCODE='42501';
-    END IF;
-    IF target='skill_bundle' THEN
-      IF version<>2 OR NEW.page_id IS NOT NULL OR NEW.worktree_id IS NULL THEN
-        RAISE EXCEPTION 'unsupported_mutation_protocol: invalid skill target' USING ERRCODE='42501';
-      END IF;
-      IF TG_OP='INSERT' AND NOT active THEN
-        RAISE EXCEPTION 'writer_not_quiesced: shared publication is disabled' USING ERRCODE='42501';
-      END IF;
-      IF (TG_OP='INSERT' OR (NEW.state='running' AND OLD.state IS DISTINCT FROM 'running')) AND NOT EXISTS (SELECT 1 FROM persistence_worktrees w JOIN persistence_writer_protocols p
-        ON p.worktree_id=w.id AND p.host_id=w.owner_host_id AND p.owner_epoch=w.owner_epoch AND p.protocol_version=2
-        WHERE w.id=NEW.worktree_id AND w.state='active') THEN
-        RAISE EXCEPTION 'writer_not_quiesced: canonical owner capability must be revalidated' USING ERRCODE='42501';
-      END IF;
-    ELSIF version NOT IN (1,3) OR (version=3 AND NEW.operation<>'put_page') THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: invalid page target' USING ERRCODE='42501';
-    END IF;
-    record:=NEW.recovery;
-    IF record IS NOT NULL AND ((target='page' AND record->>'version' IS DISTINCT FROM '1')
-      OR (target='skill_bundle' AND (record->>'version' IS DISTINCT FROM '2' OR record->>'target' IS DISTINCT FROM 'skill_bundle'
-        OR jsonb_typeof(record->'files') IS DISTINCT FROM 'array'))) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: recovery target mismatch' USING ERRCODE='42501';
-    END IF;
-    RETURN NEW;
-  END \$\$;
-
-CREATE TABLE IF NOT EXISTS codex_upgrade_receipts (
-  sequence BIGSERIAL UNIQUE NOT NULL,
-  id UUID PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('pins','jobs')),
-  plan_hash TEXT NOT NULL,
-  plan JSONB NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('applied','rolled_back')),
-  receipt JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS codex_upgrade_plan_hash ON codex_upgrade_receipts(kind,plan_hash);
-ALTER TABLE codex_upgrade_receipts ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_parked_jobs (
-  job_id INTEGER PRIMARY KEY REFERENCES minion_jobs(id),
-  receipt_id UUID NOT NULL REFERENCES codex_upgrade_receipts(id),
-  previous_status TEXT NOT NULL,
-  replacement_job_id INTEGER REFERENCES minion_jobs(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE codex_parked_jobs ENABLE ROW LEVEL SECURITY;
-CREATE OR REPLACE FUNCTION enforce_codex_job_parking() RETURNS trigger SET search_path = pg_catalog, public AS \$parking\$
-BEGIN
-  IF TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM codex_parked_jobs WHERE job_id=OLD.id) THEN
-    RAISE EXCEPTION 'codex_job_parked: explicit upgrade disposition required' USING ERRCODE='42501';
-  END IF;
-  IF TG_OP <> 'DELETE' AND NEW.parent_job_id IS NOT NULL
-     AND EXISTS (SELECT 1 FROM codex_parked_jobs WHERE job_id=NEW.parent_job_id) THEN
-    RAISE EXCEPTION 'codex_parent_parked: explicit upgrade disposition required' USING ERRCODE='42501';
-  END IF;
-  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
-  RETURN NEW;
-END;
-\$parking\$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS codex_job_parking ON minion_jobs;
-CREATE TRIGGER codex_job_parking BEFORE INSERT OR UPDATE OR DELETE ON minion_jobs
-  FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_parking();
-
-CREATE TABLE IF NOT EXISTS codex_think_publications (
-  plan_id UUID PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
-  request_key TEXT NOT NULL,
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  source_incarnation UUID NOT NULL REFERENCES sources(incarnation) ON DELETE CASCADE,
-  payload JSONB NOT NULL,
-  payload_hash TEXT NOT NULL,
-  admitted INTEGER[] NOT NULL DEFAULT '{}',
-  state TEXT NOT NULL DEFAULT 'accepted' CHECK (state IN ('accepted','complete')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  completed_at TIMESTAMPTZ,
-  UNIQUE(run_id,request_key)
-);
-ALTER TABLE codex_think_publications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4));
-CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$\$
-  DECLARE target text; version integer; floor integer; active boolean; record jsonb;
-  BEGIN
-    IF TG_OP='DELETE' THEN target:=OLD.target_kind; version:=OLD.protocol_version;
-    ELSE target:=NEW.target_kind; version:=NEW.protocol_version; END IF;
-    SELECT writer_protocol_floor,skill_bundles_enabled INTO floor,active FROM persistence_brain WHERE singleton=1 FOR SHARE;
-    PERFORM gbrain_require_persistence_protocol(GREATEST(floor,version,CASE WHEN target='skill_bundle' THEN 2 ELSE 1 END));
-    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
-    IF TG_OP='UPDATE' AND (NEW.target_kind<>OLD.target_kind OR NEW.protocol_version<>OLD.protocol_version) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: a request target is immutable' USING ERRCODE='42501';
-    END IF;
-    IF NEW.operation IN ('put_skill','delete_skill','adopt_skillpack') AND target<>'skill_bundle' THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: skill operations require a typed target' USING ERRCODE='42501';
-    END IF;
-    IF target='skill_bundle' THEN
-      IF version<>2 OR NEW.page_id IS NOT NULL OR NEW.worktree_id IS NULL THEN
-        RAISE EXCEPTION 'unsupported_mutation_protocol: invalid skill target' USING ERRCODE='42501';
-      END IF;
-      IF TG_OP='INSERT' AND NOT active THEN
-        RAISE EXCEPTION 'writer_not_quiesced: shared publication is disabled' USING ERRCODE='42501';
-      END IF;
-      IF (TG_OP='INSERT' OR (NEW.state='running' AND OLD.state IS DISTINCT FROM 'running')) AND NOT EXISTS (SELECT 1 FROM persistence_worktrees w JOIN persistence_writer_protocols p
-        ON p.worktree_id=w.id AND p.host_id=w.owner_host_id AND p.owner_epoch=w.owner_epoch AND p.protocol_version=2
-        WHERE w.id=NEW.worktree_id AND w.state='active') THEN
-        RAISE EXCEPTION 'writer_not_quiesced: canonical owner capability must be revalidated' USING ERRCODE='42501';
-      END IF;
-    ELSIF version NOT IN (1,3,4) OR (version=3 AND NEW.operation<>'put_page') OR (version=4 AND NEW.operation NOT IN ('put_page','takes_add')) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: invalid page target' USING ERRCODE='42501';
-    END IF;
-    record:=NEW.recovery;
-    IF record IS NOT NULL AND ((target='page' AND record->>'version' IS DISTINCT FROM '1')
-      OR (target='skill_bundle' AND (record->>'version' IS DISTINCT FROM '2' OR record->>'target' IS DISTINCT FROM 'skill_bundle'
-        OR jsonb_typeof(record->'files') IS DISTINCT FROM 'array'))) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: recovery target mismatch' USING ERRCODE='42501';
-    END IF;
-    RETURN NEW;
-  END \$\$;
-
-CREATE TABLE IF NOT EXISTS codex_auto_think_runs (
-  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  source_incarnation UUID NOT NULL REFERENCES sources(incarnation) ON DELETE CASCADE,
-  input_hash TEXT NOT NULL,
-  binding JSONB NOT NULL,
-  results JSONB NOT NULL DEFAULT '{}',
-  state TEXT NOT NULL DEFAULT 'accepted' CHECK (state IN ('accepted','complete')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  completed_at TIMESTAMPTZ,
-  PRIMARY KEY(run_id,source_id)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS codex_auto_think_pending ON codex_auto_think_runs(source_id) WHERE state='accepted';
-ALTER TABLE codex_auto_think_runs ENABLE ROW LEVEL SECURITY;
-CREATE INDEX IF NOT EXISTS codex_auto_think_cooldown ON codex_auto_think_runs(source_id,completed_at DESC) WHERE state='complete';
-
-CREATE TABLE IF NOT EXISTS codex_think_ab_trials (
-  trial_id UUID PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
-  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  source_incarnation UUID NOT NULL REFERENCES sources(incarnation) ON DELETE CASCADE,
-  input_hash TEXT NOT NULL,
-  binding JSONB NOT NULL,
-  baseline JSONB,
-  calibrated JSONB,
-  result_id BIGINT UNIQUE REFERENCES think_ab_results(id),
-  state TEXT NOT NULL DEFAULT 'accepted' CHECK (state IN ('accepted','ready','rated')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (state='accepted' OR baseline IS NOT NULL AND calibrated IS NOT NULL),
-  CHECK ((state='rated')=(result_id IS NOT NULL))
-);
-ALTER TABLE codex_think_ab_trials ENABLE ROW LEVEL SECURITY;
-CREATE INDEX IF NOT EXISTS codex_think_ab_source ON codex_think_ab_trials(source_id,created_at DESC);
-
-CREATE TABLE IF NOT EXISTS codex_proposal_cache (
-  namespace TEXT NOT NULL CHECK (namespace ~ '^[a-zA-Z0-9._:-]{1,120}\$'),
-  binding_hash TEXT NOT NULL CHECK (binding_hash ~ '^[a-f0-9]{64}\$'),
-  request_hash TEXT NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}\$'),
-  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
-  response_text TEXT NOT NULL CHECK (octet_length(response_text) BETWEEN 2 AND 262144),
-  response_hash TEXT NOT NULL CHECK (response_hash ~ '^[a-f0-9]{64}\$'),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY(namespace,binding_hash,request_hash)
-);
-ALTER TABLE codex_proposal_cache ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_eval_runs (
-  run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  binding_hash TEXT NOT NULL CHECK (binding_hash ~ '^[a-f0-9]{64}\$'),
-  question_count INTEGER NOT NULL CHECK (question_count BETWEEN 1 AND 1000),
-  required_stage TEXT NOT NULL CHECK (required_stage IN ('answer','judged')),
-  owner_token UUID,
-  lease_until TIMESTAMPTZ,
-  state TEXT NOT NULL CHECK (state IN ('idle','running','complete','needs_reconciliation')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK ((owner_token IS NULL) = (lease_until IS NULL))
-);
-CREATE TABLE IF NOT EXISTS codex_eval_results (
-  run_id TEXT NOT NULL REFERENCES codex_eval_runs(run_id),
-  question_key TEXT NOT NULL CHECK (question_key ~ '^[a-f0-9]{64}\$'),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  stage TEXT NOT NULL CHECK (stage IN ('answer','judged')),
-  payload JSONB NOT NULL CHECK (jsonb_typeof(payload)='object' AND octet_length(payload::text)<=524288),
-  payload_hash TEXT NOT NULL CHECK (payload_hash ~ '^[a-f0-9]{64}\$'),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY(run_id,question_key,stage)
-);
-ALTER TABLE codex_eval_runs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE codex_eval_results ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_brainstorm_runs (
-  run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  request_hash TEXT NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}\$'),
-  owner_token UUID,
-  lease_until TIMESTAMPTZ,
-  state TEXT NOT NULL CHECK (state IN ('idle','running','complete','needs_reconciliation')),
-  selection JSONB,
-  selection_hash TEXT,
-  result JSONB,
-  result_hash TEXT,
-  publication JSONB,
-  publication_hash TEXT,
-  publication_admitted BOOLEAN NOT NULL DEFAULT false,
-  publication_complete BOOLEAN NOT NULL DEFAULT false,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK ((owner_token IS NULL) = (lease_until IS NULL)),
-  CHECK ((selection IS NULL) = (selection_hash IS NULL)),
-  CHECK (selection IS NULL OR (jsonb_typeof(selection)='object' AND octet_length(selection::text)<=2097152 AND selection_hash ~ '^[a-f0-9]{64}\$')),
-  CHECK ((result IS NULL) = (result_hash IS NULL)),
-  CHECK (result IS NULL OR (selection IS NOT NULL AND jsonb_typeof(result)='object' AND octet_length(result::text)<=2097152 AND result_hash ~ '^[a-f0-9]{64}\$')),
-  CHECK ((publication IS NULL) = (publication_hash IS NULL)),
-  CHECK (publication IS NULL OR (result IS NOT NULL AND jsonb_typeof(publication)='object' AND octet_length(publication::text)<=2097152 AND publication_hash ~ '^[a-f0-9]{64}\$')),
-  CHECK (NOT publication_admitted OR publication IS NOT NULL),
-  CHECK (NOT publication_complete OR publication_admitted),
-  CHECK (state<>'complete' OR result IS NOT NULL)
-);
-ALTER TABLE codex_brainstorm_runs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4,5));
-CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$\$
-  DECLARE target text; version integer; floor integer; active boolean; record jsonb;
-  BEGIN
-    IF TG_OP='DELETE' THEN target:=OLD.target_kind; version:=OLD.protocol_version;
-    ELSE target:=NEW.target_kind; version:=NEW.protocol_version; END IF;
-    SELECT writer_protocol_floor,skill_bundles_enabled INTO floor,active FROM persistence_brain WHERE singleton=1 FOR SHARE;
-    PERFORM gbrain_require_persistence_protocol(GREATEST(floor,version,CASE WHEN target='skill_bundle' THEN 2 ELSE 1 END));
-    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
-    IF TG_OP='UPDATE' AND (NEW.target_kind<>OLD.target_kind OR NEW.protocol_version<>OLD.protocol_version) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: a request target is immutable' USING ERRCODE='42501';
-    END IF;
-    IF NEW.operation IN ('put_skill','delete_skill','adopt_skillpack') AND target<>'skill_bundle' THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: skill operations require a typed target' USING ERRCODE='42501';
-    END IF;
-    IF target='skill_bundle' THEN
-      IF version<>2 OR NEW.page_id IS NOT NULL OR NEW.worktree_id IS NULL THEN
-        RAISE EXCEPTION 'unsupported_mutation_protocol: invalid skill target' USING ERRCODE='42501';
-      END IF;
-      IF TG_OP='INSERT' AND NOT active THEN
-        RAISE EXCEPTION 'writer_not_quiesced: shared publication is disabled' USING ERRCODE='42501';
-      END IF;
-      IF (TG_OP='INSERT' OR (NEW.state='running' AND OLD.state IS DISTINCT FROM 'running')) AND NOT EXISTS (SELECT 1 FROM persistence_worktrees w JOIN persistence_writer_protocols p
-        ON p.worktree_id=w.id AND p.host_id=w.owner_host_id AND p.owner_epoch=w.owner_epoch AND p.protocol_version=2
-        WHERE w.id=NEW.worktree_id AND w.state='active') THEN
-        RAISE EXCEPTION 'writer_not_quiesced: canonical owner capability must be revalidated' USING ERRCODE='42501';
-      END IF;
-    ELSIF version NOT IN (1,3,4,5) OR (version IN (3,5) AND NEW.operation<>'put_page') OR (version=4 AND NEW.operation NOT IN ('put_page','takes_add')) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: invalid page target' USING ERRCODE='42501';
-    END IF;
-    record:=NEW.recovery;
-    IF record IS NOT NULL AND ((target='page' AND record->>'version' IS DISTINCT FROM '1')
-      OR (target='skill_bundle' AND (record->>'version' IS DISTINCT FROM '2' OR record->>'target' IS DISTINCT FROM 'skill_bundle'
-        OR jsonb_typeof(record->'files') IS DISTINCT FROM 'array'))) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: recovery target mismatch' USING ERRCODE='42501';
-    END IF;
-    RETURN NEW;
-  END \$\$;
-
-ALTER TABLE codex_brainstorm_runs ADD COLUMN IF NOT EXISTS subscription_run_id TEXT;
-UPDATE codex_brainstorm_runs SET subscription_run_id=run_id WHERE subscription_run_id IS NULL;
-ALTER TABLE codex_brainstorm_runs ALTER COLUMN subscription_run_id SET NOT NULL;
-ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_run_id_fkey;
-ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_subscription_run_id_fkey;
-ALTER TABLE codex_brainstorm_runs ADD CONSTRAINT codex_brainstorm_runs_subscription_run_id_fkey
-  FOREIGN KEY(subscription_run_id) REFERENCES codex_subscription_runs(run_id);
-ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_protocol_check;
-ALTER TABLE codex_brainstorm_runs ADD CONSTRAINT codex_brainstorm_runs_protocol_check
-  CHECK ((protocol=1 AND run_id=subscription_run_id) OR protocol=2);
-CREATE INDEX IF NOT EXISTS codex_brainstorm_runs_subscription_run ON codex_brainstorm_runs(subscription_run_id);
-
-ALTER TABLE codex_subscription_runs ADD COLUMN IF NOT EXISTS parent_run_id TEXT
-  REFERENCES codex_subscription_runs(run_id);
-CREATE INDEX IF NOT EXISTS codex_subscription_parent ON codex_subscription_runs(parent_run_id);
-
-CREATE OR REPLACE FUNCTION gbrain_codex_subscription_group_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$\$
-DECLARE
-  parent codex_subscription_runs%ROWTYPE;
-  attempts_delta INTEGER;
-  turns_delta INTEGER;
-  repairs_delta INTEGER;
-BEGIN
-  IF TG_OP = 'UPDATE' AND (NEW.parent_run_id IS DISTINCT FROM OLD.parent_run_id OR
-      (NEW.parent_run_id IS NOT NULL AND NEW.run_id <> OLD.run_id)) THEN
-    RAISE EXCEPTION 'subscription_identity_conflict';
-  END IF;
-  IF NEW.parent_run_id IS NULL THEN
-    IF TG_OP = 'UPDATE' AND
-       (NEW.run_id <> OLD.run_id OR NEW.account_lane <> OLD.account_lane OR NEW.deadline <> OLD.deadline OR
-        NEW.max_attempts <> OLD.max_attempts OR NEW.max_turns <> OLD.max_turns) AND
-       EXISTS (SELECT 1 FROM codex_subscription_runs WHERE parent_run_id=OLD.run_id) THEN
-      RAISE EXCEPTION 'subscription_identity_conflict';
-    END IF;
-    RETURN NEW;
-  END IF;
-  SELECT * INTO parent FROM codex_subscription_runs WHERE run_id=NEW.parent_run_id FOR UPDATE;
-  IF NOT FOUND OR parent.parent_run_id IS NOT NULL OR NEW.run_id=NEW.parent_run_id OR
-     NEW.account_lane<>parent.account_lane OR NEW.deadline>parent.deadline OR
-     NEW.max_attempts>parent.max_attempts OR NEW.max_turns>parent.max_turns THEN
-    RAISE EXCEPTION 'subscription_identity_conflict';
-  END IF;
-  IF TG_OP = 'INSERT' THEN
-    IF NEW.attempts<>0 OR NEW.accepted_turns<>0 OR NEW.repairs<>0 THEN
-      RAISE EXCEPTION 'subscription_invalid';
-    END IF;
-    RETURN NEW;
-  END IF;
-  IF NEW.account_lane<>OLD.account_lane OR NEW.deadline<>OLD.deadline OR
-     NEW.max_attempts<>OLD.max_attempts OR NEW.max_turns<>OLD.max_turns THEN
-    RAISE EXCEPTION 'subscription_identity_conflict';
-  END IF;
-  attempts_delta := NEW.attempts-OLD.attempts;
-  turns_delta := NEW.accepted_turns-OLD.accepted_turns;
-  repairs_delta := NEW.repairs-OLD.repairs;
-  IF attempts_delta<0 OR turns_delta<0 OR repairs_delta<0 OR
-     NEW.attempts>NEW.max_attempts OR NEW.accepted_turns>NEW.max_turns OR
-     NEW.accepted_turns>NEW.attempts OR NEW.repairs>NEW.attempts THEN
-    RAISE EXCEPTION 'subscription_invalid';
-  END IF;
-  IF attempts_delta+turns_delta+repairs_delta=0 THEN RETURN NEW; END IF;
-  UPDATE codex_subscription_runs SET attempts=attempts+attempts_delta,
-    accepted_turns=accepted_turns+turns_delta, repairs=repairs+repairs_delta
-    WHERE run_id=parent.run_id AND attempts+attempts_delta<=max_attempts
-      AND accepted_turns+turns_delta<=max_turns AND repairs+repairs_delta<=1
-      AND (attempts_delta=0 OR (accepted_turns<max_turns AND deadline>now()));
-  IF NOT FOUND THEN RAISE EXCEPTION 'subscription_exhausted'; END IF;
-  RETURN NEW;
-END;
-\$\$;
-DROP TRIGGER IF EXISTS codex_subscription_group_guard ON codex_subscription_runs;
-CREATE TRIGGER codex_subscription_group_guard BEFORE INSERT OR UPDATE ON codex_subscription_runs
-  FOR EACH ROW EXECUTE FUNCTION gbrain_codex_subscription_group_guard();
-
-CREATE TABLE IF NOT EXISTS codex_skillopt_rollouts (
-  run_id TEXT NOT NULL REFERENCES codex_subscription_runs(run_id),
-  invocation_id TEXT NOT NULL CHECK (invocation_id ~ '^[A-Za-z0-9._:-]{1,160}\$'),
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  job_id BIGINT NOT NULL UNIQUE REFERENCES minion_jobs(id),
-  trajectory JSONB CHECK (jsonb_typeof(trajectory)='object' AND octet_length(trajectory::text)<=262144),
-  trajectory_hash TEXT CHECK (trajectory_hash ~ '^[a-f0-9]{64}\$'),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY(run_id,invocation_id),
-  CHECK ((trajectory IS NULL)=(trajectory_hash IS NULL))
-);
-ALTER TABLE codex_skillopt_rollouts ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_skillopt_runs (
-  run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  input JSONB NOT NULL CHECK (jsonb_typeof(input)='object' AND octet_length(input::text)<=2097152),
-  checkpoint JSONB NOT NULL CHECK (jsonb_typeof(checkpoint)='object' AND octet_length(checkpoint::text)<=524288),
-  checkpoint_hash TEXT NOT NULL CHECK (checkpoint_hash ~ '^[a-f0-9]{64}\$'),
-  result JSONB CHECK (jsonb_typeof(result)='object' AND octet_length(result::text)<=524288),
-  result_hash TEXT CHECK (result_hash ~ '^[a-f0-9]{64}\$'),
-  owner_token UUID,
-  lease_until TIMESTAMPTZ,
-  deadline TIMESTAMPTZ NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('idle','running','computed','complete','needs_reconciliation')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK ((owner_token IS NULL)=(lease_until IS NULL)),
-  CHECK ((result IS NULL)=(result_hash IS NULL))
-);
-ALTER TABLE codex_skillopt_runs ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_skillopt_submissions (
-  request_id UUID PRIMARY KEY,
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  data_hash TEXT NOT NULL CHECK (data_hash ~ '^[a-f0-9]{64}\$'),
-  job_id BIGINT NOT NULL UNIQUE REFERENCES minion_jobs(id) ON DELETE RESTRICT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE codex_skillopt_submissions ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_shared_skill_optimizations (
-  run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
-  request_id UUID NOT NULL UNIQUE,
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  input JSONB NOT NULL CHECK (jsonb_typeof(input)='object' AND octet_length(input::text)<=2097152),
-  owner_token UUID,
-  lease_until TIMESTAMPTZ,
-  publication_fence JSONB,
-  result JSONB,
-  result_hash TEXT,
-  admission JSONB,
-  admission_hash TEXT,
-  response JSONB,
-  response_hash TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK ((owner_token IS NULL)=(lease_until IS NULL)),
-  CHECK ((result IS NULL)=(result_hash IS NULL)),
-  CHECK ((admission IS NULL)=(admission_hash IS NULL)),
-  CHECK ((response IS NULL)=(response_hash IS NULL)),
-  CHECK (result IS NULL OR (jsonb_typeof(result)='object' AND octet_length(result::text)<=524288 AND result_hash ~ '^[a-f0-9]{64}\$')),
-  CHECK (admission IS NULL OR (result IS NOT NULL AND jsonb_typeof(admission)='object' AND octet_length(admission::text)<=2097152 AND admission_hash ~ '^[a-f0-9]{64}\$')),
-  CHECK (response IS NULL OR (result IS NOT NULL AND jsonb_typeof(response)='object' AND octet_length(response::text)<=524288 AND response_hash ~ '^[a-f0-9]{64}\$'))
-);
-ALTER TABLE codex_shared_skill_optimizations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4,5,6));
-CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$\$
-  DECLARE target text; version integer; floor integer; active boolean; record jsonb;
-  BEGIN
-    IF TG_OP='DELETE' THEN target:=OLD.target_kind; version:=OLD.protocol_version;
-    ELSE target:=NEW.target_kind; version:=NEW.protocol_version; END IF;
-    SELECT writer_protocol_floor,skill_bundles_enabled INTO floor,active FROM persistence_brain WHERE singleton=1 FOR SHARE;
-    PERFORM gbrain_require_persistence_protocol(GREATEST(floor,version,CASE WHEN target='skill_bundle' THEN 2 ELSE 1 END));
-    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
-    IF TG_OP='UPDATE' AND (NEW.target_kind<>OLD.target_kind OR NEW.protocol_version<>OLD.protocol_version) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: a request target is immutable' USING ERRCODE='42501';
-    END IF;
-    IF NEW.operation IN ('put_skill','delete_skill','adopt_skillpack') AND target<>'skill_bundle' THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: skill operations require a typed target' USING ERRCODE='42501';
-    END IF;
-    IF target='skill_bundle' THEN
-      IF version NOT IN (2,6) OR (version=6 AND NEW.operation<>'put_skill') OR NEW.page_id IS NOT NULL OR NEW.worktree_id IS NULL THEN
-        RAISE EXCEPTION 'unsupported_mutation_protocol: invalid skill target' USING ERRCODE='42501';
-      END IF;
-      IF TG_OP='INSERT' AND NOT active THEN
-        RAISE EXCEPTION 'writer_not_quiesced: shared publication is disabled' USING ERRCODE='42501';
-      END IF;
-      IF (TG_OP='INSERT' OR (NEW.state='running' AND OLD.state IS DISTINCT FROM 'running')) AND NOT EXISTS (SELECT 1 FROM persistence_worktrees w JOIN persistence_writer_protocols p
-        ON p.worktree_id=w.id AND p.host_id=w.owner_host_id AND p.owner_epoch=w.owner_epoch AND p.protocol_version=2
-        WHERE w.id=NEW.worktree_id AND w.state='active') THEN
-        RAISE EXCEPTION 'writer_not_quiesced: canonical owner capability must be revalidated' USING ERRCODE='42501';
-      END IF;
-    ELSIF version NOT IN (1,3,4,5) OR (version IN (3,5) AND NEW.operation<>'put_page') OR (version=4 AND NEW.operation NOT IN ('put_page','takes_add')) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: invalid page target' USING ERRCODE='42501';
-    END IF;
-    record:=NEW.recovery;
-    IF record IS NOT NULL AND ((target='page' AND record->>'version' IS DISTINCT FROM '1')
-      OR (target='skill_bundle' AND (record->>'version' IS DISTINCT FROM '2' OR record->>'target' IS DISTINCT FROM 'skill_bundle'
-        OR jsonb_typeof(record->'files') IS DISTINCT FROM 'array'))) THEN
-      RAISE EXCEPTION 'unsupported_mutation_protocol: recovery target mismatch' USING ERRCODE='42501';
-    END IF;
-    RETURN NEW;
-  END \$\$;
-
-CREATE TABLE IF NOT EXISTS codex_skillopt_bootstraps (
-  run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  input JSONB NOT NULL CHECK (jsonb_typeof(input)='object' AND octet_length(input::text)<=2097152),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  owner_token UUID,
-  lease_until TIMESTAMPTZ,
-  result JSONB CHECK (jsonb_typeof(result)='object' AND octet_length(result::text)<=1048576),
-  result_hash TEXT CHECK (result_hash ~ '^[a-f0-9]{64}\$'),
-  completed BOOLEAN NOT NULL DEFAULT false,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK ((owner_token IS NULL)=(lease_until IS NULL)),
-  CHECK ((result IS NULL)=(result_hash IS NULL)),
-  CHECK (NOT completed OR result IS NOT NULL)
-);
-ALTER TABLE codex_skillopt_bootstraps ENABLE ROW LEVEL SECURITY;
-
--- All admission/acceptance paths lock ancestors before descendants. A maximum of
--- two edges is sufficient for batch -> optimizer -> rollout, never model delegation.
-CREATE OR REPLACE FUNCTION gbrain_codex_subscription_lock_path(target_run_id TEXT) RETURNS void
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$\$
-DECLARE locked_run TEXT;
-BEGIN
-  FOR locked_run IN
-    WITH RECURSIVE path AS (
-      SELECT run_id,parent_run_id,0 AS depth FROM codex_subscription_runs WHERE run_id=target_run_id
-      UNION ALL
-      SELECT r.run_id,r.parent_run_id,path.depth+1 FROM codex_subscription_runs r
-        JOIN path ON r.run_id=path.parent_run_id WHERE path.depth<2
-    )
-    SELECT r.run_id FROM codex_subscription_runs r JOIN path ON path.run_id=r.run_id
-      ORDER BY path.depth DESC FOR UPDATE OF r
-  LOOP
-    NULL;
-  END LOOP;
-END;
-\$\$;
-
-CREATE OR REPLACE FUNCTION gbrain_codex_subscription_group_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS \$\$
-DECLARE
-  parent codex_subscription_runs%ROWTYPE;
-  attempts_delta INTEGER;
-  turns_delta INTEGER;
-  repairs_delta INTEGER;
-BEGIN
-  IF TG_OP = 'UPDATE' AND (NEW.parent_run_id IS DISTINCT FROM OLD.parent_run_id OR
-      (NEW.parent_run_id IS NOT NULL AND NEW.run_id <> OLD.run_id)) THEN
-    RAISE EXCEPTION 'subscription_identity_conflict';
-  END IF;
-  IF TG_OP = 'INSERT' THEN
-    IF NEW.attempts<>0 OR NEW.accepted_turns<>0 OR NEW.repairs<>0 THEN
-      RAISE EXCEPTION 'subscription_invalid';
-    END IF;
-  ELSE
-    attempts_delta := NEW.attempts-OLD.attempts;
-    turns_delta := NEW.accepted_turns-OLD.accepted_turns;
-    repairs_delta := NEW.repairs-OLD.repairs;
-    IF attempts_delta<0 OR turns_delta<0 OR repairs_delta<0 OR
-       NEW.attempts>NEW.max_attempts OR NEW.accepted_turns>NEW.max_turns OR
-       NEW.accepted_turns>NEW.attempts OR NEW.repairs>NEW.attempts THEN
-      RAISE EXCEPTION 'subscription_invalid';
-    END IF;
-  END IF;
-  IF NEW.parent_run_id IS NULL THEN
-    IF TG_OP = 'UPDATE' AND
-       (NEW.run_id <> OLD.run_id OR NEW.account_lane <> OLD.account_lane OR NEW.deadline <> OLD.deadline OR
-        NEW.max_attempts <> OLD.max_attempts OR NEW.max_turns <> OLD.max_turns) AND
-       EXISTS (SELECT 1 FROM codex_subscription_runs WHERE parent_run_id=OLD.run_id) THEN
-      RAISE EXCEPTION 'subscription_identity_conflict';
-    END IF;
-    RETURN NEW;
-  END IF;
-  PERFORM gbrain_codex_subscription_lock_path(NEW.parent_run_id);
-  SELECT * INTO parent FROM codex_subscription_runs WHERE run_id=NEW.parent_run_id FOR UPDATE;
-  IF NOT FOUND OR NEW.run_id=NEW.parent_run_id OR
-     EXISTS (SELECT 1 FROM codex_subscription_runs
-             WHERE run_id=parent.parent_run_id AND parent_run_id IS NOT NULL) OR
-     NEW.account_lane<>parent.account_lane OR NEW.deadline>parent.deadline OR
-     NEW.max_attempts>parent.max_attempts OR NEW.max_turns>parent.max_turns THEN
-    RAISE EXCEPTION 'subscription_identity_conflict';
-  END IF;
-  IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
-  IF NEW.account_lane<>OLD.account_lane OR NEW.deadline<>OLD.deadline OR
-     NEW.max_attempts<>OLD.max_attempts OR NEW.max_turns<>OLD.max_turns THEN
-    RAISE EXCEPTION 'subscription_identity_conflict';
-  END IF;
-  IF attempts_delta+turns_delta+repairs_delta=0 THEN RETURN NEW; END IF;
-  UPDATE codex_subscription_runs SET attempts=attempts+attempts_delta,
-    accepted_turns=accepted_turns+turns_delta, repairs=repairs+repairs_delta
-    WHERE run_id=parent.run_id AND attempts+attempts_delta<=max_attempts
-      AND accepted_turns+turns_delta<=max_turns AND repairs+repairs_delta<=1
-      AND (attempts_delta=0 OR (accepted_turns<max_turns AND deadline>now()));
-  IF NOT FOUND THEN RAISE EXCEPTION 'subscription_exhausted'; END IF;
-  RETURN NEW;
-END;
-\$\$;
-
-CREATE TABLE IF NOT EXISTS codex_skillopt_batches (
-  run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  input JSONB NOT NULL CHECK (jsonb_typeof(input)='object' AND octet_length(input::text)<=8388608),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  owner_token UUID,
-  lease_until TIMESTAMPTZ,
-  state TEXT NOT NULL CHECK (state IN ('idle','running','complete','needs_reconciliation')),
-  result JSONB CHECK (jsonb_typeof(result)='object' AND octet_length(result::text)<=2097152),
-  result_hash TEXT CHECK (result_hash ~ '^[a-f0-9]{64}\$'),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK ((owner_token IS NULL)=(lease_until IS NULL)),
-  CHECK ((result IS NULL)=(result_hash IS NULL)),
-  CHECK (state<>'complete' OR result IS NOT NULL)
-);
-CREATE TABLE IF NOT EXISTS codex_skillopt_batch_members (
-  batch_run_id TEXT NOT NULL REFERENCES codex_skillopt_batches(run_id),
-  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 19),
-  run_id TEXT NOT NULL UNIQUE REFERENCES codex_subscription_runs(run_id),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  PRIMARY KEY(batch_run_id,ordinal)
-);
-ALTER TABLE codex_skillopt_batches ENABLE ROW LEVEL SECURITY;
-ALTER TABLE codex_skillopt_batch_members ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_skillopt_cycles (
-  run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  source_id TEXT NOT NULL,
+-- Belief ledger (W1, docs/designs/BELIEF_LEDGER.md): append-only canonical audit state.
+CREATE TABLE IF NOT EXISTS belief_events (
+  id                 BIGSERIAL PRIMARY KEY,
+  event_key          BYTEA NOT NULL UNIQUE,
+  source_id          TEXT NOT NULL,
   source_incarnation UUID NOT NULL,
-  binding JSONB NOT NULL CHECK (jsonb_typeof(binding)='object' AND octet_length(binding::text)<=65536),
-  input_hash TEXT NOT NULL CHECK (input_hash ~ '^[a-f0-9]{64}\$'),
-  selection JSONB NOT NULL CHECK (jsonb_typeof(selection)='array' AND jsonb_array_length(selection)<=20),
-  selection_hash TEXT NOT NULL CHECK (selection_hash ~ '^[a-f0-9]{64}\$'),
-  state TEXT NOT NULL CHECK (state IN ('pending','complete','failed')),
-  result_hash TEXT CHECK (result_hash ~ '^[a-f0-9]{64}\$'),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  settled_at TIMESTAMPTZ,
-  CHECK ((state='pending')=(settled_at IS NULL)),
-  CHECK ((state='complete')=(result_hash IS NOT NULL))
+  page_lifetime      UUID,
+  slug               TEXT NOT NULL,
+  subject_kind       TEXT NOT NULL CHECK (subject_kind IN ('page','fact','take','link','link_transition','coverage')),
+  subject_key        TEXT NOT NULL,
+  event_type         TEXT NOT NULL,
+  origin             TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','unmanaged','baseline','backfill','reconcile')),
+  trust_tier         TEXT NOT NULL,
+  writer_tier        TEXT,
+  tier_basis         TEXT NOT NULL DEFAULT 'row' CHECK (tier_basis IN ('row','writer','unknown')),
+  visibility         TEXT NOT NULL,
+  publication_id     UUID NOT NULL,
+  ord                INTEGER NOT NULL,
+  recorded_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  source_time        TIMESTAMPTZ,
+  valid_from         TIMESTAMPTZ,
+  valid_until        TIMESTAMPTZ,
+  value              JSONB,
+  value_hash         TEXT,
+  prior_hash         TEXT,
+  state_hash         TEXT NOT NULL,
+  cause              JSONB NOT NULL,
+  claim_fp           TEXT,
+  purged             BOOLEAN NOT NULL DEFAULT false,
+  redacted_fields    TEXT[]
 );
-CREATE UNIQUE INDEX IF NOT EXISTS codex_skillopt_cycles_pending_source
-  ON codex_skillopt_cycles(source_id,source_incarnation) WHERE state='pending';
-CREATE INDEX IF NOT EXISTS codex_skillopt_cycles_cooldown
-  ON codex_skillopt_cycles(source_id,source_incarnation,settled_at DESC);
-ALTER TABLE codex_skillopt_cycles ENABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS codex_skillopt_batch_submissions (
-  request_id UUID PRIMARY KEY,
-  protocol INTEGER NOT NULL CHECK (protocol=1),
-  request_hash TEXT NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}\$'),
-  data_hash TEXT NOT NULL CHECK (data_hash ~ '^[a-f0-9]{64}\$'),
-  job_id BIGINT NOT NULL UNIQUE REFERENCES minion_jobs(id) ON DELETE RESTRICT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+CREATE INDEX IF NOT EXISTS belief_events_page ON belief_events (source_id, slug, id);
+CREATE INDEX IF NOT EXISTS belief_events_subject ON belief_events (source_id, subject_kind, subject_key, id);
+CREATE INDEX IF NOT EXISTS belief_events_recorded ON belief_events (recorded_at);
+CREATE INDEX IF NOT EXISTS belief_events_claim_fp ON belief_events (source_id, claim_fp) WHERE claim_fp IS NOT NULL;
+CREATE INDEX IF NOT EXISTS belief_events_lifetime ON belief_events (page_lifetime, id) WHERE page_lifetime IS NOT NULL;
+CREATE INDEX IF NOT EXISTS belief_events_publication ON belief_events (publication_id);
+DO \$rls\$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'USAGE') AND (r.rolbypassrls OR r.rolsuper)) THEN
+    ALTER TABLE belief_events ENABLE ROW LEVEL SECURITY;
+  END IF;
+END \$rls\$;
+CREATE TABLE IF NOT EXISTS belief_page_lifetimes (
+  page_lifetime      UUID PRIMARY KEY,
+  source_id          TEXT NOT NULL,
+  source_incarnation UUID NOT NULL,
+  slug               TEXT NOT NULL,
+  page_id            INTEGER,
+  started_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  ended_at           TIMESTAMPTZ
 );
-ALTER TABLE codex_skillopt_batch_submissions ENABLE ROW LEVEL SECURITY;
+CREATE UNIQUE INDEX IF NOT EXISTS belief_page_lifetimes_open ON belief_page_lifetimes (source_incarnation, slug) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS belief_page_lifetimes_slug ON belief_page_lifetimes (source_id, slug);
+DO \$rls\$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'USAGE') AND (r.rolbypassrls OR r.rolsuper)) THEN
+    ALTER TABLE belief_page_lifetimes ENABLE ROW LEVEL SECURITY;
+  END IF;
+END \$rls\$;
+CREATE TABLE IF NOT EXISTS belief_commit_marks (
+  publication_id UUID PRIMARY KEY,
+  observed_at    TIMESTAMPTZ NOT NULL
+);
+DO \$rls\$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'USAGE') AND (r.rolbypassrls OR r.rolsuper)) THEN
+    ALTER TABLE belief_commit_marks ENABLE ROW LEVEL SECURITY;
+  END IF;
+END \$rls\$;
+CREATE TABLE IF NOT EXISTS belief_retier_manifest (
+  summary_event BIGINT NOT NULL,
+  source_id     TEXT NOT NULL,
+  subject_kind  TEXT NOT NULL,
+  subject_key   TEXT NOT NULL,
+  from_tier     TEXT,
+  to_tier       TEXT NOT NULL,
+  PRIMARY KEY (summary_event, subject_kind, subject_key)
+);
+DO \$rls\$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'USAGE') AND (r.rolbypassrls OR r.rolsuper)) THEN
+    ALTER TABLE belief_retier_manifest ENABLE ROW LEVEL SECURITY;
+  END IF;
+END \$rls\$;
+CREATE TABLE IF NOT EXISTS belief_redactions (
+  id            BIGSERIAL PRIMARY KEY,
+  source_id     TEXT NOT NULL,
+  subject_key   TEXT NOT NULL,
+  field         TEXT NOT NULL,
+  purge_request UUID NOT NULL,
+  field_hash    TEXT NOT NULL,
+  released_by   UUID,
+  released_hash TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS belief_redactions_subject ON belief_redactions (source_id, subject_key, field);
+CREATE INDEX IF NOT EXISTS belief_redactions_field_hash ON belief_redactions (source_id, field_hash);
+DO \$rls\$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'USAGE') AND (r.rolbypassrls OR r.rolsuper)) THEN
+    ALTER TABLE belief_redactions ENABLE ROW LEVEL SECURITY;
+  END IF;
+END \$rls\$;
 
 `;
 

@@ -9,6 +9,7 @@ import { loadConfigSnapshot } from './config-snapshot.ts';
 import { loadGbrainEnvFile } from './gbrain-env-file.ts';
 import { dotenvValuesForKey } from './env-trust.ts';
 import { REMOTE_PRIVATE_PAGES_KEY } from './search/private-visibility.ts';
+import { RUNTIME_READER_CONFIG_KEYS } from './config-runtime-keys.ts';
 
 /**
  * Where is the active DB URL coming from? Pure introspection, no connection
@@ -76,6 +77,7 @@ export interface GBrainConfig {
   /** #5232: CLI write wait in ms (file plane; persistence/write-wait.ts). */
   persistence?: { write_wait_ms?: number | string };
   migrate?: { graduation?: boolean }; // `migrate.graduation false`: legacy copier instead of graduation (file plane, read pre-connect)
+  doctor?: { default_budget_ms?: number | string }; // #6803: non-interactive CLI doctor --json check-run cap (file plane, read pre-connect; 0 off)
   /** A4 user preapprovals (file plane only; set by the trusted local CLI; read by core/consent.ts). */
   consent?: { preapprove?: { paid?: { max_usd_per_run?: number }; persistent_install?: boolean } };
   database_url?: string;
@@ -1303,6 +1305,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'agent.max_output_tokens',
   // #4921: subagent per-turn chat timeout (minions/handler-timeouts.ts, default 30 min).
   'ai.chat.per_turn_timeout_ms',
+  'context.proactive_brief', // DB-plane, default off: wave 5 D5 brief (src/core/context/proactive-brief.ts)
   // File-plane bootstrap hook-lane keys (routed to ~/.gbrain/config.json by
   // `config set` — engine-free hook/push children read loadConfigFileOnly).
   'push.allow_unverified_remote',
@@ -1388,6 +1391,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'search.hnsw_iterative_scan',
   'search.cjk_keyword_deadline_ms',
   'search.keyword_statement_timeout_ms',
+  'search.keyword_timeout_negative_cache_seconds', // #6495: seconds, default 600, 0 = off (postgres-engine/keyword-timeout-cache.ts)
   'search.adaptive_return',
   'search.adaptive_return_entity_max',
   'search.adaptive_return_other_max',
@@ -1420,6 +1424,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'search.return_budget_conversation',
   'search.return_budget_max_remote',
   'search.auto_packing',
+  'search.long_page_unit', 'search.long_page_min_chars', // F2: delivery unit for long (rendered body >= min_chars, default 20000) non-conversation hits under an implied auto: off (default) | window | section | page (search/evidence-delivery.ts)
   'search.evidence_date_header', // C1: one-line date header per delivered block (default off; search/evidence-date.ts)
   'search.entity_anchoring', // entity-anchored retrieval for entity-scoped current-state query/search (default off; search/entity-anchor.ts)
   'search.query_facts_arm', // query adds matching active facts as rows in spare capacity (default on; search/facts-arm.ts)
@@ -1483,6 +1488,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // W14 P4.6b: USD per UTC day that loops_extract jobs may spend, brain-wide
   // (default 2.00; 0 = no paid loop extraction). Validated in google/loops-spend.ts.
   'loops.extraction_max_usd_per_day',
+  // #5012: boolean, default false (off). On, Gmail Updates mail opens a reply-owed loop only for a sender the owner wrote to.
+  'loops.updates_require_reciprocity',
   // #2113: output-token cap for the per-turn facts extractor (default 4000).
   'facts.extraction_max_tokens',
   // Automatic facts drain caps (src/core/facts/drain.ts FACTS_DRAIN_KEYS).
@@ -1580,6 +1587,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // dream.synthesize.* pair from #1594).
   'dream.patterns.subagent_timeout_ms',
   'dream.patterns.subagent_wait_timeout_ms',
+  'dream.patterns.min_interval_hours', 'dream.patterns.child_read_budget_kb', // #6297: hours (default 6) / KB (default 200), 0 = off; cycle/phase-config-values.ts
   // Paid-loop breaker: dead submissions of one dream key within 24h before
   // it is refused (default 3; 0 disables). `gbrain dream reset-key` clears one.
   'dream.breaker.max_dead_submissions',
@@ -1590,6 +1598,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // #4348: IANA timezone that owns the dream-cycle calendar day (summary
   // bucketing). Unset → host timezone → UTC. Validated at set time.
   'cycle.timezone',
+  'cycle.consolidate.enabled', // #6667: default on; read in cycle/phases/consolidate.ts
   'cycle.consolidate.cluster_threshold', // #5363: (0, 1], default 0.85; read + validated in cycle/phases/consolidate.ts
   // A11: IANA timezone for offset-less frontmatter datetimes in effective_date.
   // Unset → UTC (date-only values are always UTC calendar dates). Validated at set time.
@@ -1635,6 +1644,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'mcp.strict_params',
   'mcp.result_rows', // C1 row shape, read dual-plane by src/mcp/result-rows.ts
   'mcp.allow_session_widen', // stdio request_tools session widening (default on), read dual-plane by src/mcp/surface.ts
+  'entity.names_references', 'entity.record_types', 'entity.row_page_status', // names-row referenced_by_count + card `next` (default on); canonical page types listed as `records` (default empty); F3 page_status on context_pack/get_backlinks rows (default on); src/core/entity-references-config.ts
+  'mcp.instructions_governing_rule', // instruction 7: in_effect (default: the record in effect on the date asked about governs) | newest (the earlier recency sentence); src/mcp/instructions.ts
   // Skill-nag suppression (#2180): brain-resident pack install nag off-switch.
   'skillpack.nag_disabled',
   // Self-upgrade (v0.42; file plane, read on the hot path)
@@ -1720,8 +1731,11 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // #5984: managed Postgres sync publishes pages in bulk groups (on by default; each page keeps its own request).
   'sync.bulk',
   'sync.bulk_size',
-  'sync.bulk_max_txn_ms',
-  'sync.lanes', 'sync.waive_batch', 'persistence.single_write_group', 'persistence.preadmit_cache', // the last three: write-path kill switches (persistence/switches.ts)
+  // #6858 ask 6: on-commit sync in the resident serve and its freshness target (src/core/sync-config-keys.ts).
+  'sync.on_commit', 'sync.freshness_target_seconds',
+  // #6712 PR 2: rollback keys (src/core/sync-config-keys.ts; windows in wire-skew.ts): readable and honored, not tunables.
+  'sync.job_drain', 'sync.waive_batch', 'sync.foreground_priority',
+  'sync.lanes', 'persistence.single_write_group', 'persistence.preadmit_cache', // the last two: write-path kill switches (persistence/switches.ts)
   // Persisted indexing scope (comma/newline-separated glob list; trailing '/'
   // normalizes to a '/**' subtree glob). Read best-effort at the top of
   // performSyncInner and UNIONED with any per-call --exclude so internal
@@ -1733,13 +1747,10 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // include-hidden flag, which bulk sync refuses); registered so `config set` accepts it.
   'sync.include_hidden',
   // #5988: Git sync holds (read by readSyncHoldPolicy). `sync.holds=fail`
-  // restores fail-closed blocking; the rest tune detail, escalation and the
-  // parser-regression stop. Registered so the documented `config set` works.
-  'sync.holds',
-  'sync.hold_cap',
-  'sync.hold_escalate_count',
-  'sync.hold_escalate_pct',
-  'sync.parser_regression',
+  // restores fail-closed blocking. Detail, escalation and the parser-regression
+  // stop are tuned by GBRAIN_SYNC_* env since #6712 PR 2 (RETIRED_SYNC_KEYS).
+  'sync.holds', 'sync.slug_conflicts.auto_remove', // #6865: sync-time removal of a stray slug: line naming no page (repair/slug-autoheal.ts); default on
+  'sync.origin_twins.auto_resolve', // #6948: sync-time merge of verified duplicate-origin twins (repair/origin-twins-heal.ts); default on
   'fences.normalize', // #6188: inline Tier 1 fence normalization (fence-repair/config.ts); default on
   'fences.repair.enabled', 'fences.repair.llm', // #6188: the fence_repair cycle phase and its Tier 3 model step (fence-repair/config.ts); default on
   'fences.repair.max_usd_per_page', 'fences.repair.max_usd_per_day', // #6188: Tier 3 fence repair caps; 0 = no model spend
@@ -1772,15 +1783,22 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'persistence.limits.brain_recovery_bytes', 'persistence.limits.worktree_recovery_bytes',
   'persistence.receipt_retention_days', 'persistence.unbound_write', 'persistence.max_claim_ms', // #5254: persistence/unbound-source.ts; #6176: persistence/claim-phase.ts
   'persistence.sync_preparation_ms', 'persistence.maintenance_preparation_ms', 'persistence.preparation_ceiling_ms', 'persistence.max_preparation_attempts', 'persistence.preparation_deadlines', // #6278: persistence/preparation-budget.ts, switches.ts
-  'persistence.publication_ceiling_ms', // #6405: persistence/sync-drain.ts (in-pass publication ceiling)
+  'persistence.publication_ceiling_ms', 'persistence.terminal_failures.window_days', 'persistence.terminal_failures.spike_factor', 'persistence.terminal_failures.spike_min', // #6405: persistence/sync-drain.ts (in-pass publication ceiling); #6650: persistence/terminal-failures.ts
+  'persistence.capacity.warn_days', 'persistence.capacity.fail_days', 'persistence.capacity.background_pause_pct', // #6696: persistence/capacity-forecast.ts, admission-origin.ts
+  'persistence.maintenance.compaction_stale_hours', // #6696 (A11): persistence/compaction-pass.ts, doctor persistence_compaction
+  'persistence.maintenance.refusal_breaker_threshold', // #6696 (A12): persistence/refusal-breaker.ts
   'persistence.single_consumer', // #6317: persistence/switches.ts, consumer-election.ts (one full consumer per host; off by default)
   // shared-skills migration inventory bounds (src/core/shared-skills/inventory-limits.ts)
   'shared_skills.inventory.max_files', 'shared_skills.inventory.max_total_bytes', 'shared_skills.inventory.max_file_bytes', 'shared_skills.inventory.max_entries', 'shared_skills.migration.enabled', // #6466: false declines the 0.53.0 migration (commands/migrations/opt-out.ts)
   'persistence.write_wait_ms', // #5232: file plane, persistence/write-wait.ts
   'migrate.graduation', // file plane, src/commands/migrate-graduation.ts (engine graduation opt-out)
+  'doctor.default_budget_ms', 'doctor.entry_budget_ms', 'doctor.orphan_ratio.full_scan_max_pages', // #6803: file plane (commands/doctor/default-budget.ts); DB plane (doctor/budget.ts, checks/orphan-estimate.ts)
   'consent.preapprove.paid.max_usd_per_run', 'consent.preapprove.persistent_install', // A4: file plane, core/consent.ts
   // F4b: PGLite row-delta ANALYZE (src/core/planner-stats.ts); F4a: get_health memo TTL (src/core/health-memo.ts, 0 disables).
   'planner.auto_analyze', 'planner.first_read_budget_ms', 'import.analyze_every_pages', 'health.cache_ttl_ms',
+  // Wave B segmented page storage (src/core/page-body/limits.ts PAGE_BODY_CONFIG_KEYS; switch defaults off).
+  'pages.segmented_storage', 'pages.max_bytes', 'pages.flip_retire_max_rows', 'versions.segmented_max_per_page', 'versions.segmented_max_pinned_bytes',
+  ...RUNTIME_READER_CONFIG_KEYS, // #6780: getConfig() runtime knobs (config-runtime-keys.ts)
 ];
 
 /**

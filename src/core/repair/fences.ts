@@ -291,7 +291,7 @@ export const fencesRepair: RepairHandler = {
       }
       const read = await readFenceTarget(engine, src, { key: cand.key, path: cand.path });
       if (!read.ok) {
-        if (read.reason !== 'gone') await keep({ item: name, reason: read.reason, tier: 'manual', resolution: read.reason === 'unsafe_path'
+        if (read.reason !== 'gone') await keep({ item: name, reason: read.reason, tier: 'manual', resolution: read.reason === 'origin_conflict' ? read.message : read.reason === 'unsafe_path'
           ? `${cand.path} is a symlink, sits under one, or resolves outside the source root; gbrain never writes through one. Replace it with the real file.`
           : `${cand.path} is not valid UTF-8; re-save it as UTF-8 and preview again.` });
         continue;

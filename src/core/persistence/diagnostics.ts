@@ -12,7 +12,7 @@ import { listHostConsumers, type ConsumerPool, type ListedConsumer } from './con
 import type { WriteRequestState } from './types.ts';
 import { preparationBudgetMs } from './preparation-budget.ts';
 import { readWriteSwitchSnapshot } from './switches.ts';
-import { DATABASE_REFUSAL_HINT, DATABASE_TRIGGER_HINT } from './connector-errors.ts';
+import { DATABASE_REFUSAL_HINT, DATABASE_TRIGGER_HINT, ownerExceptionHint, unknownOriginHint } from './connector-errors.ts';
 import { readQueuedHeadBlockers } from './head-blocker.ts';
 
 export const WRITER_NEXT_ACTIONS: Record<string, string> = {
@@ -29,6 +29,7 @@ export const WRITER_NEXT_ACTIONS: Record<string, string> = {
   recovery_required: 'Inspect the recorded publication fingerprints on the designated owner and settle recovery before publishing this worktree.',
   recovery_capacity: 'Allow recovery to settle or increase the applicable persistence.limits recovery byte cap. Do not remove recovery records.',
   queue_capacity: 'Let outstanding requests finish or increase the applicable persistence.limits cap. Accepted request IDs are never evicted.',
+  write_quota_exhausted: 'Raise the cumulative cap the refusal names with gbrain config set on the brain host (gbrain doctor --only persistence_capacity --json prints the value), then retry with the same request_id. Accepted request IDs are never evicted.',
   consumer_stopping: 'Restart the resident owner and inspect the same request_id before resubmitting.',
   source_changed: 'Inspect the source incarnation and worktree binding; queued requests cannot follow a recreated source.',
   permission_denied: 'Inspect the durable principal and current source, operation, and namespace grants.',
@@ -58,7 +59,7 @@ export function claimNextAction(claim: ClaimState, stall: ClaimStall | null, pol
     return { code: 'claim_lapsed', retry_after_ms: null, why: `The claim lapsed while running; the request is requeued once the transaction holding its row ends or the owner exits, and the next consumer claims it.`,
       fix: renderAction({ argv: status, consent: [], actor: 'agent', requires_exclusive: false, why: 'Read-only: rerun to see the request requeued or claimed again.', verify: { argv: status } }, ctx) };
   }
-  const age = claim.phase_age_ms ?? claim.claim_age_ms ?? 0;
+  const age = claim.phase === 'unrecorded' ? 0 : claim.phase_age_ms ?? claim.claim_age_ms ?? 0;
   const pastCeiling = claim.phase === 'preparing' && age >= policy.ceilingMs;
   const wedged = owner.row?.restart_required === true || (owner.row?.root_barrier_age_ms ?? -1) > policy.ceilingMs;
   if (pastCeiling || wedged) {
@@ -70,7 +71,7 @@ export function claimNextAction(claim: ClaimState, stall: ClaimStall | null, pol
   const budgetLeft = stall ? Math.max(0, policy.ceilingMs - age) : policy.budgetMs === null ? null : Math.max(0, policy.budgetMs - age);
   return { code: 'claim_running', retry_after_ms: budgetLeft,
     why: stall ? `${who} is past the ${Math.round(stall.budget_ms / 1000)}s preparation budget${where}; its own budget cuts the preparation off and frees the root by the ${Math.round(policy.ceilingMs / 1000)}s ceiling (${Math.round((budgetLeft ?? 0) / 1000)}s left). Nothing to do yet.`
-      : `${who} is ${claim.phase === 'publishing' ? 'publishing' : 'preparing'} this write${where}${owner.live === false ? '; its heartbeat row is not live' : ''}. Nothing to do yet.`,
+      : `${who} ${claim.phase === 'unrecorded' ? 'holds this write and has not recorded starting it (a group member waits for the members before it)' : `is ${claim.phase === 'publishing' ? 'publishing' : 'preparing'} this write`}${where}${owner.live === false ? '; its heartbeat row is not live' : ''}. Nothing to do yet.`,
     fix: renderAction({ argv: status, consent: [], actor: 'agent', requires_exclusive: false, why: 'Read-only: rerun after retry_after_ms to see the step advance or the claim settle.', verify: { argv: status } }, ctx) };
 }
 /**
@@ -134,6 +135,13 @@ export function capacityDiagnostics(counters: Counter[], limits: JournalLimits) 
     });
   });
 }
+/** #6719: the next step a recorded origin supports; only a database origin reads as a database refusal. */
+function recentFailureNextAction(origin: unknown, requestId: string): string {
+  if (origin === 'database_guard') return DATABASE_REFUSAL_HINT;
+  if (origin === 'database_trigger' || origin === 'database') return DATABASE_TRIGGER_HINT;
+  return origin === 'owner_exception' ? ownerExceptionHint(requestId) : unknownOriginHint(requestId);
+}
+
 /** Trusted-admin counts only: neither normalized intent nor private paths leave here. */
 export async function readWriterDiagnostics(engine: BrainEngine) {
   // #6482: writer status is the probe the mode refusal names, so a malformed singleton is reported here, never refused.
@@ -189,7 +197,7 @@ export async function readWriterDiagnostics(engine: BrainEngine) {
     : 'The resident consumer of the process that answered this status.' };
   return { ...brain, sampled_at: new Date().toISOString(), publication_concurrency: publicationConcurrency(engine),
     local_process_ingress, worktrees, counters, queue, effects, limits, capacity: capacityDiagnostics(counters, limits), preparation_policy,
-    recent_failures: failures.map(row => ({ ...row, next_action: row.error_detail?.origin === 'database_guard' ? DATABASE_REFUSAL_HINT : DATABASE_TRIGGER_HINT })),
+    recent_failures: failures.map(row => ({ ...row, next_action: recentFailureNextAction(row.error_detail?.origin, row.request_id) })),
     backend_visibility: backends.visibility,
     blockers: blockers.map(({ id: rowId, claim_phase: _phase, execution_token: _token, claim_lapsed: _lapsed, publication_started: _started, ...row }, index) => {
       const health = writeHealth(row);

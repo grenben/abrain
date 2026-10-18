@@ -36,10 +36,6 @@ export function syncProcessingOptions(opts: SyncOpts): SyncProcessingOptions {
   return { noEmbed: opts.noEmbed === true, noExtract: opts.noExtract === true, noSchemaPack: opts.noSchemaPack === true };
 }
 export const SYNC_PROCESSING_KEYS = ['noEmbed', 'noExtract', 'noSchemaPack'] as const;
-/** The processing options a caller set itself; an unfinished cursor supplies the rest (#5632). */
-export function explicitSyncProcessing(values: Record<string, unknown>): Array<keyof SyncProcessingOptions> {
-  return SYNC_PROCESSING_KEYS.filter(key => typeof values[key] === 'boolean');
-}
 export function assertSyncDispatchActive(): void {
   assertSourceFilesystemActive(true);
   throwIfAborted(currentJobSignal());
@@ -127,9 +123,13 @@ export function validateManagedSyncOptions(opts: SyncOpts): void {
   assertDurableSyncCaller();
   const current = currentSubmissionAuthority();
   if (current?.kind !== 'remote_generic') return;
-  const allowed = new Set(['repoPath','sourceId','noPull','noEmbed','noExtract','explicitProcessing','signal','concurrency','onProgress','auto_embed_backfill']);
+  // #6706: the worker's own drain controls (never read from a remote job's data) bound the run; they cannot widen what it writes.
+  const allowed = new Set(['repoPath','sourceId','noPull','noEmbed','noExtract','drainHolder','signal','concurrency','onProgress','auto_embed_backfill',
+    'drain','deadlineAtMs','drainStartedAt','bulk','lanes','capacityPreflight']);
   if (current.grant.jobName !== 'sync' || opts.repoPath !== current.grant.canonicalRoot || opts.sourceId !== current.grant.sourceId ||
       opts.noPull !== true || opts.noEmbed !== true || opts.noExtract !== true ||
+      (opts.drain !== undefined && opts.drain !== true) || (opts.lanes !== undefined && opts.lanes !== 1) ||
+      (opts.deadlineAtMs !== undefined && !Number.isFinite(opts.deadlineAtMs)) ||
       Object.entries(opts).some(([key,value]) => value !== undefined && !allowed.has(key)) ||
       ((opts as Record<string,unknown>).auto_embed_backfill !== undefined && (opts as Record<string,unknown>).auto_embed_backfill !== false)) {
     throw opError('permission_denied', 'Sync options exceed the originally accepted remote job.',

@@ -124,19 +124,18 @@ export function summarizeTransition(
       kind: 'tokenmax_opt_in',
       reindex_required: true,
       reindex_command: 'gbrain reindex --markdown',
-      cost_estimate_per_query_cents: 0.03, // ~$0.0003 per typical search
+      cost_estimate_per_query_cents: 0.06, // ~$0.0006: rerank-3-lite at 50 candidates (gbrain-evals #148)
       callout_lines: [
         `Switched to tokenmax. Per-chunk Haiku synopsis enabled.`,
         `Backfill cost (one-time): ~$1-5 per 10K pages via Anthropic Haiku.`,
-        `Per-query overhead: ~$0.0003 (reranker + slightly larger payload).`,
+        `Per-query overhead: ~$0.0006 (reranker + slightly larger payload).`,
         `Run \`gbrain reindex --markdown\` to backfill existing pages.`,
       ],
     };
   }
 
   // Narrowing: dropping a feature (e.g. balanced → conservative drops the
-  // reranker; tokenmax → balanced drops default expansion and synopsis
-  // context). Semantic result caching is off, so nothing refills; no backfill.
+  // reranker; tokenmax → balanced drops synopsis context). Semantic result caching is off, so nothing refills; no backfill.
   if (oldMode && narrowness(newMode) < narrowness(oldMode)) {
     return {
       kind: 'narrowing',

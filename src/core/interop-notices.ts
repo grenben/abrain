@@ -54,6 +54,7 @@ export const DEGRADED_STAGE_GUIDANCE: Readonly<Record<RecallStage, StageGuidance
   vector_candidates_incomplete: { why: 'vector search hit its candidate limit or deadline, so some semantic matches can be missing', fix: null },
   keyword_candidates_incomplete: { why: 'CJK keyword matching hit its deadline or its candidate cap on a large corpus, so some keyword matches can be missing; narrow the search with source_id (the CLI source-id flag), or ask the user to raise search.cjk_keyword_deadline_ms (milliseconds, default 3000)', fix: null },
   projection_pending: { why: 'recently written pages are not in the search index yet', fix: 'doctor' },
+  projection_by_design: { why: 'some image pages in scope hold protected OCR content and stay out of the search index by design; nothing is pending', fix: null },
   projection_status_unknown: { why: 'whether recent writes are in the search index could not be checked', fix: 'doctor' },
   keyword_count_unavailable: { why: 'the keyword match count did not finish, so how many pages match the query is unknown', fix: null },
   deadline: { why: 'the pack hit its time limit and is partial', fix: null },
@@ -120,6 +121,16 @@ function rerankFix(reason: RerankFailedReason, retry?: { op: string; args: Recor
   return { ...doctorFix(why), verify: RERANKER_HEALTH_VERIFY };
 }
 
+/** #6495: `keyword_arm_failed` with reason `skipped_after_timeout` (postgres-engine/keyword-timeout-cache.ts). */
+const KEYWORD_SKIPPED_WHY = 'the keyword arm was skipped: this exact keyword search hit the keyword statement timeout (search.keyword_statement_timeout_ms) within the last search.keyword_timeout_negative_cache_seconds (default 600 seconds), so the brain did not wait for the timeout again; a narrower query (source_id, types, since or until) runs keyword search, and the skip ends by itself when the entry expires';
+const KEYWORD_PLAN_VERIFY = { argv: ['gbrain', 'doctor', '--only', 'keyword_plan', '--json'] };
+function keywordPlanFix(): Action {
+  return {
+    argv: KEYWORD_PLAN_VERIFY.argv, consent: [], actor: 'agent', requires_exclusive: false, verify: KEYWORD_PLAN_VERIFY,
+    why: "Read-only: doctor's keyword_plan reports the keyword statement bound, how many keyword timeouts and skips this brain recorded, and whether broad terms can be ranked inside the bound; raising the bound or the cache TTL is the user's call.",
+  };
+}
+
 /** Doctor on the brain host; `run_doctor` where callable (renderAction drops it otherwise). */
 export function doctorFix(why: string): Action {
   return { argv: ['gbrain', 'doctor', '--json'], mcp: { tool: 'run_doctor', arguments: {} }, consent: [], actor: 'agent', why, requires_exclusive: false };
@@ -157,16 +168,18 @@ export function degradedRecallNotice(
   const pairs = [...new Set(entries.filter(s => names.includes(s.stage as RecallStage)).map(s => `${s.stage}:${s.reason ?? ''}`))].sort();
   const persistent = pairs.every(p => CONFIGURATION_PERSISTENT_STAGES.has(p));
   const rerank = names.includes('rerank_failed') ? rerankReason(entries.find(s => s.stage === 'rerank_failed')?.reason) : undefined;
-  const labels = names.map(n => (n === 'rerank_failed' ? `rerank_failed: ${rerank}` : n));
+  const keywordSkipped = entries.some(s => s.stage === 'keyword_arm_failed' && s.reason === 'skipped_after_timeout');
+  const labels = names.map(n => (n === 'rerank_failed' ? `rerank_failed: ${rerank}` : n === 'keyword_arm_failed' && keywordSkipped ? 'keyword_arm_failed: skipped_after_timeout' : n));
   const whys = names.map(n => (n === 'rerank_failed'
     ? `reranking failed because ${RERANK_REASON_WHY[rerank!]}, so results keep their fused order (fallback: fused_order${opts.rerankDegradedCalls ? `; reranker-degraded calls this session: ${opts.rerankDegradedCalls}` : ''})`
-    : DEGRADED_STAGE_GUIDANCE[n].why));
+    : n === 'keyword_arm_failed' && keywordSkipped ? KEYWORD_SKIPPED_WHY : DEGRADED_STAGE_GUIDANCE[n].why));
   const guidance = names.map(n => DEGRADED_STAGE_GUIDANCE[n]);
   const fixKind: StageFix = guidance.some(g => g.fix === 'embeddings') ? 'embeddings' : guidance.some(g => g.fix === 'doctor') ? 'doctor' : null;
   const byChoice = opts.optedOut || entries.some(s => s.reason === 'embedding_disabled');
   const emb = fixKind === 'embeddings' ? (byChoice ? { byChoice: true } as { fix?: Action; byChoice: boolean } : embeddingsFix(opts.config, opts.transport)) : undefined;
+  const onlyKeywordNeedsDoctor = keywordSkipped && names.every(n => n === 'keyword_arm_failed' || DEGRADED_STAGE_GUIDANCE[n].fix !== 'doctor');
   const fix = emb ? emb.fix
-    : fixKind === 'doctor' ? doctorFix('Doctor names the failing retrieval dependency and its fix.')
+    : fixKind === 'doctor' ? (onlyKeywordNeedsDoctor ? keywordPlanFix() : doctorFix('Doctor names the failing retrieval dependency and its fix.'))
     : rerank ? rerankFix(rerank, opts.retry) : undefined;
   const choice = emb?.byChoice ? ' This brain was set up keyword-only by the user\'s choice; mention it only if the user asks why something was not found. No query text was sent to an embedding provider. If the user wants semantic search, `gbrain doctor --json` names the enable command; turning it on needs their consent.' : '';
   return {
