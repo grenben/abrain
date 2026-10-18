@@ -21,7 +21,8 @@ The shared System One decision runner admits only the configured Codex CLI model
 in strict private mode. Each batch uses a closed schema bound to its exact typed
 questions; the host validates answers before accepting the subscription turn.
 Query, search and background callers cannot dispatch TypeSafe, ordinary LLM, or
-cross-provider fallback decisions. Fake-executable tests cover the typed answer
+cross-provider fallback decisions. A leftover TypeSafe key cannot auto-enable
+default paid slots while private mode is active. Fake-executable tests cover the typed answer
 shapes, model identity and admission. Slot calibration, receipts across actual
 feature paths, and real-runtime qualification remain open.
 

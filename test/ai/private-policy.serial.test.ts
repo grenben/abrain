@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
-import { runDecide } from '../../src/core/ai/decide/index.ts';
+import { runDecide, hasTypesafeKey, loadDecideConfig } from '../../src/core/ai/decide/index.ts';
 import { readDecideConfig } from '../../src/core/ai/decide/config.ts';
 import { resolveModelDetailed } from '../../src/core/model-config.ts';
 import { configureGateway, chat, getChatModel, getExpansionModel, resetGateway, __setChatTransportForTests, __setDecideTransportForTests } from '../../src/core/ai/gateway.ts';
@@ -82,6 +82,12 @@ describe('strict private routing', () => {
     const config = readDecideConfig({ 'decide.provider': 'llm:codex-cli:gpt-test', 'decide.egress_fallback': 'llm:openai:gpt-test' });
     await expect(runDecide({ slot: 'intent', callSite: 'search', state: {}, questions: [{ id: 'q', kind: 'noul', instructions: 'Check.' }] },
       { engine: null, config })).rejects.toMatchObject({ source: 'decide:provider', code: 'private_route_conflict' });
+  });
+  test('a leftover TypeSafe key cannot activate private default decision slots', async () => {
+    configureGateway({ env: { TYPESAFE_API_KEY: 'synthetic' } });
+    expect(hasTypesafeKey()).toBe(false);
+    const config = await loadDecideConfig(null);
+    expect(Object.values(config.slots).every(slot => slot.mode === 'off')).toBe(true);
   });
   test('DB cannot activate private mode; ordinary resolver retains its behavior', async () => {
     save({}); expect(readPrivateCodexConfig()).toBeUndefined();

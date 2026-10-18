@@ -65,6 +65,8 @@ export async function loadDecideConfig(engine: BrainEngine | null, opts: { evalS
 
 /** TypeSafe key presence in the gateway env snapshot (falls back to process env before configure). */
 export function hasTypesafeKey(): boolean {
+  // An unusable paid key cannot silently activate the recommended TypeSafe slots.
+  if (readPrivateCodexConfig()) return false;
   try { return typesafeApiKey(requireConfig().env) !== null; } catch { return typesafeApiKey(process.env) !== null; }
 }
 

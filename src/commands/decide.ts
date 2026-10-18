@@ -17,6 +17,7 @@ import { loadConfigSnapshot } from '../core/config-snapshot.ts';
 import { configureGateway, configureGatewayIfUninitialized, requireConfig } from '../core/ai/gateway.ts';
 import { buildGatewayConfig } from '../core/ai/build-gateway-config.ts';
 import { typesafeApiKey } from '../core/ai/recipes/typesafe.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
 import {
   DEFAULT_TYPESAFE_PROVIDER, isTypesafeAlias, isValidProvider, providerKind, readDecideConfig, type DecideConfig,
 } from '../core/ai/decide/config.ts';
@@ -42,6 +43,7 @@ export const DECIDE_HELP = `Usage: gbrain decide <subcommand> [options]
 System One decision support (TypeSafe Jev or an llm: provider). Each slot is off
 or on. Without a TypeSafe key every slot is off; with one, the slots with a measured
 win (the enable --recommended set) are on by default until you set them yourself.
+Strict private Codex mode ignores a leftover TypeSafe key for these defaults.
 Runs on the brain host (local CLI only).
 
 Subcommands:
@@ -112,7 +114,7 @@ export async function loadDecideState(engine: BrainEngine): Promise<DecideState>
   for (const r of recent) lastResolved[r.provider] ??= r.model_resolved;
   let env: Record<string, string | undefined> = process.env;
   try { env = requireConfig().env; } catch { /* unconfigured gateway: process env */ }
-  const key = typesafeApiKey(env);
+  const key = readPrivateCodexConfig() ? null : typesafeApiKey(env);
   const cfg = readDecideConfig(snapshot, { typesafeKey: key !== null });
   const { loadSearchModeConfig, resolveSearchMode } = await import('../core/search/mode.ts');
   const modeInput = await loadSearchModeConfig(engine);
