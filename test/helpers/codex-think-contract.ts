@@ -163,7 +163,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
         expect(rows.length).toBeGreaterThan(0);
         expect(rows.some(row=>row.provider==='llm:codex-cli:gpt-test'&&row.model_resolved==='codex-cli:gpt-test'&&row.call_site==='think'&&row.answer_choice!==null)).toBe(true);
         expect(rows.some(row=>row.provider==='llm:codex-cli:gpt-test'&&row.model_resolved==='codex-cli:gpt-test'&&row.call_site==='search'&&row.answer_choice!==null)).toBe(true);
-        const dump=JSON.stringify(rows);expect(dump).not.toContain('Orbit launched in March');
+        const dump=JSON.stringify(rows,(_key,value)=>typeof value==='bigint'?value.toString():value);expect(dump).not.toContain('Orbit launched in March');
         const [runRow]=await engine.executeRaw<{attempts:number|string;accepted_turns:number|string}>('SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1',[id]);
         expect(Number(runRow!.attempts)).toBeGreaterThan(1);
         expect(Number(runRow!.accepted_turns)).toBe(Number(runRow!.attempts));

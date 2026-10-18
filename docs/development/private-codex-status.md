@@ -26,8 +26,9 @@ default paid slots while private mode is active. Host-scoped Codex chat turns
 serialize through validation and acceptance, so parallel decision slots do not
 race the subscription lane. Fake-executable PGLite tests cover standalone
 search, the query operation and think decisions with hash-only receipts.
-Calibrated action across slots, PostgreSQL feature-path proof and real-runtime
-qualification remain open.
+The think/search intent receipt also passes on a disposable PostgreSQL brain.
+Calibrated action across slots, PostgreSQL query-operation coverage and
+real-runtime qualification remain open.
 
 ## Installation and source evidence (2026-10-09)
 
