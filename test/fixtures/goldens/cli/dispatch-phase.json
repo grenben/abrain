@@ -704,7 +704,7 @@
           },
           {
             "condition": "command === 'eval' && args[0] === 'longmemeval'",
-            "connectsEngine": false,
+            "connectsEngine": true,
             "refusesThinClient": false,
             "routesThinClient": false,
             "terminates": true,
@@ -1269,6 +1269,25 @@
         "phase": "post-connect",
         "preConnectRules": [],
         "thinClient": "refuse",
+        "thinClientRoutedSubcommands": []
+      },
+      "private-codex": {
+        "hasSwitchCase": false,
+        "phase": "pre-connect",
+        "preConnectRules": [
+          {
+            "condition": "command === 'private-codex'",
+            "connectsEngine": false,
+            "refusesThinClient": false,
+            "routesThinClient": false,
+            "terminates": true,
+            "thinClientCheck": false,
+            "unconditionalFor": [
+              "private-codex"
+            ]
+          }
+        ],
+        "thinClient": "none",
         "thinClientRoutedSubcommands": []
       },
       "projections": {

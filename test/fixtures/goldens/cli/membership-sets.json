@@ -167,6 +167,7 @@
         "pglite-repair",
         "post-upgrade",
         "pricing",
+        "private-codex",
         "projections",
         "protocol",
         "providers",
@@ -277,6 +278,7 @@
         "pglite-repair",
         "post-upgrade",
         "pricing",
+        "private-codex",
         "projections",
         "protocol",
         "providers",
@@ -357,6 +359,7 @@
         "git",
         "hook",
         "post-upgrade",
+        "private-codex",
         "self-upgrade",
         "trust",
         "upgrade"
