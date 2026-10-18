@@ -1,7 +1,6 @@
 # Key files — per-file index (gbrain repo)
 
-Read a file's entry before editing it. This page routes to bounded subsystem
-references; **do not load the whole directory**.
+Read the relevant entry before editing; avoid loading the whole directory.
 
 Find a path's entry and its surrounding contract:
 
@@ -9,8 +8,7 @@ Find a path's entry and its surrounding contract:
 rg -n -F 'src/core/ops/pages.ts' docs/architecture/key-files/
 ```
 
-Ranges use each entry's first path; an entry can document several
-files. Search when a path crosses subsystems.
+Ranges use the first path; search across subsystems when needed.
 Edit the subsystem entry, not this page, when behavior changes.
 Keep entries current-state: history belongs in `CHANGELOG.md` and Git.
 Where a new storage method, migration, doctor check, command, route or sync
