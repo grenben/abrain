@@ -370,7 +370,7 @@
   "test/e2e/persistence-consumer-claim-loss.test.ts": 5930,
   "test/e2e/persistence-consumers-postgres.test.ts": 2120,
   "test/e2e/persistence-deactivate-race.test.ts": 5320,
-  "test/e2e/persistence-dead-owner-reclaim-6650.test.ts": 18960,
+  "test/e2e/persistence-dead-owner-reclaim-6650.test.ts": 201900,
   "test/e2e/persistence-embedding-effects.test.ts": 34200,
   "test/e2e/persistence-git-coalescing-5530-postgres.test.ts": 252210,
   "test/e2e/persistence-git-durability-probe-6210-postgres.test.ts": 20380,

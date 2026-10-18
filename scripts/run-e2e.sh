@@ -442,8 +442,8 @@ for f in "${files[@]}"; do
   # on 19134) plus several CLI register subprocesses, so its wall clock is
   # process-spawn-bound, not test-bound.
   # The native Codex actions contract has 169 sequential cases and took 608s
-  # on PostgreSQL. Measured PostgreSQL chronicle, Git, repair and liveness
-  # files exceed the normal outer cap under shard load; the chaos validation
+  # on PostgreSQL. Measured PostgreSQL chronicle, Git, repair, dead-owner and
+  # liveness files exceed the normal outer cap under shard load; chaos
   # needs more per-test time for eight crash/recovery stages. Other files
   # retain the 180s/60s defaults.
   default_file_timeout=180
@@ -452,7 +452,7 @@ for f in "${files[@]}"; do
     */codex-actions.test.ts) default_file_timeout=1200; test_timeout_ms=180000 ;;
     */persistence-chaos.test.ts) default_file_timeout=720; test_timeout_ms=300000 ;;
     */chronicle-auto-phase-postgres.test.ts|*/persistence-git-coalescing-5530-postgres.test.ts) default_file_timeout=720 ;;
-    */persistence-phase-liveness.test.ts|*/repair-extractor-facts-postgres.test.ts) default_file_timeout=720 ;;
+    */persistence-dead-owner-reclaim-6650.test.ts|*/persistence-phase-liveness.test.ts|*/repair-extractor-facts-postgres.test.ts) default_file_timeout=720 ;;
   esac
   file_timeout="${GBRAIN_E2E_FILE_TIMEOUT:-${E2E_FILE_TIMEOUT_SECS:-$default_file_timeout}}"
   # Digits-only validation (same strict positive-int posture as the TS env

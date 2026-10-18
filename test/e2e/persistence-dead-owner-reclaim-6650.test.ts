@@ -39,7 +39,8 @@ let liveStart: string;
 
 beforeAll(async () => {
   if (!linux) return;
-  live = spawn('sleep', ['120'], { stdio: 'ignore' });
+  // Nine isolated schema setups can outlast two minutes on loaded E2E shards.
+  live = spawn('sleep', ['600'], { stdio: 'ignore' });
   await new Promise(resolve => live.once('spawn', resolve));
   liveStart = processStartTime(live.pid!)!;
 });
