@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { __assertCodexManagedConfigForTests, __registerCodexFixtureForTests, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
+import { spawnSync } from 'node:child_process';
+import { __assertCodexHostBoundaryForTests, __registerCodexFixtureForTests, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
 import { afterAll, describe, expect, test } from 'bun:test';
-import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, open, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCodexProposal } from '../../src/core/ai/providers/codex-proposal.ts';
@@ -99,6 +100,41 @@ describe('Codex proposal production transport with fake executable', () => {
     try { await expect(runCodexProposal({ ...input(bin), signal: controller.signal })).rejects.toMatchObject({ reason: 'aborted', settled: true }); }
     finally { clearTimeout(timer); }
   });
+  test('PID namespace teardown settles a detached descendant', async () => {
+    if (process.platform !== 'linux') return;
+    const probe = spawnSync('/usr/bin/unshare', ['--user', '--map-root-user', '--pid', '--fork',
+      '--kill-child', '--mount-proc', '/bin/true'], { stdio: 'ignore', timeout: 2_000 });
+    if (probe.status !== 0) return; // Unsupported hosts cannot admit the production runtime.
+    const bin = join(root, `codex-pidns-${sequence++}.sh`);
+    const beat = `${bin}.heartbeat`;
+    const script = `#!/bin/sh
+setsid sh -c 'i=0; while [ "$i" -lt 40 ]; do printf x >> "$1"; i=$((i+1)); sleep 0.05; done' sh "$1" >/dev/null 2>&1 &
+cat >/dev/null
+sleep 3
+`;
+    await writeFile(bin, script, { mode: 0o700 });
+    const runtime = await open(bin, 'r');
+    try {
+      const controller = new AbortController();
+      const running = runCodexProcess({ runtimeFd: runtime.fd, args: [beat], cwd: root,
+        env: codexEnvironment(env), prompt: 'synthetic', signal: controller.signal,
+        timeoutMs: 5_000, maxOutputBytes: 1024, isolation: 'pid-namespace' });
+      void running.catch(() => {});
+      let started = false;
+      for (let i = 0; i < 150; i++) {
+        try { if ((await stat(beat)).size > 0) { started = true; break; } } catch { /* startup */ }
+        await Bun.sleep(20);
+      }
+      controller.abort();
+      await expect(running).rejects.toMatchObject({ reason: 'aborted', settled: true });
+      expect(started).toBe(true);
+      const before = (await stat(beat)).size;
+      await Bun.sleep(250);
+      const after = (await stat(beat)).size;
+      if (after !== before) await Bun.sleep(3_000); // Let a broken bounded fixture end before cleanup.
+      expect(after).toBe(before);
+    } finally { await runtime.close(); }
+  });
   test('unqualified or modified executables never dispatch', async () => {
     const {bin,capture}=await fake('tampered'); await writeFile(bin,'#!/bin/sh\nexit 0\n');
     await expect(runCodexProposal(input(bin))).rejects.toMatchObject({reason:'runtime_unqualified'});
@@ -109,25 +145,37 @@ describe('Codex proposal production transport with fake executable', () => {
     const hostRoot = join(root, `codex-host-boundary-${sequence++}`);
     const etc = join(hostRoot, 'etc');
     await mkdir(etc, { recursive: true });
+    const binDir = join(hostRoot, 'usr', 'bin');
+    await mkdir(binDir, { recursive: true });
+    const unshare = join(binDir, 'unshare');
+    await writeFile(unshare, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     await chmod(hostRoot, 0o755); await chmod(etc, 0o755);
+    await chmod(join(hostRoot, 'usr'), 0o755); await chmod(binDir, 0o755);
     const trustedUid = (await stat(hostRoot)).uid;
     const callerUid = trustedUid + 1;
-    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).resolves.toBeUndefined();
-    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid + 2, callerUid)).rejects.toThrow();
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).resolves.toBeUndefined();
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid + 2, callerUid)).rejects.toThrow();
     await mkdir(join(etc, 'codex'));
-    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
     await rm(join(etc, 'codex'), { recursive: true });
     await symlink('missing-codex', join(etc, 'codex'));
-    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
     await rm(join(etc, 'codex'));
     await chmod(etc, 0o777);
-    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
     await chmod(etc, 0o755);
-    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, trustedUid)).rejects.toThrow();
+    await chmod(unshare, 0o777);
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await chmod(unshare, 0o755);
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, trustedUid)).rejects.toThrow();
     const symlinkRoot = join(root, `codex-host-link-${sequence++}`);
-    await mkdir(symlinkRoot); await chmod(symlinkRoot, 0o755);
+    await mkdir(join(symlinkRoot, 'usr', 'bin'), { recursive: true });
+    await writeFile(join(symlinkRoot, 'usr', 'bin', 'unshare'), '', { mode: 0o755 });
+    await chmod(symlinkRoot, 0o755);
+    await chmod(join(symlinkRoot, 'usr'), 0o755);
+    await chmod(join(symlinkRoot, 'usr', 'bin'), 0o755);
     await symlink(etc, join(symlinkRoot, 'etc'));
-    await expect(__assertCodexManagedConfigForTests(symlinkRoot, trustedUid, callerUid)).rejects.toThrow();
+    await expect(__assertCodexHostBoundaryForTests(symlinkRoot, trustedUid, callerUid)).rejects.toThrow();
   });
   test('a path replacement after qualification cannot change the spawned executable', async () => {
     if (process.platform !== 'linux') return;
@@ -139,9 +187,9 @@ describe('Codex proposal production transport with fake executable', () => {
     try {
       await rename(bin, `${bin}.old`);
       await writeFile(bin, '#!/bin/sh\nprintf "replacement\\n"\n', { mode: 0o700 });
-      expect(await runCodexProcess({ runtimeFd: runtime.fd, args: [], cwd: root, env: codexEnvironment(env),
+      expect(await runCodexProcess({ runtimeFd: runtime.file.fd, args: [], cwd: root, env: codexEnvironment(env),
         prompt: 'synthetic', timeoutMs: 5_000, maxOutputBytes: 1024 })).toBe('pinned-original\n');
-    } finally { await runtime.close(); unregister(); }
+    } finally { await runtime.file.close(); unregister(); }
   });
   test('unconfirmed group termination retains scratch and an unresolved outcome', async () => {
     const {bin,capture}=await fake('unconfirmed');

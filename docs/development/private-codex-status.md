@@ -221,10 +221,13 @@ containment settles descendants, including attempts to detach. Fake tests prove
 GBrain transport and accounting, not those native runtime properties.
 
 Linux production-hash admission now refuses root execution, mutable system
-configuration parents, and any `/etc/codex` path. The actual host check passes
-on this PC, and synthetic fixtures cover denial cases. This closes one known
-managed-config route for an admitted non-root host; the production hash allowlist
-is still empty while tool and process-tree isolation remain unproven.
+configuration or launcher parents, an untrusted `/usr/bin/unshare`, and any
+`/etc/codex` path. The actual host check passes on this PC, and synthetic
+fixtures cover denial cases. The production launcher now places Codex in a
+private PID namespace and a bounded `setsid` descendant test confirms abort
+settlement through namespace teardown. The production hash allowlist is still
+empty while real-runtime tool paths and wider host/process acceptance remain
+unproven.
 
 The [image-validation follow-up](private-codex-images.md) records the current
 runtime blocker and complete PNG/JPEG/WebP container and pixel checks.

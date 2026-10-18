@@ -133,17 +133,18 @@ executed. This confirms the managed-config boundary is an execution-safety
 condition, not just a cosmetic tool-list difference.
 
 Production-hash admission now fails closed on Linux unless GBrain runs as a
-non-root user, `/` and `/etc` are root-owned directories without group/other
-write access, and `/etc/codex` is absent (including a dangling symlink). The
-check runs after hashing the executable and before returning its open handle;
-filesystem errors also refuse admission. A synthetic-filesystem test covers an
-absent layer, present directory, symlink, mutable parent, and root-equivalent
-caller. This removes the known cross-host managed-config override from the
-admitted configuration on such a host. It is not a substitute for mount-level
-isolation against privileged host changes or for the remaining tool and
-process-tree qualification; the production hash registry remains empty.
+non-root user, `/`, `/etc`, `/usr`, and `/usr/bin` are root-owned directories
+without group/other write access, `/usr/bin/unshare` is a root-owned executable
+file without group/other write access, and `/etc/codex` is absent (including a
+dangling symlink). The check runs after hashing the executable and before
+returning its open handle; filesystem errors also refuse admission. A
+synthetic-filesystem test covers absent and present managed layers, symlinks,
+mutable parents, a mutable launcher, owner mismatch, and root-equivalent
+callers. This removes the known cross-host managed-config override from the
+admitted configuration on such a host. It is not mount-level isolation against
+privileged host changes; the production hash registry remains empty.
 
-## Linux process-tree containment experiment
+## Linux process-tree containment
 
 The local host permits unprivileged user and PID namespaces. A disposable
 `unshare --user --map-root-user --pid --fork --kill-child --mount-proc` wrapper
@@ -153,9 +154,16 @@ spawned a `setsid` child that wrote a short heartbeat. SIGTERM to the wrapper
 or its process group did not settle the namespace init, but SIGKILL to the
 group stopped the detached heartbeat through namespace teardown. This is a
 manual proof of one possible Linux containment mechanism and confirms that
-the existing timed SIGKILL escalation matters. GBrain does **not** launch
-proposals in a PID namespace yet; the experiment does not qualify real runtime
-process settlement, availability on another host, or macOS behavior.
+the existing timed SIGKILL escalation matters. The production-hash launch path
+now uses that fixed `/usr/bin/unshare` wrapper with a private user, mount, and
+PID namespace, `--kill-child`, and a private `/proc` mount. The verified Codex
+descriptor remains child fd 3. A focused test starts a bounded `setsid`
+heartbeat descendant, aborts the wrapper, and confirms the heartbeat stops
+after process-group SIGKILL and namespace teardown. Test fixtures still use
+the portable process-group path; unsupported production hosts fail closed.
+The production hash registry remains empty while real-runtime action-path,
+host-support, and wider process-crash checks remain incomplete. This local
+synthetic settlement result does not establish macOS behavior.
 
 ## Disposable live transport probe — 2026-10-18
 

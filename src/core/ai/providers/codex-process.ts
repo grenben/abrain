@@ -4,6 +4,7 @@ import { CodexProposalError, type CodexProposalFailure } from './codex-contract.
 export interface CodexProcessInput {
   runtimeFd: number; args: string[]; cwd: string; env: NodeJS.ProcessEnv;
   prompt: string; signal?: AbortSignal; timeoutMs: number; maxOutputBytes: number;
+  isolation?: 'process-group' | 'pid-namespace';
 }
 
 /** Only explicitly named authentication-location and OS variables reach the CLI. */
@@ -19,9 +20,20 @@ export function runCodexProcess(input: CodexProcessInput): Promise<string> {
   // fd 3 names the same open inode that qualification hashed. A rename or symlink
   // swap of the configured path cannot change the executable at the spawn edge.
   const pinnedBin = process.platform === 'linux' ? '/proc/self/fd/3' : '/dev/fd/3';
+  if (input.isolation === 'pid-namespace' && process.platform !== 'linux') {
+    return Promise.reject(new CodexProposalError('unsupported_platform'));
+  }
+  // The real runtime is PID 1 inside a private namespace. Killing that init
+  // tears down descendants even if a native child escaped our process group.
+  const namespace = input.isolation === 'pid-namespace';
+  const command = namespace ? '/usr/bin/unshare' : pinnedBin;
+  const args = namespace
+    ? ['--user', '--map-root-user', '--pid', '--fork', '--kill-child', '--mount-proc',
+      '--propagation', 'private', '--', pinnedBin, ...input.args]
+    : input.args;
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
-    try { child = spawn(pinnedBin, input.args, { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe', input.runtimeFd], detached: true }); }
+    try { child = spawn(command, args, { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe', input.runtimeFd], detached: true }); }
     catch { reject(new CodexProposalError('spawn')); return; }
     let closed = false;
     let settled = false;

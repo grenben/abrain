@@ -53,10 +53,11 @@ export async function runCodexProposal(original: CodexProposalInput): Promise<Co
       const path = join(scratch, `image-${i}.${image.mime.split('/')[1]}`);
       await writeFile(path, image.bytes, { mode: 0o600, flag: 'wx' }); imageFiles.push(path);
     }
-    const stdout = await runCodexProcess({ runtimeFd: runtime.fd,
+    const stdout = await runCodexProcess({ runtimeFd: runtime.file.fd,
       args: codexProposalArgv({ cwd: scratch, model: input.model, schemaFile, answerFile, denyHook, instructionsFile, modelCatalogFile, imageFiles }),
       cwd: scratch, env: codexEnvironment(input.env ?? process.env), prompt: input.prompt,
-      timeoutMs, maxOutputBytes, signal: input.signal });
+      timeoutMs, maxOutputBytes, signal: input.signal,
+      isolation: runtime.production ? 'pid-namespace' : 'process-group' });
     const lifecycle = parseCodexLifecycle(stdout);
     completion = {usage:lifecycle.usage};
     let text: string;
@@ -83,7 +84,7 @@ export async function runCodexProposal(original: CodexProposalInput): Promise<Co
     if (error instanceof CodexProposalError) { settled = error.settled; error.terminalCompletion = completion; }
     throw error;
   } finally {
-    try { await runtime.close(); }
+    try { await runtime.file.close(); }
     finally { if (settled && scratch) await rm(scratch, { recursive: true, force: true }); }
   }
 }

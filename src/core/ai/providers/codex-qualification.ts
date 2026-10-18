@@ -12,14 +12,18 @@ import { CodexProposalError } from './codex-contract.ts';
 const QUALIFIED_SHA256 = new Set<string>();
 const fixtures = new Map<string, string>();
 
-/** A real runtime may not inherit a managed layer that can replace session tool settings. */
-async function assertLinuxManagedConfigAbsent(root: string, trustedUid: number, callerUid: number): Promise<void> {
+/** A real runtime must exclude managed overrides and use a trusted namespace launcher. */
+async function assertLinuxHostBoundary(root: string, trustedUid: number, callerUid: number): Promise<void> {
   if (callerUid === trustedUid) throw new Error('runtime owns system configuration');
-  for (const path of [root, join(root, 'etc')]) {
+  for (const path of [root, join(root, 'etc'), join(root, 'usr'), join(root, 'usr', 'bin')]) {
     const info = await lstat(path);
     if (!info.isDirectory() || info.uid !== trustedUid || (info.mode & 0o022)) {
-      throw new Error('mutable system configuration parent');
+      throw new Error('mutable system path');
     }
+  }
+  const unshare = await lstat(join(root, 'usr', 'bin', 'unshare'));
+  if (!unshare.isFile() || unshare.uid !== trustedUid || (unshare.mode & 0o022) || !(unshare.mode & 0o111)) {
+    throw new Error('untrusted namespace launcher');
   }
   try {
     await lstat(join(root, 'etc', 'codex'));
@@ -33,20 +37,21 @@ async function assertLinuxManagedConfigAbsent(root: string, trustedUid: number, 
 /** Production boundary is fixed to the Linux system path; other platforms stay unqualified. */
 async function assertProductionCodexHostBoundary(): Promise<void> {
   if (process.platform !== 'linux' || !process.getuid) throw new Error('unsupported host boundary');
-  await assertLinuxManagedConfigAbsent('/', 0, process.getuid());
+  await assertLinuxHostBoundary('/', 0, process.getuid());
 }
 
 /** Synthetic filesystem seam; it never registers a production runtime hash. */
-export async function __assertCodexManagedConfigForTests(root: string, trustedUid: number, callerUid: number): Promise<void> {
-  await assertLinuxManagedConfigAbsent(root, trustedUid, callerUid);
+export async function __assertCodexHostBoundaryForTests(root: string, trustedUid: number, callerUid: number): Promise<void> {
+  await assertLinuxHostBoundary(root, trustedUid, callerUid);
 }
+export interface OpenCodexRuntime { file: FileHandle; production: boolean }
 /** Test fixture registration, never called by production source. No real runtime is approved by tests. */
 export function __registerCodexFixtureForTests(path: string, sha256: string): () => void {
   fixtures.set(path, sha256);
   return () => { fixtures.delete(path); };
 }
 /** Keep the verified inode open until the child has inherited it. A pathname can be replaced after hashing. */
-export async function openQualifiedCodexRuntime(bin: string): Promise<FileHandle> {
+export async function openQualifiedCodexRuntime(bin: string): Promise<OpenCodexRuntime> {
   if (!QUALIFIED_SHA256.size && !fixtures.has(bin)) throw new CodexProposalError('runtime_unqualified');
   let file: FileHandle | undefined;
   try {
@@ -66,7 +71,7 @@ export async function openQualifiedCodexRuntime(bin: string): Promise<FileHandle
     const production = QUALIFIED_SHA256.has(sha256);
     if (!production && fixtures.get(bin) !== sha256) throw new Error('unqualified executable');
     if (production) await assertProductionCodexHostBoundary();
-    return file;
+    return { file, production };
   } catch {
     await file?.close().catch(() => {});
     throw new CodexProposalError('runtime_unqualified');
@@ -74,6 +79,6 @@ export async function openQualifiedCodexRuntime(bin: string): Promise<FileHandle
 }
 
 export async function assertCodexRuntimeQualified(bin: string): Promise<void> {
-  const file = await openQualifiedCodexRuntime(bin);
-  await file.close();
+  const runtime = await openQualifiedCodexRuntime(bin);
+  await runtime.file.close();
 }
