@@ -38,6 +38,177 @@
       "code_edges_symbol.code_edges_symbol_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "code_edges_symbol.code_edges_symbol_unique": "u UNIQUE (from_chunk_id, to_symbol_qualified, edge_type)",
       "code_traversal_cache.code_traversal_cache_pkey": "p PRIMARY KEY (id)",
+      "codex_auto_think_runs.codex_auto_think_runs_pkey": "p PRIMARY KEY (run_id, source_id)",
+      "codex_auto_think_runs.codex_auto_think_runs_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_auto_think_runs.codex_auto_think_runs_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_auto_think_runs.codex_auto_think_runs_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_auto_think_runs.codex_auto_think_runs_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check1": "c CHECK (((selection IS NULL) = (selection_hash IS NULL)))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check2": "c CHECK (((selection IS NULL) OR ((jsonb_typeof(selection) = 'object'::text) AND (octet_length((selection)::text) <= 2097152) AND (selection_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check3": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check4": "c CHECK (((result IS NULL) OR ((selection IS NOT NULL) AND (jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 2097152) AND (result_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check5": "c CHECK (((publication IS NULL) = (publication_hash IS NULL)))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check6": "c CHECK (((publication IS NULL) OR ((result IS NOT NULL) AND (jsonb_typeof(publication) = 'object'::text) AND (octet_length((publication)::text) <= 2097152) AND (publication_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check7": "c CHECK (((NOT publication_admitted) OR (publication IS NOT NULL)))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check8": "c CHECK (((NOT publication_complete) OR publication_admitted))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_check9": "c CHECK (((state <> 'complete'::text) OR (result IS NOT NULL)))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_pkey": "p PRIMARY KEY (run_id)",
+      "codex_brainstorm_runs.codex_brainstorm_runs_protocol_check": "c CHECK ((((protocol = 1) AND (run_id = subscription_run_id)) OR (protocol = 2)))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_request_hash_check": "c CHECK ((request_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_state_check": "c CHECK ((state = ANY (ARRAY['idle'::text, 'running'::text, 'complete'::text, 'needs_reconciliation'::text])))",
+      "codex_brainstorm_runs.codex_brainstorm_runs_subscription_run_id_fkey": "f FOREIGN KEY (subscription_run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_eval_results.codex_eval_results_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_eval_results.codex_eval_results_payload_check": "c CHECK (((jsonb_typeof(payload) = 'object'::text) AND (octet_length((payload)::text) <= 524288)))",
+      "codex_eval_results.codex_eval_results_payload_hash_check": "c CHECK ((payload_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_eval_results.codex_eval_results_pkey": "p PRIMARY KEY (run_id, question_key, stage)",
+      "codex_eval_results.codex_eval_results_question_key_check": "c CHECK ((question_key ~ '^[a-f0-9]{64}$'::text))",
+      "codex_eval_results.codex_eval_results_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_eval_runs(run_id)",
+      "codex_eval_results.codex_eval_results_stage_check": "c CHECK ((stage = ANY (ARRAY['answer'::text, 'judged'::text])))",
+      "codex_eval_runs.codex_eval_runs_binding_hash_check": "c CHECK ((binding_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_eval_runs.codex_eval_runs_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_eval_runs.codex_eval_runs_pkey": "p PRIMARY KEY (run_id)",
+      "codex_eval_runs.codex_eval_runs_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_eval_runs.codex_eval_runs_question_count_check": "c CHECK (((question_count >= 1) AND (question_count <= 1000)))",
+      "codex_eval_runs.codex_eval_runs_required_stage_check": "c CHECK ((required_stage = ANY (ARRAY['answer'::text, 'judged'::text])))",
+      "codex_eval_runs.codex_eval_runs_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_eval_runs.codex_eval_runs_state_check": "c CHECK ((state = ANY (ARRAY['idle'::text, 'running'::text, 'complete'::text, 'needs_reconciliation'::text])))",
+      "codex_parked_jobs.codex_parked_jobs_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id)",
+      "codex_parked_jobs.codex_parked_jobs_pkey": "p PRIMARY KEY (job_id)",
+      "codex_parked_jobs.codex_parked_jobs_receipt_id_fkey": "f FOREIGN KEY (receipt_id) REFERENCES codex_upgrade_receipts(id)",
+      "codex_parked_jobs.codex_parked_jobs_replacement_job_id_fkey": "f FOREIGN KEY (replacement_job_id) REFERENCES minion_jobs(id)",
+      "codex_proposal_cache.codex_proposal_cache_binding_hash_check": "c CHECK ((binding_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_proposal_cache.codex_proposal_cache_namespace_check": "c CHECK ((namespace ~ '^[a-zA-Z0-9._:-]{1,120}$'::text))",
+      "codex_proposal_cache.codex_proposal_cache_pkey": "p PRIMARY KEY (namespace, binding_hash, request_hash)",
+      "codex_proposal_cache.codex_proposal_cache_request_hash_check": "c CHECK ((request_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_proposal_cache.codex_proposal_cache_response_hash_check": "c CHECK ((response_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_proposal_cache.codex_proposal_cache_response_text_check": "c CHECK (((octet_length(response_text) >= 2) AND (octet_length(response_text) <= 262144)))",
+      "codex_proposal_cache.codex_proposal_cache_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_publication_plans.codex_publication_plans_kind_check": "c CHECK ((kind = ANY (ARRAY['patterns'::text, 'synthesis'::text])))",
+      "codex_publication_plans.codex_publication_plans_pkey": "p PRIMARY KEY (plan_id)",
+      "codex_publication_plans.codex_publication_plans_protocol_version_check": "c CHECK ((protocol_version = 1))",
+      "codex_publication_plans.codex_publication_plans_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_publication_plans.codex_publication_plans_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_publication_plans.codex_publication_plans_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check2": "c CHECK (((admission IS NULL) = (admission_hash IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check3": "c CHECK (((response IS NULL) = (response_hash IS NULL)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check4": "c CHECK (((result IS NULL) OR ((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 524288) AND (result_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check5": "c CHECK (((admission IS NULL) OR ((result IS NOT NULL) AND (jsonb_typeof(admission) = 'object'::text) AND (octet_length((admission)::text) <= 2097152) AND (admission_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_check6": "c CHECK (((response IS NULL) OR ((result IS NOT NULL) AND (jsonb_typeof(response) = 'object'::text) AND (octet_length((response)::text) <= 524288) AND (response_hash ~ '^[a-f0-9]{64}$'::text))))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 2097152)))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_pkey": "p PRIMARY KEY (run_id)",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_request_id_key": "u UNIQUE (request_id)",
+      "codex_shared_skill_optimizations.codex_shared_skill_optimizations_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_batch_run_id_fkey": "f FOREIGN KEY (batch_run_id) REFERENCES codex_skillopt_batches(run_id)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_ordinal_check": "c CHECK (((ordinal >= 0) AND (ordinal <= 19)))",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_pkey": "p PRIMARY KEY (batch_run_id, ordinal)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_batch_members.codex_skillopt_batch_members_run_id_key": "u UNIQUE (run_id)",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_data_hash_check": "c CHECK ((data_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id) ON DELETE RESTRICT",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_job_id_key": "u UNIQUE (job_id)",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_pkey": "p PRIMARY KEY (request_id)",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_batch_submissions.codex_skillopt_batch_submissions_request_hash_check": "c CHECK ((request_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batches.codex_skillopt_batches_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_skillopt_batches.codex_skillopt_batches_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_skillopt_batches.codex_skillopt_batches_check2": "c CHECK (((state <> 'complete'::text) OR (result IS NOT NULL)))",
+      "codex_skillopt_batches.codex_skillopt_batches_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 8388608)))",
+      "codex_skillopt_batches.codex_skillopt_batches_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batches.codex_skillopt_batches_pkey": "p PRIMARY KEY (run_id)",
+      "codex_skillopt_batches.codex_skillopt_batches_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_batches.codex_skillopt_batches_result_check": "c CHECK (((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 2097152)))",
+      "codex_skillopt_batches.codex_skillopt_batches_result_hash_check": "c CHECK ((result_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_batches.codex_skillopt_batches_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_batches.codex_skillopt_batches_state_check": "c CHECK ((state = ANY (ARRAY['idle'::text, 'running'::text, 'complete'::text, 'needs_reconciliation'::text])))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check2": "c CHECK (((NOT completed) OR (result IS NOT NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 2097152)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_job_binding": "c CHECK (((request_id IS NULL) = (job_id IS NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id) ON DELETE RESTRICT",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_pkey": "p PRIMARY KEY (run_id)",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_result_check": "c CHECK (((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 1048576)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_result_hash_check": "c CHECK ((result_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_cycles.codex_skillopt_cycles_binding_check": "c CHECK (((jsonb_typeof(binding) = 'object'::text) AND (octet_length((binding)::text) <= 65536)))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_check": "c CHECK (((state = 'pending'::text) = (settled_at IS NULL)))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_check1": "c CHECK (((state = 'complete'::text) = (result_hash IS NOT NULL)))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_pkey": "p PRIMARY KEY (run_id)",
+      "codex_skillopt_cycles.codex_skillopt_cycles_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_result_hash_check": "c CHECK ((result_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_cycles.codex_skillopt_cycles_selection_check": "c CHECK (((jsonb_typeof(selection) = 'array'::text) AND (jsonb_array_length(selection) <= 20)))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_selection_hash_check": "c CHECK ((selection_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_cycles.codex_skillopt_cycles_state_check": "c CHECK ((state = ANY (ARRAY['pending'::text, 'complete'::text, 'failed'::text])))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_check": "c CHECK (((trajectory IS NULL) = (trajectory_hash IS NULL)))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_invocation_id_check": "c CHECK ((invocation_id ~ '^[A-Za-z0-9._:-]{1,160}$'::text))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_job_id_key": "u UNIQUE (job_id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_pkey": "p PRIMARY KEY (run_id, invocation_id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_trajectory_check": "c CHECK (((jsonb_typeof(trajectory) = 'object'::text) AND (octet_length((trajectory)::text) <= 262144)))",
+      "codex_skillopt_rollouts.codex_skillopt_rollouts_trajectory_hash_check": "c CHECK ((trajectory_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_runs.codex_skillopt_runs_check": "c CHECK (((owner_token IS NULL) = (lease_until IS NULL)))",
+      "codex_skillopt_runs.codex_skillopt_runs_check1": "c CHECK (((result IS NULL) = (result_hash IS NULL)))",
+      "codex_skillopt_runs.codex_skillopt_runs_checkpoint_check": "c CHECK (((jsonb_typeof(checkpoint) = 'object'::text) AND (octet_length((checkpoint)::text) <= 524288)))",
+      "codex_skillopt_runs.codex_skillopt_runs_checkpoint_hash_check": "c CHECK ((checkpoint_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_runs.codex_skillopt_runs_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 2097152)))",
+      "codex_skillopt_runs.codex_skillopt_runs_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_runs.codex_skillopt_runs_pkey": "p PRIMARY KEY (run_id)",
+      "codex_skillopt_runs.codex_skillopt_runs_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_skillopt_runs.codex_skillopt_runs_result_check": "c CHECK (((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 524288)))",
+      "codex_skillopt_runs.codex_skillopt_runs_result_hash_check": "c CHECK ((result_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_runs.codex_skillopt_runs_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_skillopt_runs.codex_skillopt_runs_state_check": "c CHECK ((state = ANY (ARRAY['idle'::text, 'running'::text, 'computed'::text, 'complete'::text, 'needs_reconciliation'::text])))",
+      "codex_skillopt_submissions.codex_skillopt_submissions_data_hash_check": "c CHECK ((data_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_submissions.codex_skillopt_submissions_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_submissions.codex_skillopt_submissions_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id) ON DELETE RESTRICT",
+      "codex_skillopt_submissions.codex_skillopt_submissions_job_id_key": "u UNIQUE (job_id)",
+      "codex_skillopt_submissions.codex_skillopt_submissions_pkey": "p PRIMARY KEY (request_id)",
+      "codex_skillopt_submissions.codex_skillopt_submissions_protocol_check": "c CHECK ((protocol = 1))",
+      "codex_subscription_attempts.codex_subscription_attempts_cached_input_tokens_check": "c CHECK ((cached_input_tokens >= 0))",
+      "codex_subscription_attempts.codex_subscription_attempts_input_tokens_check": "c CHECK ((input_tokens >= 0))",
+      "codex_subscription_attempts.codex_subscription_attempts_output_tokens_check": "c CHECK ((output_tokens >= 0))",
+      "codex_subscription_attempts.codex_subscription_attempts_pkey": "p PRIMARY KEY (attempt_id)",
+      "codex_subscription_attempts.codex_subscription_attempts_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_subscription_attempts.codex_subscription_attempts_state_check": "c CHECK ((state = ANY (ARRAY['active'::text, 'unresolved'::text, 'succeeded'::text, 'failed'::text])))",
+      "codex_subscription_runs.codex_subscription_runs_accepted_turns_check": "c CHECK ((accepted_turns >= 0))",
+      "codex_subscription_runs.codex_subscription_runs_attempts_check": "c CHECK ((attempts >= 0))",
+      "codex_subscription_runs.codex_subscription_runs_max_attempts_check": "c CHECK (((max_attempts >= 1) AND (max_attempts <= 1000)))",
+      "codex_subscription_runs.codex_subscription_runs_max_turns_check": "c CHECK (((max_turns >= 1) AND (max_turns <= 1000)))",
+      "codex_subscription_runs.codex_subscription_runs_parent_run_id_fkey": "f FOREIGN KEY (parent_run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_subscription_runs.codex_subscription_runs_pkey": "p PRIMARY KEY (run_id)",
+      "codex_subscription_runs.codex_subscription_runs_repairs_check": "c CHECK (((repairs >= 0) AND (repairs <= 1)))",
+      "codex_think_ab_trials.codex_think_ab_trials_check": "c CHECK (((state = 'accepted'::text) OR ((baseline IS NOT NULL) AND (calibrated IS NOT NULL))))",
+      "codex_think_ab_trials.codex_think_ab_trials_check1": "c CHECK (((state = 'rated'::text) = (result_id IS NOT NULL)))",
+      "codex_think_ab_trials.codex_think_ab_trials_pkey": "p PRIMARY KEY (trial_id)",
+      "codex_think_ab_trials.codex_think_ab_trials_result_id_fkey": "f FOREIGN KEY (result_id) REFERENCES think_ab_results(id)",
+      "codex_think_ab_trials.codex_think_ab_trials_result_id_key": "u UNIQUE (result_id)",
+      "codex_think_ab_trials.codex_think_ab_trials_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_think_ab_trials.codex_think_ab_trials_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_think_ab_trials.codex_think_ab_trials_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_think_ab_trials.codex_think_ab_trials_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'ready'::text, 'rated'::text])))",
+      "codex_think_publications.codex_think_publications_pkey": "p PRIMARY KEY (plan_id)",
+      "codex_think_publications.codex_think_publications_run_id_fkey": "f FOREIGN KEY (run_id) REFERENCES codex_subscription_runs(run_id)",
+      "codex_think_publications.codex_think_publications_run_id_request_key_key": "u UNIQUE (run_id, request_key)",
+      "codex_think_publications.codex_think_publications_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
+      "codex_think_publications.codex_think_publications_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
+      "codex_think_publications.codex_think_publications_state_check": "c CHECK ((state = ANY (ARRAY['accepted'::text, 'complete'::text])))",
+      "codex_upgrade_receipts.codex_upgrade_receipts_kind_check": "c CHECK ((kind = ANY (ARRAY['pins'::text, 'jobs'::text])))",
+      "codex_upgrade_receipts.codex_upgrade_receipts_pkey": "p PRIMARY KEY (id)",
+      "codex_upgrade_receipts.codex_upgrade_receipts_sequence_key": "u UNIQUE (sequence)",
+      "codex_upgrade_receipts.codex_upgrade_receipts_state_check": "c CHECK ((state = ANY (ARRAY['applied'::text, 'rolled_back'::text])))",
       "config.config_pkey": "p PRIMARY KEY (key)",
       "config.trust_generation_delete": "t TRIGGER DEFERRABLE INITIALLY DEFERRED",
       "config.trust_generation_insert": "t TRIGGER DEFERRABLE INITIALLY DEFERRED",
@@ -86,6 +257,7 @@
       "extract_atoms_page_state.extract_atoms_page_state_source_incarnation_fkey": "f FOREIGN KEY (source_incarnation) REFERENCES sources(incarnation) ON DELETE CASCADE",
       "extract_atoms_transcript_state.extract_atoms_transcript_state_pkey": "p PRIMARY KEY (source_id, file_path, content_hash)",
       "extract_rollup_7d.extract_rollup_7d_pkey": "p PRIMARY KEY (kind, source_id, day)",
+      "extract_rollup_7d.extract_rollup_7d_subscription_run_count_check": "c CHECK ((subscription_run_count >= 0))",
       "fact_purges.fact_purges_pkey": "p PRIMARY KEY (source_id, visibility, subject, fact_hash)",
       "fact_purges.fact_purges_source_id_fkey": "f FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE",
       "fact_purges.fact_purges_visibility_check": "c CHECK ((visibility = ANY (ARRAY['private'::text, 'world'::text])))",
@@ -320,7 +492,7 @@
       "persistence_requests.persistence_requests_preparation_attempts_check": "c CHECK ((preparation_attempts >= 0))",
       "persistence_requests.persistence_requests_principal_kind_check": "c CHECK ((principal_kind = ANY (ARRAY['oauth_client'::text, 'legacy_token'::text, 'local_cli'::text, 'local_stdio'::text, 'application'::text])))",
       "persistence_requests.persistence_requests_principal_kind_principal_id_request_id_key": "u UNIQUE (principal_kind, principal_id, request_id)",
-      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2])))",
+      "persistence_requests.persistence_requests_protocol_version_check": "c CHECK ((protocol_version = ANY (ARRAY[1, 2, 3, 4, 5, 6])))",
       "persistence_requests.persistence_requests_sequence_key": "u UNIQUE (sequence)",
       "persistence_requests.persistence_requests_state_check": "c CHECK ((state = ANY (ARRAY['queued'::text, 'running'::text, 'recovering'::text, 'committed'::text, 'conflict'::text, 'failed'::text, 'cancelled'::text])))",
       "persistence_requests.persistence_requests_target_kind_check": "c CHECK ((target_kind = ANY (ARRAY['page'::text, 'skill_bundle'::text])))",
@@ -495,11 +667,15 @@
       "auto_enable_rls()": "RETURNS event_trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=5e5e0a0ee902f481f07da929c5fd39c2a16671869535b12a1e2270543a5a30eb",
       "bump_page_generation_clock_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=d3359bcd09cccd881585abd9eee81c3dcf4161d935164f7953f2e9fdef73ed3e",
       "bump_page_generation_fn()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=314d4775d7c90f8ed650ea12ae3687f388f714ed3d30582dc8ff678dfea1dc97",
+      "enforce_codex_job_parking()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=eb6d05a54229e603ff2ccb3e9cf3926b673561a5be7300920719c7cd985ed0ea",
+      "enforce_codex_job_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=8abd250e40832cc7171832994d1c2e567efa13ee9a7c533c7c99f5fb73901d7d",
       "enforce_minion_queue_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=be82640d1979fc81dc812efb78bb3596ef536f656d20750e5e4aa19016bf4784",
       "gbrain_advance_page_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=2a431195dc4c4150e3428251d0dec0a685cdc2992525c1b4b54dff103d5d99c9",
       "gbrain_advance_tag_revision()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=7807b26b4933148aa63c67fca824a60d3492396728205d04e16c48c81174cbd5",
       "gbrain_bump_trust_generation()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=4708a89d166ac0999a8922ad8ee8f69fea3213c59e0782d96220f93b0c001a62",
       "gbrain_clear_atom_page_state()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=7db0ef05d1220a579e64428b2dd7cf5183191da186fbe64b6496433a7a713d11",
+      "gbrain_codex_subscription_group_guard()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=bd3a57cecc4274d9731b9a27cf4775574b8716e0ccdb84f3a2b8cf281c388736",
+      "gbrain_codex_subscription_lock_path(target_run_id text)": "RETURNS void kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=f25fd9e30a4b622c03d335479a4842e67394f403d9b710c7d51660b902d5a531",
       "gbrain_fact_fingerprint(claim text)": "RETURNS text kind=f lang=sql volatility=i secdef=false config=[] body_sha256=ff99709590deb4c83f0e16d30b3988ca2598018f5fd6f30d132acf31b1010174",
       "gbrain_fact_fingerprint_v1(claim text)": "RETURNS text kind=f lang=sql volatility=i secdef=false config=[] body_sha256=aa955a02d3c695f237e1771f0ffded2fa8e5c7b795c42b87f7fd239ae35e213c",
       "gbrain_fact_normalize(claim text)": "RETURNS text kind=f lang=sql volatility=i secdef=false config=[] body_sha256=595b1e012edeb66edbec72a2a8b1d046a8360a386bfce2fd903e50e3f78af37b",
@@ -508,7 +684,7 @@
       "gbrain_graduation_fence()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=cd4642fe8deee2a3c14ef41f53862f0a449b2d8a10e47177bd4f5d2e05ce8803",
       "gbrain_guard_effect_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e8b5589dafd4a355106104daffdf57c7776d34fe18c5b5f5336a27de188688a1",
       "gbrain_guard_protocol_activation()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=f27354966c25d961fcecbffebba0e45747ad3de23575351319f6aee4f9aefd47",
-      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=12baf1d365a8aa3009ac0fe6605497e6433304e8d5915a3fc0b0b39ad748f6c2",
+      "gbrain_guard_request_protocol()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=fd3abdd2aafe709985fd2a7a6df0dc62386b503c94fdb14c0ad1a466dd993097",
       "gbrain_guard_skill_publication()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=e854c0d058e75a65c3a90127c5c417380975100e83fc34288f6085e786df10a9",
       "gbrain_lease_shared_skill_delivery()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=5e493c1ac8dce8cb025a736629e563437c4b214744137c302c532c20bf7e7acf",
       "gbrain_preserve_fact_withdrawal()": "RETURNS trigger kind=f lang=plpgsql volatility=v secdef=false config=[search_path=pg_catalog, public] body_sha256=9beb118551a08451a228146373f50f2aa2ce0cfe89937e937d361b33224aa0aa",
@@ -571,6 +747,69 @@
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "code_traversal_cache": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_auto_think_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_brainstorm_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_eval_results": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_eval_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_parked_jobs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_proposal_cache": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_publication_plans": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_shared_skill_optimizations": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_batch_members": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_batch_submissions": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_batches": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_bootstraps": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_cycles": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_rollouts": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_skillopt_submissions": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_subscription_attempts": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_subscription_runs": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_think_ab_trials": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_think_publications": [
+        "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
+      ],
+      "codex_upgrade_receipts": [
         "<current_role> -> <current_role> WITH GRANT OPTION: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE"
       ],
       "config": [
@@ -998,6 +1237,7 @@
       "budget_ledger_pkey": "CREATE UNIQUE INDEX budget_ledger_pkey ON public.budget_ledger USING btree (scope, resolver_id, local_date)",
       "budget_reservations_pkey": "CREATE UNIQUE INDEX budget_reservations_pkey ON public.budget_reservations USING btree (reservation_id)",
       "calibration_profiles_bias_tags_gin": "CREATE INDEX calibration_profiles_bias_tags_gin ON public.calibration_profiles USING gin (active_bias_tags)",
+      "calibration_profiles_codex_request": "CREATE UNIQUE INDEX calibration_profiles_codex_request ON public.calibration_profiles USING btree (source_id, holder, ((codex_evidence ->> 'subscription_run_id'::text))) WHERE (codex_evidence IS NOT NULL)",
       "calibration_profiles_holder_recent_idx": "CREATE INDEX calibration_profiles_holder_recent_idx ON public.calibration_profiles USING btree (source_id, holder, generated_at DESC)",
       "calibration_profiles_pkey": "CREATE UNIQUE INDEX calibration_profiles_pkey ON public.calibration_profiles USING btree (id)",
       "calibration_profiles_published_idx": "CREATE INDEX calibration_profiles_published_idx ON public.calibration_profiles USING btree (source_id, published, holder) WHERE (published = true)",
@@ -1014,6 +1254,47 @@
       "code_traversal_cache_key_idx": "CREATE UNIQUE INDEX code_traversal_cache_key_idx ON public.code_traversal_cache USING btree (symbol_qualified, depth, source_id)",
       "code_traversal_cache_pkey": "CREATE UNIQUE INDEX code_traversal_cache_pkey ON public.code_traversal_cache USING btree (id)",
       "code_traversal_cache_source_idx": "CREATE INDEX code_traversal_cache_source_idx ON public.code_traversal_cache USING btree (source_id)",
+      "codex_auto_think_cooldown": "CREATE INDEX codex_auto_think_cooldown ON public.codex_auto_think_runs USING btree (source_id, completed_at DESC) WHERE (state = 'complete'::text)",
+      "codex_auto_think_pending": "CREATE UNIQUE INDEX codex_auto_think_pending ON public.codex_auto_think_runs USING btree (source_id) WHERE (state = 'accepted'::text)",
+      "codex_auto_think_runs_pkey": "CREATE UNIQUE INDEX codex_auto_think_runs_pkey ON public.codex_auto_think_runs USING btree (run_id, source_id)",
+      "codex_brainstorm_runs_pkey": "CREATE UNIQUE INDEX codex_brainstorm_runs_pkey ON public.codex_brainstorm_runs USING btree (run_id)",
+      "codex_brainstorm_runs_subscription_run": "CREATE INDEX codex_brainstorm_runs_subscription_run ON public.codex_brainstorm_runs USING btree (subscription_run_id)",
+      "codex_eval_results_pkey": "CREATE UNIQUE INDEX codex_eval_results_pkey ON public.codex_eval_results USING btree (run_id, question_key, stage)",
+      "codex_eval_runs_pkey": "CREATE UNIQUE INDEX codex_eval_runs_pkey ON public.codex_eval_runs USING btree (run_id)",
+      "codex_parked_jobs_pkey": "CREATE UNIQUE INDEX codex_parked_jobs_pkey ON public.codex_parked_jobs USING btree (job_id)",
+      "codex_proposal_cache_pkey": "CREATE UNIQUE INDEX codex_proposal_cache_pkey ON public.codex_proposal_cache USING btree (namespace, binding_hash, request_hash)",
+      "codex_publication_pending": "CREATE UNIQUE INDEX codex_publication_pending ON public.codex_publication_plans USING btree (source_id, source_incarnation, kind) WHERE (state = 'accepted'::text)",
+      "codex_publication_plans_pkey": "CREATE UNIQUE INDEX codex_publication_plans_pkey ON public.codex_publication_plans USING btree (plan_id)",
+      "codex_shared_skill_optimizations_pkey": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_pkey ON public.codex_shared_skill_optimizations USING btree (run_id)",
+      "codex_shared_skill_optimizations_request_id_key": "CREATE UNIQUE INDEX codex_shared_skill_optimizations_request_id_key ON public.codex_shared_skill_optimizations USING btree (request_id)",
+      "codex_skillopt_batch_members_pkey": "CREATE UNIQUE INDEX codex_skillopt_batch_members_pkey ON public.codex_skillopt_batch_members USING btree (batch_run_id, ordinal)",
+      "codex_skillopt_batch_members_run_id_key": "CREATE UNIQUE INDEX codex_skillopt_batch_members_run_id_key ON public.codex_skillopt_batch_members USING btree (run_id)",
+      "codex_skillopt_batch_submissions_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_batch_submissions_job_id_key ON public.codex_skillopt_batch_submissions USING btree (job_id)",
+      "codex_skillopt_batch_submissions_pkey": "CREATE UNIQUE INDEX codex_skillopt_batch_submissions_pkey ON public.codex_skillopt_batch_submissions USING btree (request_id)",
+      "codex_skillopt_batches_pkey": "CREATE UNIQUE INDEX codex_skillopt_batches_pkey ON public.codex_skillopt_batches USING btree (run_id)",
+      "codex_skillopt_bootstraps_job": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_job ON public.codex_skillopt_bootstraps USING btree (job_id) WHERE (job_id IS NOT NULL)",
+      "codex_skillopt_bootstraps_pkey": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_pkey ON public.codex_skillopt_bootstraps USING btree (run_id)",
+      "codex_skillopt_bootstraps_request": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_request ON public.codex_skillopt_bootstraps USING btree (request_id) WHERE (request_id IS NOT NULL)",
+      "codex_skillopt_cycles_cooldown": "CREATE INDEX codex_skillopt_cycles_cooldown ON public.codex_skillopt_cycles USING btree (source_id, source_incarnation, settled_at DESC)",
+      "codex_skillopt_cycles_pending_source": "CREATE UNIQUE INDEX codex_skillopt_cycles_pending_source ON public.codex_skillopt_cycles USING btree (source_id, source_incarnation) WHERE (state = 'pending'::text)",
+      "codex_skillopt_cycles_pkey": "CREATE UNIQUE INDEX codex_skillopt_cycles_pkey ON public.codex_skillopt_cycles USING btree (run_id)",
+      "codex_skillopt_rollouts_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_rollouts_job_id_key ON public.codex_skillopt_rollouts USING btree (job_id)",
+      "codex_skillopt_rollouts_pkey": "CREATE UNIQUE INDEX codex_skillopt_rollouts_pkey ON public.codex_skillopt_rollouts USING btree (run_id, invocation_id)",
+      "codex_skillopt_runs_pkey": "CREATE UNIQUE INDEX codex_skillopt_runs_pkey ON public.codex_skillopt_runs USING btree (run_id)",
+      "codex_skillopt_submissions_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_submissions_job_id_key ON public.codex_skillopt_submissions USING btree (job_id)",
+      "codex_skillopt_submissions_pkey": "CREATE UNIQUE INDEX codex_skillopt_submissions_pkey ON public.codex_skillopt_submissions USING btree (request_id)",
+      "codex_subscription_account_active": "CREATE UNIQUE INDEX codex_subscription_account_active ON public.codex_subscription_attempts USING btree (account_lane) WHERE (state = ANY (ARRAY['active'::text, 'unresolved'::text]))",
+      "codex_subscription_attempts_pkey": "CREATE UNIQUE INDEX codex_subscription_attempts_pkey ON public.codex_subscription_attempts USING btree (attempt_id)",
+      "codex_subscription_parent": "CREATE INDEX codex_subscription_parent ON public.codex_subscription_runs USING btree (parent_run_id)",
+      "codex_subscription_runs_pkey": "CREATE UNIQUE INDEX codex_subscription_runs_pkey ON public.codex_subscription_runs USING btree (run_id)",
+      "codex_think_ab_source": "CREATE INDEX codex_think_ab_source ON public.codex_think_ab_trials USING btree (source_id, created_at DESC)",
+      "codex_think_ab_trials_pkey": "CREATE UNIQUE INDEX codex_think_ab_trials_pkey ON public.codex_think_ab_trials USING btree (trial_id)",
+      "codex_think_ab_trials_result_id_key": "CREATE UNIQUE INDEX codex_think_ab_trials_result_id_key ON public.codex_think_ab_trials USING btree (result_id)",
+      "codex_think_publications_pkey": "CREATE UNIQUE INDEX codex_think_publications_pkey ON public.codex_think_publications USING btree (plan_id)",
+      "codex_think_publications_run_id_request_key_key": "CREATE UNIQUE INDEX codex_think_publications_run_id_request_key_key ON public.codex_think_publications USING btree (run_id, request_key)",
+      "codex_upgrade_plan_hash": "CREATE INDEX codex_upgrade_plan_hash ON public.codex_upgrade_receipts USING btree (kind, plan_hash)",
+      "codex_upgrade_receipts_pkey": "CREATE UNIQUE INDEX codex_upgrade_receipts_pkey ON public.codex_upgrade_receipts USING btree (id)",
+      "codex_upgrade_receipts_sequence_key": "CREATE UNIQUE INDEX codex_upgrade_receipts_sequence_key ON public.codex_upgrade_receipts USING btree (sequence)",
       "config_pkey": "CREATE UNIQUE INDEX config_pkey ON public.config USING btree (key)",
       "content_chunks_generation_idx": "CREATE INDEX content_chunks_generation_idx ON public.content_chunks USING btree (page_id, body_generation) WHERE (body_generation IS NOT NULL)",
       "content_chunks_occurrence_generation_idx": "CREATE INDEX content_chunks_occurrence_generation_idx ON public.content_chunks USING btree (page_id, occurrence_id, body_generation)",
@@ -1436,6 +1717,7 @@
       "code_edges_chunk_id_seq": "integer start=1 min=1 max=2147483647 increment=1 cycle=false cache=1 owned_by=code_edges_chunk.id",
       "code_edges_symbol_id_seq": "integer start=1 min=1 max=2147483647 increment=1 cycle=false cache=1 owned_by=code_edges_symbol.id",
       "code_traversal_cache_id_seq": "integer start=1 min=1 max=2147483647 increment=1 cycle=false cache=1 owned_by=code_traversal_cache.id",
+      "codex_upgrade_receipts_sequence_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=codex_upgrade_receipts.sequence",
       "content_chunks_id_seq": "integer start=1 min=1 max=2147483647 increment=1 cycle=false cache=1 owned_by=content_chunks.id",
       "context_volunteer_events_id_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=context_volunteer_events.id",
       "core_edit_notices_id_seq": "bigint start=1 min=1 max=9223372036854775807 increment=1 cycle=false cache=1 owned_by=core_edit_notices.id",
@@ -1637,7 +1919,8 @@
           "16 active_bias_tags ARRAY/_text NOT NULL",
           "17 model_id text/text NOT NULL",
           "18 cost_usd numeric/numeric NULL",
-          "19 judge_model_agreement real/float4 NULL"
+          "19 judge_model_agreement real/float4 NULL",
+          "20 codex_evidence jsonb/jsonb NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
@@ -1735,6 +2018,314 @@
           "7 xmin_max bigint/int8 NOT NULL",
           "8 cluster_generation bigint/int8 NOT NULL DEFAULT 0",
           "9 computed_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_auto_think_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 source_id text/text NOT NULL",
+          "3 source_incarnation uuid/uuid NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 binding jsonb/jsonb NOT NULL",
+          "6 results jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb",
+          "7 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "9 completed_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_brainstorm_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 request_hash text/text NOT NULL",
+          "4 owner_token uuid/uuid NULL",
+          "5 lease_until timestamp with time zone/timestamptz NULL",
+          "6 state text/text NOT NULL",
+          "7 selection jsonb/jsonb NULL",
+          "8 selection_hash text/text NULL",
+          "9 result jsonb/jsonb NULL",
+          "10 result_hash text/text NULL",
+          "11 publication jsonb/jsonb NULL",
+          "12 publication_hash text/text NULL",
+          "13 publication_admitted boolean/bool NOT NULL DEFAULT false",
+          "14 publication_complete boolean/bool NOT NULL DEFAULT false",
+          "15 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "16 subscription_run_id text/text NOT NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_eval_results": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 question_key text/text NOT NULL",
+          "3 input_hash text/text NOT NULL",
+          "4 stage text/text NOT NULL",
+          "5 payload jsonb/jsonb NOT NULL",
+          "6 payload_hash text/text NOT NULL",
+          "7 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_eval_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 binding_hash text/text NOT NULL",
+          "4 question_count integer/int4 NOT NULL",
+          "5 required_stage text/text NOT NULL",
+          "6 owner_token uuid/uuid NULL",
+          "7 lease_until timestamp with time zone/timestamptz NULL",
+          "8 state text/text NOT NULL",
+          "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_parked_jobs": {
+        "columns": [
+          "1 job_id integer/int4 NOT NULL",
+          "2 receipt_id uuid/uuid NOT NULL",
+          "3 previous_status text/text NOT NULL",
+          "4 replacement_job_id integer/int4 NULL",
+          "5 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_proposal_cache": {
+        "columns": [
+          "1 namespace text/text NOT NULL",
+          "2 binding_hash text/text NOT NULL",
+          "3 request_hash text/text NOT NULL",
+          "4 run_id text/text NOT NULL",
+          "5 response_text text/text NOT NULL",
+          "6 response_hash text/text NOT NULL",
+          "7 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_publication_plans": {
+        "columns": [
+          "1 plan_id text/text NOT NULL",
+          "2 source_id text/text NOT NULL",
+          "3 source_incarnation uuid/uuid NOT NULL",
+          "4 kind text/text NOT NULL",
+          "5 protocol_version integer/int4 NOT NULL",
+          "6 payload jsonb/jsonb NOT NULL",
+          "7 payload_hash text/text NOT NULL",
+          "8 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "10 completed_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_shared_skill_optimizations": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 request_id uuid/uuid NOT NULL",
+          "3 protocol integer/int4 NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 input jsonb/jsonb NOT NULL",
+          "6 owner_token uuid/uuid NULL",
+          "7 lease_until timestamp with time zone/timestamptz NULL",
+          "8 publication_fence jsonb/jsonb NULL",
+          "9 result jsonb/jsonb NULL",
+          "10 result_hash text/text NULL",
+          "11 admission jsonb/jsonb NULL",
+          "12 admission_hash text/text NULL",
+          "13 response jsonb/jsonb NULL",
+          "14 response_hash text/text NULL",
+          "15 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_batch_members": {
+        "columns": [
+          "1 batch_run_id text/text NOT NULL",
+          "2 ordinal integer/int4 NOT NULL",
+          "3 run_id text/text NOT NULL",
+          "4 input_hash text/text NOT NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_batch_submissions": {
+        "columns": [
+          "1 request_id uuid/uuid NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 request_hash text/text NOT NULL",
+          "4 data_hash text/text NOT NULL",
+          "5 job_id bigint/int8 NOT NULL",
+          "6 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_batches": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 input jsonb/jsonb NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 owner_token uuid/uuid NULL",
+          "6 lease_until timestamp with time zone/timestamptz NULL",
+          "7 state text/text NOT NULL",
+          "8 result jsonb/jsonb NULL",
+          "9 result_hash text/text NULL",
+          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_bootstraps": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 input jsonb/jsonb NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 owner_token uuid/uuid NULL",
+          "6 lease_until timestamp with time zone/timestamptz NULL",
+          "7 result jsonb/jsonb NULL",
+          "8 result_hash text/text NULL",
+          "9 completed boolean/bool NOT NULL DEFAULT false",
+          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "11 request_id uuid/uuid NULL",
+          "12 job_id bigint/int8 NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_cycles": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 source_id text/text NOT NULL",
+          "4 source_incarnation uuid/uuid NOT NULL",
+          "5 binding jsonb/jsonb NOT NULL",
+          "6 input_hash text/text NOT NULL",
+          "7 selection jsonb/jsonb NOT NULL",
+          "8 selection_hash text/text NOT NULL",
+          "9 state text/text NOT NULL",
+          "10 result_hash text/text NULL",
+          "11 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "12 settled_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_rollouts": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 invocation_id text/text NOT NULL",
+          "3 protocol integer/int4 NOT NULL",
+          "4 input_hash text/text NOT NULL",
+          "5 job_id bigint/int8 NOT NULL",
+          "6 trajectory jsonb/jsonb NULL",
+          "7 trajectory_hash text/text NULL",
+          "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 input_hash text/text NOT NULL",
+          "4 input jsonb/jsonb NOT NULL",
+          "5 checkpoint jsonb/jsonb NOT NULL",
+          "6 checkpoint_hash text/text NOT NULL",
+          "7 result jsonb/jsonb NULL",
+          "8 result_hash text/text NULL",
+          "9 owner_token uuid/uuid NULL",
+          "10 lease_until timestamp with time zone/timestamptz NULL",
+          "11 deadline timestamp with time zone/timestamptz NOT NULL",
+          "12 state text/text NOT NULL",
+          "13 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_skillopt_submissions": {
+        "columns": [
+          "1 request_id uuid/uuid NOT NULL",
+          "2 protocol integer/int4 NOT NULL",
+          "3 input_hash text/text NOT NULL",
+          "4 data_hash text/text NOT NULL",
+          "5 job_id bigint/int8 NOT NULL",
+          "6 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_subscription_attempts": {
+        "columns": [
+          "1 attempt_id text/text NOT NULL",
+          "2 run_id text/text NOT NULL",
+          "3 account_lane text/text NOT NULL",
+          "4 request_hash text/text NOT NULL",
+          "5 owner_id text/text NOT NULL",
+          "6 state text/text NOT NULL",
+          "7 input_tokens bigint/int8 NULL",
+          "8 cached_input_tokens bigint/int8 NULL",
+          "9 output_tokens bigint/int8 NULL",
+          "10 accepted boolean/bool NOT NULL DEFAULT false",
+          "11 failure_code text/text NULL",
+          "12 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "13 settled_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_subscription_runs": {
+        "columns": [
+          "1 run_id text/text NOT NULL",
+          "2 account_lane text/text NOT NULL",
+          "3 max_attempts integer/int4 NOT NULL",
+          "4 max_turns integer/int4 NOT NULL",
+          "5 attempts integer/int4 NOT NULL DEFAULT 0",
+          "6 accepted_turns integer/int4 NOT NULL DEFAULT 0",
+          "7 repairs integer/int4 NOT NULL DEFAULT 0",
+          "8 deadline timestamp with time zone/timestamptz NOT NULL",
+          "9 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "10 parent_run_id text/text NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_think_ab_trials": {
+        "columns": [
+          "1 trial_id uuid/uuid NOT NULL",
+          "2 run_id text/text NOT NULL",
+          "3 source_id text/text NOT NULL",
+          "4 source_incarnation uuid/uuid NOT NULL",
+          "5 input_hash text/text NOT NULL",
+          "6 binding jsonb/jsonb NOT NULL",
+          "7 baseline jsonb/jsonb NULL",
+          "8 calibrated jsonb/jsonb NULL",
+          "9 result_id bigint/int8 NULL",
+          "10 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "11 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_think_publications": {
+        "columns": [
+          "1 plan_id uuid/uuid NOT NULL",
+          "2 run_id text/text NOT NULL",
+          "3 request_key text/text NOT NULL",
+          "4 source_id text/text NOT NULL",
+          "5 source_incarnation uuid/uuid NOT NULL",
+          "6 payload jsonb/jsonb NOT NULL",
+          "7 payload_hash text/text NOT NULL",
+          "8 admitted ARRAY/_int4 NOT NULL DEFAULT '{}'::integer[]",
+          "9 state text/text NOT NULL DEFAULT 'accepted'::text",
+          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "11 completed_at timestamp with time zone/timestamptz NULL"
+        ],
+        "flags": "relkind=r rls=true force_rls=false"
+      },
+      "codex_upgrade_receipts": {
+        "columns": [
+          "1 sequence bigint/int8 NOT NULL DEFAULT nextval('codex_upgrade_receipts_sequence_seq'::regclass)",
+          "2 id uuid/uuid NOT NULL",
+          "3 kind text/text NOT NULL",
+          "4 plan_hash text/text NOT NULL",
+          "5 plan jsonb/jsonb NOT NULL",
+          "6 state text/text NOT NULL",
+          "7 receipt jsonb/jsonb NOT NULL",
+          "8 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "9 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
@@ -2171,7 +2762,8 @@
           "9 rollup_write_failures integer/int4 NOT NULL DEFAULT 0",
           "10 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
           "11 expected_limit_count integer/int4 NOT NULL DEFAULT 0",
-          "12 halt_reasons jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb"
+          "12 halt_reasons jsonb/jsonb NOT NULL DEFAULT '{}'::jsonb",
+          "13 subscription_run_count integer/int4 NOT NULL DEFAULT 0"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
@@ -2581,7 +3173,8 @@
           "47 budget_owner_job_id bigint/int8 NULL",
           "48 budget_root_owner_id bigint/int8 NULL",
           "49 spend_authorization jsonb/jsonb NULL",
-          "50 spend_claim_token bigint/int8 NULL"
+          "50 spend_claim_token bigint/int8 NULL",
+          "51 codex_claim_token bigint/int8 NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
@@ -3677,7 +4270,8 @@
           "12 ordinal integer/int4 NULL",
           "13 gbrain_tool_use_id uuid/uuid NULL",
           "14 started_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
-          "15 ended_at timestamp with time zone/timestamptz NULL"
+          "15 ended_at timestamp with time zone/timestamptz NULL",
+          "16 host_binding jsonb/jsonb NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
@@ -3771,7 +4365,8 @@
           "18 acted_by text/text NULL",
           "19 promoted_row_num integer/int4 NULL",
           "20 predicted_brier real/float4 NULL",
-          "21 predicted_brier_bucket_n integer/int4 NULL"
+          "21 predicted_brier_bucket_n integer/int4 NULL",
+          "22 codex_evidence jsonb/jsonb NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
@@ -3969,6 +4564,7 @@
     },
     "triggers": {
       "access_tokens.trust_generation_update": "CREATE CONSTRAINT TRIGGER trust_generation_update AFTER UPDATE ON public.access_tokens DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((old.min_trust IS DISTINCT FROM new.min_trust)) EXECUTE FUNCTION gbrain_bump_trust_generation()",
+      "codex_subscription_runs.codex_subscription_group_guard": "CREATE TRIGGER codex_subscription_group_guard BEFORE INSERT OR UPDATE ON public.codex_subscription_runs FOR EACH ROW EXECUTE FUNCTION gbrain_codex_subscription_group_guard()",
       "config.trust_generation_delete": "CREATE CONSTRAINT TRIGGER trust_generation_delete AFTER DELETE ON public.config DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((old.key ~~ 'trust.%'::text)) EXECUTE FUNCTION gbrain_bump_trust_generation()",
       "config.trust_generation_insert": "CREATE CONSTRAINT TRIGGER trust_generation_insert AFTER INSERT ON public.config DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((new.key ~~ 'trust.%'::text)) EXECUTE FUNCTION gbrain_bump_trust_generation()",
       "config.trust_generation_update": "CREATE CONSTRAINT TRIGGER trust_generation_update AFTER UPDATE ON public.config DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((((old.key ~~ 'trust.%'::text) OR (new.key ~~ 'trust.%'::text)) AND ((old.key IS DISTINCT FROM new.key) OR (old.value IS DISTINCT FROM new.value)))) EXECUTE FUNCTION gbrain_bump_trust_generation()",
@@ -3980,6 +4576,8 @@
       "facts.managed_writer_guard": "CREATE TRIGGER managed_writer_guard BEFORE INSERT OR DELETE OR UPDATE ON public.facts FOR EACH ROW EXECUTE FUNCTION gbrain_require_managed_writer()",
       "facts.trust_generation_update": "CREATE CONSTRAINT TRIGGER trust_generation_update AFTER UPDATE ON public.facts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((old.trust_tier IS DISTINCT FROM new.trust_tier)) EXECUTE FUNCTION gbrain_bump_trust_generation()",
       "facts.trust_tier_stamp": "CREATE TRIGGER trust_tier_stamp BEFORE INSERT OR UPDATE ON public.facts FOR EACH ROW EXECUTE FUNCTION gbrain_stamp_trust_tier()",
+      "minion_jobs.codex_job_parking": "CREATE TRIGGER codex_job_parking BEFORE INSERT OR DELETE OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_parking()",
+      "minion_jobs.codex_job_protocol": "CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol()",
       "minion_jobs.minion_job_notify": "CREATE TRIGGER minion_job_notify AFTER INSERT OR UPDATE OF status ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION notify_minion_job_change()",
       "minion_jobs.minion_queue_protocol": "CREATE TRIGGER minion_queue_protocol BEFORE INSERT OR UPDATE ON public.minion_jobs FOR EACH ROW EXECUTE FUNCTION enforce_minion_queue_protocol()",
       "needs_rederive.trust_generation_insert": "CREATE CONSTRAINT TRIGGER trust_generation_insert AFTER INSERT ON public.needs_rederive DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (true) EXECUTE FUNCTION gbrain_bump_trust_generation()",
