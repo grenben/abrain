@@ -1,6 +1,5 @@
 import { openAIPromptCacheKey } from './chat-format.ts';
 export { openAIPromptCacheKey } from './chat-format.ts';
-import { codexChat, codexExpand, codexOcr } from './codex-chat.ts';
 import { assertPrivateRoute, readPrivateCodexConfig } from './private-policy.ts';
 /**
  * AI Gateway — unified seam for every AI call gbrain makes.
@@ -2497,7 +2496,7 @@ function normalizeSdkUsage(usage: unknown): { inputTokens: number; outputTokens:
  */
 export async function expand(query: string): Promise<string[]> {
   const privatePolicy = readPrivateCodexConfig();
-  if (privatePolicy && query.trim()) return codexExpand(query, privatePolicy);
+  if (privatePolicy && query.trim()) return (await import('./codex-chat.ts')).codexExpand(query, privatePolicy);
   if (!query || !query.trim()) return [query];
   if (!isAvailable('expansion')) return [query];
 
@@ -2696,7 +2695,7 @@ export async function expand(query: string): Promise<string[]> {
  */
 export async function generateOcrText(imageBytes: Buffer, mime: string): Promise<string> {
   const privatePolicy = readPrivateCodexConfig();
-  if (privatePolicy) return codexOcr(imageBytes, mime, privatePolicy);
+  if (privatePolicy) return (await import('./codex-chat.ts')).codexOcr(imageBytes, mime, privatePolicy);
   // Unconfigured gateway stays a silent '' no-op (the pre-#4107 isAvailable
   // gate's behavior), never a requireConfig() throw.
   if (!_config) return '';
@@ -3525,7 +3524,7 @@ export function toAISDKTools(tools: ChatToolDef[] | undefined): Record<string, a
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
   assertPrivateRoute(opts.model ?? getChatModel(), 'gateway.chat');
   const privatePolicy = readPrivateCodexConfig();
-  if (privatePolicy) return codexChat(opts, privatePolicy);
+  if (privatePolicy) return (await import('./codex-chat.ts')).codexChat(opts, privatePolicy);
   await discoverBeforeOpenAICall(opts.model ?? _config?.chat_model);
   const fallbackChain = opts.allowFallback === false ? undefined : _config?.chat_fallback_chain;
   if (fallbackChain?.length) return chatWithFallback(opts, opts.model ?? getChatModel(), fallbackChain, chat, { onRefusal: _config?.chat_fallback_on_refusal !== false });
