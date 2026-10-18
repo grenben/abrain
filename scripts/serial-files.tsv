@@ -447,15 +447,6 @@ test/ai/codex-think.serial.test.ts	global-state	global-state: imported think con
 test/backup-preflight-6649.serial.test.ts	global-state	global-state: R3: constructs PGLiteEngine inside the restore-drill and fixture-brain steps (each disconnected in finally); creates symlinked homes and 8 GiB sparse files
 test/context-assemble-load-warning.serial.test.ts	R2	R2: mock.module(../src/core/engine-factory.ts) replaces modules for every file in the process; R1: mutates process.env (GBRAIN_HOME, DATABASE_URL, GBRAIN_DATABASE_URL)
 test/coordination-lock.serial.test.ts	global-state	global-state: withEnv holds GBRAIN_HOME and GBRAIN_COORDINATION_HOME across awaited PGLite claims and transfers, and real native lock files are held across them
-test/divergence-safe-pull-5429.serial.test.ts	R1	R1: mutates process.env (GBRAIN_GIT_ALLOW_FILE_TRANSPORT) and spies on node:child_process
-test/embed-stale-progress-5968.serial.test.ts	R1	R1: mutates process.env (GBRAIN_MAX_CHUNK_TOKENS)
-test/eval-longmemeval-via-operation.serial.test.ts	global-state	global-state: configureGateway changes the process-wide AI gateway; process-wide test seams __setEmbedTransportForTests, __setGenerateObjectTransportForTests, __setRerankTransportForTests; process.chdir to prove the summary names gbrain's own tree
-test/hook-push-banner-superseded.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME, GBRAIN_BACKUP_CHECK)
-test/init-search-mode.serial.test.ts	global-state	global-state: spawns real gbrain init/config CLI children against PGLite datastores in temp homes (180 s budget each)
 test/large-pages/segmented-think-compile-leads.serial.test.ts	global-state	global-state: process-wide test seams __setEmbedTransportForTests
 test/resolve-ipc-rebind.serial.test.ts	global-state	global-state: binds real Unix sockets and spawns a child serve that is SIGKILLed; withEnv scopes GBRAIN_HOME
-test/search/mode-receipt.serial.test.ts	global-state	global-state: configureGateway changes the process-wide AI gateway; process-wide test seams __setEmbedTransportForTests, __setRerankTransportForTests, __setChatTransportForTests, __setGenerateTextTransportForTests, __setGenerateObjectTransportForTests; R3: constructs PGLiteEngine outside beforeAll
-test/search/query-expand-capture-replay.serial.test.ts	global-state	global-state: spyOn replaces the hybridSearch module export process-wide
-test/spawn-seam-batch1-4992.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME, GIT_DIR) and spies on node:child_process
-test/sync-managed-implied-no-pull-6543.serial.test.ts	global-state	global-state: patches process stdout/stderr/console to keep the notice off stdout and traps process.exit for the --all path; R1: mutates process.env (GBRAIN_HOME, GBRAIN_SYNC_NO_DELEGATE)
 test/windows-ipc-long-path-6573.serial.test.ts	R1	R1: mutates process.env (USERPROFILE) to place the per-user run dir under a non-ASCII profile path; native windows-latest only
