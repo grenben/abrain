@@ -100,8 +100,9 @@ for pre-execution denial. A reproducible, credential-free Linux probe now checks
 the host boundary, pinned ELF, inode protection, PID-namespace launch,
 zero-tool request plan, synthetic PNG transport, hostile ancestor instructions,
 and rejection of seven forced local calls, including a shell call with a
-non-denying hook. The local 0.162.0 binary passes
-the synthetic action checks but fails production inode protection because it
+non-denying hook. One signed-in synthetic schema-and-image call also completed
+with a valid answer and no native-action event. The local 0.162.0 binary
+passes these bounded checks but fails production inode protection because it
 is user-owned; all-path qualification is unfinished and the production registry
 remains empty.
 [Private drift](private-codex-drift.md) now validates native proposals and preserves

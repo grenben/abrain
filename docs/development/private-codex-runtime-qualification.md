@@ -195,10 +195,10 @@ provider forced each of the seven local test calls, including one with a
 non-denying hook, Codex returned `unsupported call` as a function output;
 neither scratch-file marker was created. The synthetic image was present in
 the mock provider request while zero tools were advertised. The hostile
-ancestor instruction marker did not reach any provider request. The installed ELF fails
-`runtimeFileProtected` because it is owned by `devadmin`, so the complete probe
-exits 1. The JSON record preserves the digest, version, request/tool counts,
-forced-call outputs, and each result. Even a future green run is only a bounded
+ancestor instruction marker did not reach any provider request. The installed
+ELF fails `runtimeFileProtected` because it is owned by `devadmin`, so the
+complete probe exits 1. The JSON record preserves the digest, version,
+request/tool counts, forced-call outputs, and each result. Even a future green run is only a bounded
 probe: it cannot establish that every configuration, instruction, hosted action,
 image path, or descendant-crash case is safe. The production hash registry
 remains empty.
@@ -229,3 +229,26 @@ This demonstrates that the current binary can complete the configured JSON
 transport. It does **not** prove the required pre-execution denial across all
 native and hosted action paths, hook failures, inherited configuration, or
 process-tree escapes, so the production allowlist stays empty.
+
+## Signed-in synthetic image transport — 2026-10-18
+
+`scripts/codex-runtime-live-synthetic-probe.ts` requires an explicit `--live`
+argument and uses the existing Codex login without copying credentials. It
+runs one bounded model call through the pinned descriptor and PID-namespace
+runner with the current schema/argv, a made-up one-sentence source chunk, and
+the same one-pixel PNG. It prints only a validity verdict, lifecycle event
+types, and token usage; scratch files are removed after settlement. Run it
+only when a signed-in synthetic model call is intended:
+
+```sh
+bun scripts/codex-runtime-live-synthetic-probe.ts --live /absolute/path/to/codex gpt-6.1-sol
+```
+
+On this host, the local 0.162.0 binary returned a schema-valid answer with
+the exact synthetic quote. Its answer file matched the completed lifecycle
+text, and the event sequence was `thread.started`, `turn.started`, one
+`item.completed` agent message, and `turn.completed`. The reported usage was
+1,031 input and 64 output tokens; no native-action event appeared. This proves
+one signed-in schema-and-image transport case. The binary is still user-owned,
+so `runtimeFileProtected` is false. The production hash registry remains empty,
+and one successful model call does not establish all-path action isolation.
