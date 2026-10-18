@@ -23,6 +23,7 @@ describe('golden harness', () => {
 
   test('scrubbers replace volatile text', () => {
     expect(scrubTimestamps('at 2026-09-30T12:00:01.123Z ok')).toBe('at <ts> ok');
+    expect(scrubTimestamps('at 2026-10-10 12:00:00+01 or 2026-10-10 12:00:00+00')).toBe('at <ts> or <ts>');
     expect(scrubDurations('took 12ms and 1.5s')).toBe('took <dur> and <dur>');
     expect(scrubPaths(`${tmpdir()}/x/y and /home/me/brain/z`, { '<brain>': '/home/me/brain' })).toBe('<tmp>/x/y and <brain>/z');
     expect(scrubKeys({ a: 1, took_ms: 5, n: { duration: 3 } }, /_ms$|^duration$/)).toEqual({

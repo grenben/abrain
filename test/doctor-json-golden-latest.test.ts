@@ -7,7 +7,7 @@
  * registry maximum.
  */
 import { describe, expect, test } from 'bun:test';
-import { expectSchemaLatestMatchesRegistry, normalizeDoctorText, type GbrainRun } from './helpers/doctor-json-golden.ts';
+import { doctorJsonNormalizer, expectSchemaLatestMatchesRegistry, normalizeDoctorText, type GbrainRun } from './helpers/doctor-json-golden.ts';
 import { MIGRATIONS } from '../src/core/schema-migrations/registry.generated.ts';
 
 const LATEST = Math.max(...MIGRATIONS.map((m) => m.version));
@@ -30,5 +30,19 @@ describe('doctor golden <latest> placeholder', () => {
     expect(() => expectSchemaLatestMatchesRegistry(run(`Version ${LATEST - 1} (latest: ${LATEST - 1})`))).toThrow(/registry maximum/);
     expect(() => expectSchemaLatestMatchesRegistry(run(`Version ${LATEST - 1}, latest is ${LATEST}.`))).toThrow(/Fix: {2}bun run build:schema-migrations/);
     expect(() => expectSchemaLatestMatchesRegistry({ ...run(''), json: null })).toThrow(/no schema_version check/);
+  });
+
+  test('terminal-byte forecasts ignore temporary path length but retain policy and status', () => {
+    const normalized = doctorJsonNormalizer().apply({
+      ...run(''),
+      json: { checks: [{ name: 'quota', details: { rows: [
+        { resource: 'terminal_bytes', used: 123, max_day_7d: 123, per_day_7d: 123, net_per_day_7d: 50, reclaimable_bytes: 73, limit: 1000, status: 'ok' },
+        { resource: 'lifetime_ids', used: 5, limit: 1000, status: 'ok' },
+      ] } }] },
+    }) as { report: unknown };
+    expect(normalized.report).toEqual({ checks: [{ name: 'quota', details: { rows: [
+      { resource: 'terminal_bytes', used: '<volatile>', max_day_7d: '<volatile>', per_day_7d: '<volatile>', net_per_day_7d: '<volatile>', reclaimable_bytes: '<volatile>', limit: 1000, status: 'ok' },
+      { resource: 'lifetime_ids', used: 5, limit: 1000, status: 'ok' },
+    ] } }] });
   });
 });

@@ -496,18 +496,18 @@
                   "days_to_exhaustion": null,
                   "exhaustion_date": null,
                   "limit": 68719476736,
-                  "max_day_7d": 19163,
-                  "net_per_day_7d": 2845,
+                  "max_day_7d": "<volatile>",
+                  "net_per_day_7d": "<volatile>",
                   "pct": 0,
-                  "per_day_7d": 19163,
-                  "reclaimable_bytes": 16318,
+                  "per_day_7d": "<volatile>",
+                  "reclaimable_bytes": "<volatile>",
                   "recommended_limit": 137438953472,
                   "resource": "terminal_bytes",
                   "scope": "brain",
                   "spike_day": null,
                   "status": "ok",
                   "under_reserved_receipts": 0,
-                  "used": 19163,
+                  "used": "<volatile>",
                   "window_days": 1
                 },
                 {
@@ -533,18 +533,18 @@
                   "days_to_exhaustion": null,
                   "exhaustion_date": null,
                   "limit": 17179869184,
-                  "max_day_7d": 19163,
-                  "net_per_day_7d": 2845,
+                  "max_day_7d": "<volatile>",
+                  "net_per_day_7d": "<volatile>",
                   "pct": 0,
-                  "per_day_7d": 19163,
-                  "reclaimable_bytes": 16318,
+                  "per_day_7d": "<volatile>",
+                  "reclaimable_bytes": "<volatile>",
                   "recommended_limit": 34359738368,
                   "resource": "terminal_bytes",
                   "scope": "principal:local_cli:<uuid>",
                   "spike_day": null,
                   "status": "ok",
                   "under_reserved_receipts": 0,
-                  "used": 19163,
+                  "used": "<volatile>",
                   "window_days": 1
                 }
               ],
@@ -834,7 +834,7 @@
           "category": "brain",
           "details": {
             "archived": 0,
-            "as_of": "<ts>+00",
+            "as_of": "<ts>",
             "failed": 0,
             "ocr_required": 0,
             "oldest_age_seconds": "<volatile>",
@@ -945,14 +945,14 @@
         {
           "category": "meta",
           "elapsed_ms": "<volatile>",
-          "message": "1258 column(s) verified against live schema",
+          "message": "1449 column(s) verified against live schema",
           "name": "schema_columns",
           "status": "ok"
         },
         {
           "category": "meta",
           "elapsed_ms": "<volatile>",
-          "message": "All 149 table(s) the applied migrations create exist.",
+          "message": "All 170 table(s) the applied migrations create exist.",
           "name": "schema_missing_tables",
           "status": "ok"
         },
@@ -3186,11 +3186,12 @@
           "category": "meta",
           "details": {
             "counts": {
-              "global": 16,
+              "global": 17,
               "mixed": 2,
               "source": 12
             },
             "phase_scope_map": {
+              "auto_think": "global",
               "backlinks": "source",
               "calibration_profile": "global",
               "chronicle": "global",
@@ -3224,7 +3225,7 @@
             }
           },
           "elapsed_ms": "<volatile>",
-          "message": "Phase taxonomy: 12 source-scoped, 16 brain-global, 2 mixed. Source-safe: [lint, backlinks, sync, extract, extract_facts, extract_atoms, recompute_emotional_weight, consolidate, propose_takes, conversation_facts_backfill, enrich_thin, schema-suggest]. Brain-global: [fence_repair, content_repair, unindexed_files, resolve_symbol_edges, synthesize_concepts, grade_takes, calibration_profile, edge_contradictions, drift, standing_questions, chronicle, facts_drain, skillopt, embed, orphans, purge]. Mixed: [synthesize, patterns].",
+          "message": "Phase taxonomy: 12 source-scoped, 17 brain-global, 2 mixed. Source-safe: [lint, backlinks, sync, extract, extract_facts, extract_atoms, recompute_emotional_weight, consolidate, propose_takes, conversation_facts_backfill, enrich_thin, schema-suggest]. Brain-global: [fence_repair, content_repair, unindexed_files, resolve_symbol_edges, synthesize_concepts, grade_takes, calibration_profile, auto_think, edge_contradictions, drift, standing_questions, chronicle, facts_drain, skillopt, embed, orphans, purge]. Mixed: [synthesize, patterns].",
           "name": "cycle_phase_scope",
           "status": "ok"
         },

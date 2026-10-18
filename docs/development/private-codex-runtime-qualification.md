@@ -32,7 +32,11 @@ are not a denial guarantee. Accordingly, the configured `PreToolUse` deny hook
 alone cannot establish the required boundary.
 
 The official [0.162.0 release](https://github.com/openai/codex/releases/tag/rust-v0.162.0)
-points to source commit `c138238`. Its tagged
+points to source commit `c138238`. The release's Linux musl archive was checked
+against its published SHA-256 (`8daf67f6261161aa5939d8d42a516032d760406216779d7ce6040f242140ff73`),
+and the extracted executable is byte-for-byte identical to the local binary
+(SHA-256 above). This ties the inspected executable to the official release
+artifact, although it does not qualify its tool boundary. Its tagged
 [`PreToolUse` parser](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/hooks/src/events/pre_tool_use.rs)
 sets `should_block` for a trusted exit-2 hook with a nonempty stderr reason,
 but leaves it false for hook execution errors, other nonzero exits, an exit-2
@@ -41,9 +45,12 @@ hook without a reason, and serialization failure. Its tagged
 gates shell tools on `Feature::ShellTool` while registering `apply_patch`
 separately when the model and environment support it. These source paths make
 the deny hook and `features.shell_tool=false` insufficient as a complete
-pre-execution boundary. The local 0.162.0 binary's hash has not been tied to
-the release artifact, so the tagged source is evidence about the published
-version, not proof that this exact installed binary has identical behavior.
+pre-execution boundary. The tagged
+[hook discovery code](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/hooks/src/engine/discovery.rs)
+classifies hooks supplied by `-c` session flags as non-managed and only installs
+an enabled hook handler when its hash is trusted or hook trust is explicitly
+bypassed. GBrain's current argv does neither. The configured deny hook therefore
+cannot be assumed to run, even for a tool path it covers.
 
 The [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
 and [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
@@ -51,9 +58,9 @@ describe controls, but do not independently prove that this exact binary denies
 all native tools and ignores all untrusted configuration/instructions. Cached
 upstream main-branch source is not proof of this installed binary's behavior.
 
-Qualification still needs corresponding pinned runtime source/build evidence
-and credential-free adversarial tests of the effective tool registry, hook trust,
-configuration inheritance, instruction loading and process-tree settlement.
+Qualification still needs credential-free adversarial tests of the effective
+tool registry, hook trust, configuration inheritance, instruction loading and
+process-tree settlement.
 Then separately authorized isolated live checks must exercise schema/image
 transport, cancellation and subscription authentication. Do not remove the
 gate or silently switch to another provider to make those checks green.
@@ -77,10 +84,11 @@ The argv now uses `features.hooks=true`, omits the redundant deprecated
 `memory_tool` key, and suppresses the unstable-feature notice while retaining
 `skip_host_skill_discovery=true`.
 
-With those changes, an adversarial scratch prompt asking for a harmless
-scratch-file write produced only `thread.started`, `turn.started`, an
-`agent_message`, and `turn.completed`; the parser accepted the JSON answer.
-It left no marker file and produced no native-action event. The focused fake
+With those changes, adversarial scratch prompts asking for a harmless
+scratch-file write, including one that named `apply_patch`, produced only
+`thread.started`, `turn.started`, an `agent_message`, and `turn.completed`; the
+parser accepted the JSON answer.
+They left no marker file and produced no native-action event. The focused fake
 transport contract passed 17 tests / 62 assertions after the argv change.
 This demonstrates that the current binary can complete the configured JSON
 transport. It does **not** prove the required pre-execution denial across all

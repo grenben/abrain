@@ -69,7 +69,7 @@ export function sha256(text: string): string {
 
 // ─── Normalizer building blocks ─────────────────────────────────────────
 
-const ISO_TS = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
+const ISO_TS = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)?\b/g;
 const DURATION = /\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds|m|min)\b/g;
 
 /** Replace ISO-8601 timestamps with `<ts>`. */

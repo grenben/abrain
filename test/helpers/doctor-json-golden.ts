@@ -13,7 +13,8 @@
  *
  * Normalizer `doctor-json-v1`: ordered checks (name, status, message,
  * details, issues) plus the report envelope, with volatile tokens replaced:
- * temp home / repo / os tmpdir paths, UUIDs, ISO timestamps, the running
+ * temp home / repo / os tmpdir paths, path-dependent terminal-byte forecasts,
+ * UUIDs, ISO timestamps, the running
  * package and Bun versions, the machine hostname, and `*_ms` / elapsed / pid-style
  * detail keys, and the latest schema migration number in the `schema_version`
  * message (`<latest>`, so a migration renumber does not churn the goldens;
@@ -193,13 +194,25 @@ function maskWriterFloor(value: unknown): unknown {
     [k, k === 'floor' && v === SEGMENTED_WRITER_FLOOR ? '<segmented-writer-floor>' : maskWriterFloor(v)]));
 }
 
+/** Terminal-byte totals include temporary absolute paths and vary with TMPDIR length. */
+function maskPathDependentForecastBytes(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(maskPathDependentForecastBytes);
+  if (!value || typeof value !== 'object') return value;
+  const row = value as Record<string, unknown>;
+  const volatile = row.resource === 'terminal_bytes'
+    ? new Set(['used', 'max_day_7d', 'per_day_7d', 'net_per_day_7d', 'reclaimable_bytes'])
+    : null;
+  return Object.fromEntries(Object.entries(row).map(([k, v]) =>
+    [k, volatile?.has(k) ? '<volatile>' : maskPathDependentForecastBytes(v)]));
+}
+
 export function doctorJsonNormalizer(extra: Array<[RegExp | string, string]> = [], name = 'doctor-json-v1') {
   return defineNormalizer<GbrainRun>(name, (run) => {
     const fn = (s: string) => normalizeDoctorText(s, run.roots, extra);
     return {
       args: run.args.map(fn),
       exit_code: run.exitCode,
-      report: run.json === null ? null : mapStrings(maskWriterFloor(scrubKeys(run.json, VOLATILE_KEYS)), fn),
+      report: run.json === null ? null : mapStrings(maskPathDependentForecastBytes(maskWriterFloor(scrubKeys(run.json, VOLATILE_KEYS))), fn),
       stdout: run.json === null ? fn(run.stdout).split('\n').filter(Boolean) : '<json>',
       stderr: fn(run.stderr).split('\n').filter(Boolean),
     };
