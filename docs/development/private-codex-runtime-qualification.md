@@ -31,6 +31,20 @@ search is one documented exclusion; malformed unsupported permission fields
 are not a denial guarantee. Accordingly, the configured `PreToolUse` deny hook
 alone cannot establish the required boundary.
 
+The official [0.162.0 release](https://github.com/openai/codex/releases/tag/rust-v0.162.0)
+points to source commit `c138238`. Its tagged
+[`PreToolUse` parser](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/hooks/src/events/pre_tool_use.rs)
+sets `should_block` for a trusted exit-2 hook with a nonempty stderr reason,
+but leaves it false for hook execution errors, other nonzero exits, an exit-2
+hook without a reason, and serialization failure. Its tagged
+[tool plan](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/core/src/tools/spec_plan.rs)
+gates shell tools on `Feature::ShellTool` while registering `apply_patch`
+separately when the model and environment support it. These source paths make
+the deny hook and `features.shell_tool=false` insufficient as a complete
+pre-execution boundary. The local 0.162.0 binary's hash has not been tied to
+the release artifact, so the tagged source is evidence about the published
+version, not proof that this exact installed binary has identical behavior.
+
 The [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
 and [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 describe controls, but do not independently prove that this exact binary denies
