@@ -201,7 +201,8 @@ checks the host boundary, executable hash and inode protection, obtains the
 offline version, and uses disposable loopback mock providers to inspect the
 tool plan and force unadvertised shell, patch, code-mode, image-read, goal,
 and MCP-resource calls. It also injects a typed Responses API
-`local_shell_call`, a separate response item from a named function call. One
+`local_shell_call`, a custom `apply_patch` call, and a client-side
+`tool_search_call`, separate response forms from a named function call. One
 shell case replaces the deny hook with a script
 that exits successfully without denying anything. It also sends a one-pixel
 synthetic PNG through the configured `--image` path and checks that an
@@ -231,12 +232,18 @@ probe: it cannot establish that every configuration, instruction, hosted action,
 image path, or descendant-crash case is safe. The production hash registry
 remains empty.
 
-The typed `local_shell_call` extension ran against the same exact ELF and
-credential-free loopback provider. Its one request advertised zero tools;
-Codex made no follow-up function-call output, created no scratch marker, and
-the runner settled. This confirms no local execution for this one typed
-shell response. The probe still exits 1 because the executable inode is
-user-owned; it does not prove server-side hosted actions are impossible.
+The typed response extensions ran against the same exact ELF and
+credential-free loopback provider. `local_shell_call` produced no follow-up
+function-call output or scratch marker. A custom `apply_patch` call returned
+`unsupported custom tool call: apply_patch`; a client-side `tool_search_call`
+returned a completed search response containing zero tools. All their
+requests advertised zero tools, and no scratch marker was created. These
+results cover those bounded local dispatch paths. The tagged tool plan emits
+hosted web search only when its mode is enabled; GBrain sets
+`web_search="disabled"`, and the mock provider saw zero advertised tools.
+A provider-side hosted action could occur before a response item reaches the
+client, so post-hoc lifecycle rejection cannot establish its prevention.
+The full probe still exits 1 because the executable inode is user-owned.
 
 ## Disposable live transport probe — 2026-10-18
 

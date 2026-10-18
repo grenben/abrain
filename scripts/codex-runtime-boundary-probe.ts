@@ -31,9 +31,11 @@ const childEnv = { PATH: '/usr/bin:/bin', HOME: home, CODEX_HOME: home,
 type Request = { tools?: unknown; input?: unknown };
 const forcedNames = ['exec_command', 'apply_patch', 'functions.exec', 'view_image',
   'get_goal', 'list_mcp_resources', 'exec_command_broken_hook'] as const;
-type Scenario = 'plan' | 'image_plan' | 'local_shell_call' | typeof forcedNames[number];
+const typedNames = ['custom_apply_patch', 'tool_search_client'] as const;
+type Scenario = 'plan' | 'image_plan' | 'local_shell_call' | typeof forcedNames[number] | typeof typedNames[number];
 type ScenarioResult = { requests: number; toolCounts: number[]; outputs: string[]; reason: string;
-  markerCreated: boolean; ancestorSentinelSeen: boolean; imageSeen: boolean };
+  markerCreated: boolean; ancestorSentinelSeen: boolean; imageSeen: boolean;
+  searchResponses: Array<{ status: string; tools: number }> };
 const forcedArguments = (name: Scenario): string => {
   if (name === 'exec_command') return JSON.stringify({ cmd: 'touch native-tool-ran' });
   if (name === 'apply_patch') return JSON.stringify({ patch: '*** Begin Patch\n*** Add File: native-tool-ran\n+marker\n*** End Patch' });
@@ -60,6 +62,12 @@ async function scenario(name: Scenario): Promise<ScenarioResult> {
       ? { type: 'local_shell_call', call_id: 'forced-1', status: 'completed',
         action: { type: 'exec', command: ['/bin/sh', '-c', 'touch native-tool-ran'],
           timeout_ms: 1000, working_directory: null, env: null, user: null } }
+      : name === 'custom_apply_patch'
+        ? { type: 'custom_tool_call', call_id: 'forced-1', name: 'apply_patch',
+          input: '*** Begin Patch\n*** Add File: native-tool-ran\n+marker\n*** End Patch' }
+        : name === 'tool_search_client'
+          ? { type: 'tool_search_call', call_id: 'forced-1', execution: 'client',
+            arguments: { query: 'native-tool-ran', limit: 1 } }
       : { type: 'function_call', call_id: 'forced-1', name: callName,
         arguments: forcedArguments(callName) };
     const events = requests.length === 1
@@ -104,12 +112,20 @@ async function scenario(name: Scenario): Promise<ScenarioResult> {
       ? request.input.flatMap(item => {
         if (!item || typeof item !== 'object') return [];
         const row = item as { type?: unknown; output?: unknown };
-        return row.type === 'function_call_output' ? [String(row.output)] : [];
+        return row.type === 'function_call_output' || row.type === 'custom_tool_call_output'
+          ? [String(row.output)] : [];
       }) : []);
     const markerCreated = await access(join(scratch, 'native-tool-ran')).then(() => true, () => false);
+    const searchResponses = requests.flatMap(request => Array.isArray(request.input)
+      ? request.input.flatMap(item => {
+        if (!item || typeof item !== 'object') return [];
+        const row = item as { type?: unknown; status?: unknown; tools?: unknown };
+        return row.type === 'tool_search_output'
+          ? [{ status: String(row.status), tools: Array.isArray(row.tools) ? row.tools.length : -1 }] : [];
+      }) : []);
     return { requests: requests.length, toolCounts: requests.map(request => Array.isArray(request.tools) ? request.tools.length : -1),
       outputs, reason, markerCreated, ancestorSentinelSeen: requests.some(request => JSON.stringify(request).includes(ancestorSentinel)),
-      imageSeen: requests.some(request => JSON.stringify(request).includes('input_image')) };
+      imageSeen: requests.some(request => JSON.stringify(request).includes('input_image')), searchResponses };
   } finally { server.stop(true); await rm(scratch, { recursive: true, force: true }); }
 }
 
@@ -132,15 +148,23 @@ try {
   const plan = await scenario('plan');
   const imagePlan = await scenario('image_plan');
   const typedLocalShell = await scenario('local_shell_call');
+  const typed: Record<string, ScenarioResult> = {};
+  for (const name of typedNames) typed[name] = await scenario(name);
   const forced: Record<string, ScenarioResult> = {};
   for (const name of forcedNames) forced[name] = await scenario(name);
-  const all = [plan, imagePlan, typedLocalShell, ...forcedNames.map(name => forced[name]!)];
+  const all = [plan, imagePlan, typedLocalShell, ...typedNames.map(name => typed[name]!), ...forcedNames.map(name => forced[name]!)];
   const zeroTools = all.every(item => item.requests > 0 && item.toolCounts.every(count => count === 0));
   const rejectedForcedCalls = forcedNames.every(name => forced[name]!.outputs.includes(
     `unsupported call: ${name === 'exec_command_broken_hook' ? 'exec_command' : name}`)
     && !forced[name]!.markerCreated);
   const typedLocalShellDenied = typedLocalShell.requests > 0 && !typedLocalShell.markerCreated
     && typedLocalShell.outputs.length === 0;
+  const customCallDenied = typed.custom_apply_patch!.outputs.includes('unsupported custom tool call: apply_patch')
+    && !typed.custom_apply_patch!.markerCreated;
+  const clientToolSearchDenied = typed.tool_search_client!.requests > 0
+    && !typed.tool_search_client!.markerCreated
+    && typed.tool_search_client!.searchResponses.length > 0
+    && typed.tool_search_client!.searchResponses.every(response => response.status === 'completed' && response.tools === 0);
   const ancestorInstructionsIgnored = all.every(item => !item.ancestorSentinelSeen);
   const imageTransport = imagePlan.requests > 0 && imagePlan.imageSeen;
   const result = { sha256, version: version.trim(), model, hostBoundary: 'pass', runtimeFileProtected,
@@ -148,9 +172,15 @@ try {
     imagePlan: { requests: imagePlan.requests, toolCounts: imagePlan.toolCounts, imageSeen: imagePlan.imageSeen },
     typedLocalShell: { requests: typedLocalShell.requests, toolCounts: typedLocalShell.toolCounts,
       reason: typedLocalShell.reason, markerCreated: typedLocalShell.markerCreated },
+    typed: Object.fromEntries(typedNames.map(name => [name, { requests: typed[name]!.requests,
+      toolCounts: typed[name]!.toolCounts, outputs: typed[name]!.outputs,
+      reason: typed[name]!.reason, markerCreated: typed[name]!.markerCreated,
+      searchResponses: typed[name]!.searchResponses }])),
     forced: Object.fromEntries(forcedNames.map(name => [name, forced[name]!.outputs])),
-    zeroTools, rejectedForcedCalls, typedLocalShellDenied, ancestorInstructionsIgnored, imageTransport };
+    zeroTools, rejectedForcedCalls, typedLocalShellDenied, customCallDenied,
+    clientToolSearchDenied, ancestorInstructionsIgnored, imageTransport };
   console.log(JSON.stringify(result));
   if (!runtimeFileProtected || !zeroTools || !rejectedForcedCalls || !typedLocalShellDenied
+    || !customCallDenied || !clientToolSearchDenied
     || !ancestorInstructionsIgnored || !imageTransport) process.exitCode = 1;
 } finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
