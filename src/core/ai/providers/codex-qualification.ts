@@ -35,7 +35,7 @@ async function assertLinuxHostBoundary(root: string, trustedUid: number, callerU
 }
 
 /** Production boundary is fixed to the Linux system path; other platforms stay unqualified. */
-async function assertProductionCodexHostBoundary(): Promise<void> {
+export async function assertProductionCodexHostBoundary(): Promise<void> {
   if (process.platform !== 'linux' || !process.getuid) throw new Error('unsupported host boundary');
   await assertLinuxHostBoundary('/', 0, process.getuid());
 }

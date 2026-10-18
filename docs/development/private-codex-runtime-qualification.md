@@ -165,6 +165,30 @@ The production hash registry remains empty while real-runtime action-path,
 host-support, and wider process-crash checks remain incomplete. This local
 synthetic settlement result does not establish macOS behavior.
 
+## Reproducible local boundary probe
+
+`scripts/codex-runtime-boundary-probe.ts` runs the exact configured ELF by its
+open file descriptor inside the production Linux PID-namespace wrapper. It
+checks the host admission boundary and executable hash, obtains the offline
+version, and uses disposable loopback mock providers to inspect the tool plan
+and force unadvertised `exec_command` and `apply_patch` calls. It uses an empty
+temporary HOME/CODEX_HOME, synthetic schema and prompt, and no brain data or
+subscription credential. Run it with Bun 1.4.3 on each candidate host:
+
+```sh
+bun scripts/codex-runtime-boundary-probe.ts /absolute/path/to/codex gpt-6.1-sol
+```
+
+On the 2026-10-18 Linux development host, the exact 0.162.0 ELF above passed
+the host check. Its six refusal requests advertised zero tools. When the mock
+provider forced each native call, Codex returned `unsupported call` as a
+function output; neither command nor patch executed. The script emits a JSON
+record with the digest, version, request counts, tool counts, forced-call
+outputs, and booleans for these checks. This is a reproducible bounded probe,
+not an all-path qualification: it cannot establish that every configuration,
+instruction, hosted action, image path, or descendant-crash case is safe. The
+production hash registry remains empty.
+
 ## Disposable live transport probe — 2026-10-18
 
 The signed-in local 0.162.0 binary was invoked from a private scratch directory

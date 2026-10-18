@@ -96,7 +96,11 @@ The old two-file prototype was not a gateway implementation. This branch adds:
 
 The [runtime qualification investigation](private-codex-runtime-qualification.md)
 records local build metadata and why documented hook coverage is insufficient
-for pre-execution denial. The production registry remains empty.
+for pre-execution denial. A reproducible, credential-free Linux probe now checks
+the host boundary, pinned ELF, PID-namespace launch, zero-tool request plan,
+and rejection of forced shell and patch calls on each candidate host. These
+bounded checks pass for the local 0.162.0 binary; all-path qualification is
+unfinished and the production registry remains empty.
 [Private drift](private-codex-drift.md) now validates native proposals and preserves
 failed judgments, source scope and private report publication; its fake-executable
 contract passes on PGLite and PostgreSQL. Full feature/runtime acceptance remains
