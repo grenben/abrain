@@ -69,3 +69,19 @@ condition = "AND"
 paths = ['''^\.claude/skills/gstack/supabase/config\.sh$''']
 regexTarget = "secret"
 regexes = ['''^sb_publishable_[A-Za-z0-9_-]+$''']
+
+[[allowlists]]
+description = "Synthetic optimizer owner UUID in stale-owner test"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^test/helpers/codex-skillopt-run-contract\.ts$''']
+regexTarget = "match"
+regexes = ['''^owner_token='123e4567-e89b-42d3-a456-426614174000'$''']
+
+[[allowlists]]
+description = "Brainstorm validation prose misread as an API key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^docs/development/private-codex-brainstorm\.md$''']
+regexTarget = "match"
+regexes = ['''^keys, missing/duplicate/foreign $''']
