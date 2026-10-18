@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn } from '../../spawn.ts';
 import { CodexProposalError, type CodexProposalFailure } from './codex-contract.ts';
 
 export interface CodexProcessInput {
