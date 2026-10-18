@@ -28,11 +28,12 @@ import { codexSkilloptCycleContract } from './codex-skillopt-cycle-contract.ts';
 import { codexSkilloptRunContract } from './codex-skillopt-run-contract.ts';
 import { codexSkilloptJobContract } from './codex-skillopt-job-contract.ts';
 import { codexSharedOptimizerContract } from './codex-shared-optimizer-contract.ts';
+import { codexBootstrapJobContract } from './codex-bootstrap-job-contract.ts';
 
 export function codexActionsContract(factory: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
   const root = mkdtempSync(join(tmpdir(), 'codex-actions-')), bin = join(root, 'fake.mjs'), control = join(root, 'replies.json'), capture = join(root, 'calls.jsonl');
   const keys = ['HOME', 'GBRAIN_HOME', 'CODEX_HOME'] as const, saved = keys.map(k => [k, process.env[k]] as const), fetch = globalThis.fetch;
-  let engine: BrainEngine, queue: MinionQueue, cleanup: (() => Promise<void>) | undefined, unregister: () => void;
+  let engine: BrainEngine, queue!: MinionQueue, cleanup: (() => Promise<void>) | undefined, unregister: () => void;
   const get = (slug = 'notes/one') => ({ response: { kind: 'tool', name: 'brain_get_page', arguments: { slug } } });
   const final = { response: { kind: 'final', answer: 'The synthetic note recommends checking evidence.' } };
   const calls = () => readFileSync(capture, 'utf8').split('\n').filter(Boolean).map(s => JSON.parse(s));
@@ -59,10 +60,11 @@ import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const a=process.argv.slice(2),arg=n=>a[a.indexOf(n)+1],schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8')),prompt=readFileSync(0,'utf8');
 const count=readFileSync(${JSON.stringify(capture)},'utf8').split('\\n').filter(Boolean).length;
 const values=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));let value=values[Math.min(count,values.length-1)];
+if(value.autoBootstrap&&schema.properties.tasks){value={evidence_hash:schema.properties.evidence_hash.enum[0],tasks:Array.from({length:schema.properties.tasks.minItems},(_,i)=>({task:'Synthetic grounded task '+(i+1),checks:[{op:'contains',arg:'evidence'},{op:'max_chars',arg:4096}]}))};}
 if(value.autoOptimizer){const data=JSON.parse(JSON.parse(prompt).messages[0].content);if(schema.properties.response){const request=JSON.parse(data[0].content[0].text),improved=request.candidate_skill.includes('Always cite evidence.');value={response:{kind:'final',answer:(value.heldOutFail&&request.task.includes('held-out')?!improved:improved)?'Use evidence.':'Prefer brevity.'}};}else if(schema.properties.newBody){value={evidence_hash:schema.properties.evidence_hash.enum[0],newBody:data.skillBodyText.replace('Prefer brevity.','Always cite evidence.')}}else{value={evidence_hash:schema.properties.evidence_hash.enum[0],edits:(value.noEdits||value.cycleOptimizer&&!data.skillBodyText.includes('Prefer brevity.'))?[]:[{op:'replace',target:'Prefer brevity.',replacement:value.badCandidate?String.fromCharCode(96).repeat(3)+'\\nAlways cite evidence.':'Always cite evidence.',reason:'Ground the answer.'}]};}}
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({schema,prompt,argv:a})+'\\n');
 const text=JSON.stringify(value);writeFileSync(arg('--output-last-message'),text);
-for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:30,cached_input_tokens:2,output_tokens:15}}])console.log(JSON.stringify(e));
+const events=[{type:'thread.started',thread_id:'fixture'},{type:'turn.started'}];if(value.refusal)events.push({type:'item.completed',item:{type:'refusal',refusal:'Synthetic refusal'}});else events.push({type:'item.completed',item:{type:'agent_message',text}});if(!value.missingCompletion)events.push({type:'turn.completed',usage:{input_tokens:30,cached_input_tokens:2,output_tokens:15}});for(const e of events)console.log(JSON.stringify(e));
 `;
     writeFileSync(bin, script, { mode: 0o700 }); unregister = __registerCodexFixtureForTests(bin, createHash('sha256').update(script).digest('hex'));
     ({ engine, cleanup } = await factory()); await engine.initSchema(); queue = new MinionQueue(engine);
@@ -79,6 +81,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     await engine.executeRaw('DELETE FROM codex_skillopt_cycles');
     await engine.executeRaw('DELETE FROM codex_skillopt_batches');
     await engine.executeRaw('DELETE FROM codex_skillopt_batch_submissions');
+    await engine.executeRaw('DELETE FROM codex_skillopt_bootstraps');
     await engine.executeRaw('DELETE FROM codex_skillopt_runs');
     await engine.executeRaw('DELETE FROM codex_shared_skill_optimizations');
     await engine.executeRaw('DELETE FROM codex_skillopt_submissions');
@@ -274,4 +277,5 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   codexSkilloptRunContract({ engine: () => engine, root, replies, calls });
   codexSkilloptJobContract({ engine: () => engine, root, replies, calls });
   codexSharedOptimizerContract({ engine: () => engine, root, replies, calls });
+  codexBootstrapJobContract({ engine: () => engine, queue: () => queue, replies, calls });
 }

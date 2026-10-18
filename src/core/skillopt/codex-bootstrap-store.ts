@@ -10,7 +10,7 @@ import type { BootstrapResult } from './bootstrap-benchmark.ts';
 export interface BootstrapInput { controls: Record<string, unknown>; files: BootstrapFiles; sourceId: string; incarnation: string; model: string; bin: string }
 export interface BootstrapAccepted { output: string; result: BootstrapResult }
 export interface BootstrapRun { run_id: string; protocol: number; input: BootstrapInput; input_hash: string;
-  owner_token: string | null; lease_until: Date | string | null; result: BootstrapAccepted | null; result_hash: string | null; completed: boolean }
+  request_id?: string | null; job_id?: number | string | null; owner_token: string | null; lease_until: Date | string | null; result: BootstrapAccepted | null; result_hash: string | null; completed: boolean }
 export interface BootstrapClaim { runId: string; inputHash: string; token: string }
 export const bootstrapConflict = (): never => { throw new SubscriptionAdmissionError('subscription_identity_conflict'); };
 export async function readBootstrapRun(engine: BrainEngine, runId: string): Promise<BootstrapRun | undefined> {
@@ -31,7 +31,13 @@ export async function claimBootstrapRun(host: CodexSubscriptionContext, input: B
     if (pending.length) throw new SubscriptionAdmissionError('subscription_lane_busy');
     await tx.executeRaw('INSERT INTO codex_skillopt_bootstraps(run_id,protocol,input,input_hash) VALUES($1,1,$2::text::jsonb,$3) ON CONFLICT DO NOTHING',
       [host.runId, JSON.stringify(input), inputHash]);
-    const previous = await readBootstrapRun(tx, host.runId); if (!previous || previous.input_hash !== inputHash) bootstrapConflict();
+    const previous = await readBootstrapRun(tx, host.runId);
+    if (!previous) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    if (previous.input_hash !== inputHash) bootstrapConflict();
+    const requestId = (input.controls.allowance as { requestId?: unknown } | undefined)?.requestId;
+    if (previous.request_id != null && (typeof requestId !== 'string' || previous.request_id.toLowerCase() !== requestId.toLowerCase() ||
+        !host.publicationFence || Number(previous.job_id) !== host.publicationFence.jobId)) bootstrapConflict();
+    if (previous.request_id == null && host.publicationFence) bootstrapConflict();
     const updated = await tx.executeRaw("UPDATE codex_skillopt_bootstraps SET owner_token=$2::uuid,lease_until=now()+interval '15 minutes' WHERE run_id=$1 AND (owner_token IS NULL OR lease_until<now()) RETURNING run_id", [host.runId, token]);
     if (updated.length !== 1) throw new SubscriptionAdmissionError('subscription_owner_lost');
     return previous!;

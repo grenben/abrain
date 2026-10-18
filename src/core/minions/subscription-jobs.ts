@@ -7,6 +7,7 @@ import { authorityDigest, authorizeJobExecution } from './submission-authority.t
 import { rowToMinionJob, type MinionJob, type MinionJobContext } from './types.ts';
 import { jobMayGenerate } from './subscription-job-kinds.ts';
 import { validateCodexReadJob, CODEX_SKILLOPT_JOB_PROTOCOL } from './codex-action-contract.ts';
+import { validateCodexBootstrapJob } from '../skillopt/codex-bootstrap-job-contract.ts';
 export { CODEX_GENERATIVE_JOBS, jobMayGenerate } from './subscription-job-kinds.ts';
 
 /** Only a trusted host argument can grant this allowance. No USD conversion or quota estimate. */
@@ -34,11 +35,17 @@ export async function preflightSubscriptionJob(engine: BrainEngine, name: string
     await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
   }
   if (name === 'skillopt') {
-    const { validateCodexOptimizerJob } = await import('../skillopt/codex-job-contract.ts');
-    validateCodexOptimizerJob(data);
-    await resolvePrivateModel(engine, { tier: 'deep', fallback: 'unused' }, policy);
-    await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
-    await resolvePrivateModel(engine, { tier: 'reasoning', fallback: 'unused' }, policy);
+    if (data.bootstrap_protocol !== undefined) {
+      validateCodexBootstrapJob(data);
+      const options = data.bootstrap_options as { optimizer: { model: string } };
+      await resolvePrivateModel(engine, { cliFlag: options.optimizer.model, tier: 'deep', fallback: 'unused' }, policy);
+    } else {
+      const { validateCodexOptimizerJob } = await import('../skillopt/codex-job-contract.ts');
+      validateCodexOptimizerJob(data);
+      await resolvePrivateModel(engine, { tier: 'deep', fallback: 'unused' }, policy);
+      await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
+      await resolvePrivateModel(engine, { tier: 'reasoning', fallback: 'unused' }, policy);
+    }
   }
 }
 

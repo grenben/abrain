@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import type { GuardedBootstrapOpts } from './bootstrap-run.ts';
+import type { EvalAllowance } from '../../eval/longmemeval/codex-allowance-flags.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { readPrivateCodexConfig } from '../ai/private-policy.ts';
@@ -11,10 +12,12 @@ import { prepareCodexBootstrap } from './codex-bootstrap.ts';
 import { proposeCodexBenchmark } from './codex-bootstrap-proposal.ts';
 import { assertBootstrapFilesCurrent, readBootstrapFile, writeBootstrapDraft } from './codex-bootstrap-files.ts';
 import { bootstrapConflict, readBootstrapRun, claimBootstrapRun, fenceBootstrapRun, saveBootstrapAccepted, completeBootstrapRun, releaseBootstrapRun } from './codex-bootstrap-store.ts';
+type BootstrapAllowance = Omit<EvalAllowance, 'auxiliaryUsd'> & { auxiliaryUsd: number | null };
 
 /** One explicit local allowance owns the original inputs, accepted draft and reconciliation. */
-export async function runLocalCodexBootstrap(original: GuardedBootstrapOpts, modelPlan: unknown) {
-  const host = codexSubscriptionContext(), allowance = localOptimizerAllowance(), policy = readPrivateCodexConfig();
+export async function runLocalCodexBootstrap(original: GuardedBootstrapOpts, modelPlan: unknown, workerAllowance?: BootstrapAllowance, expectedInputHash?: string) {
+  const host = codexSubscriptionContext(), pendingAllowance = localOptimizerAllowance(),
+    allowance = workerAllowance ?? (pendingAllowance ? { ...pendingAllowance, auxiliaryUsd: pendingAllowance.auxiliaryUsd } : undefined), policy = readPrivateCodexConfig();
   if (!host || !allowance || !policy || host.engine !== original.engine || original.operationContext?.engine !== original.engine ||
       original.operationContext.remote !== false || !original.operationContext.sourceId || original.chatFn)
     throw new SubscriptionAdmissionError('subscription_required');
@@ -26,6 +29,7 @@ export async function runLocalCodexBootstrap(original: GuardedBootstrapOpts, mod
   if (!source || source.archived) bootstrapConflict();
   const input = { controls: { ...opts, skillsDir: resolve(opts.skillsDir), modelPlan, allowance }, files: prepared.files,
     sourceId, incarnation: source!.incarnation, model: policy.model, bin: policy.bin };
+  if (expectedInputHash !== undefined && digest(input) !== expectedInputHash) bootstrapConflict();
   if (prior && digest(input) !== prior.input_hash) bootstrapConflict();
   if (opts.dryRun) return;
   const signal = abortSignal ? AbortSignal.any([...(host.signal ? [host.signal] : []), abortSignal]) : host.signal;

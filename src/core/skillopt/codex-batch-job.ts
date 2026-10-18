@@ -94,6 +94,13 @@ export async function submitCodexSkillOptBatch(engine: BrainEngine, original: Co
   }
   const queued = await engine.transaction(async tx => {
     await declareDurablePersistence(tx); await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
+    await tx.executeRaw('SELECT gbrain_codex_subscription_lock_path($1)', [`codex-skillopt:${grant.requestId}`]);
+    const collisions = await tx.executeRaw(`SELECT request_id::text FROM codex_skillopt_submissions WHERE request_id=$1::uuid
+      UNION ALL SELECT request_id::text FROM codex_skillopt_bootstraps WHERE request_id=$1::uuid
+      UNION ALL SELECT run_id FROM codex_subscription_runs WHERE run_id=$2
+      UNION ALL SELECT run_id FROM codex_skillopt_bootstraps WHERE run_id=$2
+      UNION ALL SELECT run_id FROM codex_skillopt_runs WHERE run_id=$2`, [grant.requestId, `codex-skillopt:${grant.requestId}`]);
+    if (collisions.length) conflict();
     const [saved] = await tx.executeRaw<Binding>('SELECT * FROM codex_skillopt_batch_submissions WHERE request_id=$1::uuid FOR UPDATE', [grant.requestId]);
     if (saved) {
       const job = await new MinionQueue(tx).getJob(Number(saved.job_id));

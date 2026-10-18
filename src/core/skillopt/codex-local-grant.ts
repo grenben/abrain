@@ -102,6 +102,11 @@ export async function ensureLocalOptimizerGrant(tx: BrainEngine, runId: string, 
     ? await tx.executeRaw('SELECT run_id FROM codex_skillopt_bootstraps WHERE run_id=$1', [runId])
     : await tx.executeRaw('SELECT run_id FROM codex_skillopt_runs WHERE run_id=$1 UNION SELECT run_id FROM codex_shared_skill_optimizations WHERE run_id=$1', [runId]);
   if (incompatible.length) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  if (grant && kind === 'bootstrap') {
+    const otherBootstrap = await tx.executeRaw(`SELECT run_id FROM codex_skillopt_bootstraps
+      WHERE input->'controls'->'allowance'->>'requestId'=$1 AND run_id<>$2 LIMIT 1`, [grant.requestId, runId]);
+    if (otherBootstrap.length) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  }
   const [prior] = await tx.executeRaw<{ account_lane: string; max_attempts: number; max_turns: number; deadline: Date | string; parent_run_id: string | null }>(
     'SELECT account_lane,max_attempts,max_turns,deadline,parent_run_id FROM codex_subscription_runs WHERE run_id=$1 FOR UPDATE', [runId]);
   if (prior) {

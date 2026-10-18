@@ -6,7 +6,7 @@ The target remains: Codex proposes; GBrain authorizes, records, executes and rec
 Latest source checkpoint: [scheduled optimizer cycles](private-codex-skillopt-cycles.md)
 connects maintenance to retained batch manifests, frozen source-scoped selection
 and receipt-backed completion/cooldowns. Foreground `skillopt --all` and trusted
-SDK batches also use retained manifests and child grants. Schema head is 269;
+SDK batches also use retained manifests and child grants. Schema head is 270;
 queued PostgreSQL batch jobs use a permanent request binding. The public
 queued batch API is exported from `gbrain/core/skillopt` and covered through
 the package import path. Fleet and remote producers, broader query/graph tools,
@@ -528,10 +528,11 @@ Both private benchmark generators now use complete native proposals with typed
 rules, host-assigned IDs, exact routing coverage, strict failures and retained
 proposal reuse. Unmanaged drafts preserve review and ownership guards; inputs
 and output are checked for drift before writing. The guarded entry requires a
-host subscription allowance and reports unknown monetary cost. Standalone CLI
-admission and whole-optimizer publication remain work;
-[scope and verification](private-codex-skillopt-bootstrap.md). No deployment or
-activation was performed.
+host subscription allowance and reports unknown monetary cost. Standalone
+bootstrap now has immutable PostgreSQL background submission, a fenced worker
+path and retained draft publication (migration v270); PGLite stays inline.
+Whole-optimizer publication remains work; [scope and verification](private-codex-bootstrap-cli.md).
+No deployment or activation was performed.
 
 ## Aggregate subscription admission checkpoint
 

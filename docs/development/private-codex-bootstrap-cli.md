@@ -21,9 +21,14 @@ the result is an unmanaged draft requiring human review before evaluation.
 Migration **265** retains immutable input identity, original file contents,
 source incarnation, model/bin selection, allowance controls, accepted output and
 completion state. Each request gets fenced ownership with a renewable lease.
-Changing the inputs or limits refuses; the same UUID cannot switch to foreground
-or background optimization. No automatic fresh allowance or provider fallback
-is created when a request exhausts its limits.
+Migration **270** binds a standalone background bootstrap request to its
+application-authorized `skillopt` queue job. On PostgreSQL, `--background`
+prevalidates the files and persists the immutable plan before returning the job
+ID; the worker rechecks the same plan before inference and draft publication.
+PGLite remains inline because it has no worker daemon. Repeating an unchanged
+background request returns the same job; changed files, limits or request
+purpose refuse. No automatic fresh allowance or provider fallback is created
+when a request exhausts its limits.
 
 ## Recovery and failures
 
@@ -49,10 +54,15 @@ an exact already-written draft, but cannot publish an accepted unwritten draft.
 
 Fixtures use fake Codex executables, synthetic files, fresh isolated homes and
 databases, disabled discovery, absent credentials and forbidden-network checks.
+Unless identified as the v270 integration check, the counts below describe the
+old-source checkpoint and have not been rerun against this integration branch.
 
 - PGLite: `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/ai/codex-think.serial.test.ts --timeout=180000 -t 'native skill benchmark generation|native standalone bootstrap admission'` — 40 passed, 174 assertions.
 - Final PGLite additions: the same isolated command with `-t 'native standalone bootstrap admission'` — 16 passed, 82 assertions, including expiry and source-incarnation boundaries.
+- v270 integration, background CLI/job contract on isolated PGLite: `bun test test/ai/codex-actions.serial.test.ts -t 'background Codex benchmark bootstrap jobs'` — 5 passed, 24 assertions; CLI refuses background mode on PGLite, while producer/worker behavior uses fake Codex and no inference during admission.
+- Background CLI/job contract on a disposable PostgreSQL cluster on the old-source branch: 5 passed, 25 assertions; the PostgreSQL path remains unverified in this integration checkout.
 - PostgreSQL: `python3 /tmp/maxbrain-test-postgres-bootstrap-local.py` — final combined suite: 43 passed, 187 assertions; disposable server stopped afterward.
+- Background queue submission, worker publication, same-request replay and changed-file refusal are covered by `test/helpers/codex-bootstrap-job-contract.ts` in the shared PGLite/PostgreSQL action contracts.
 - `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` — fresh catalog parity and migration replay: 12 passed, 31 assertions; PgBouncer case skipped.
 - `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` — 75 passed, zero failures, admin build explicitly skipped; includes typecheck and architecture/registry checks.
 

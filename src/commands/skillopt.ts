@@ -142,6 +142,26 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
   // errors propagate so the user sees the real failure instead of "0 tasks".
   if (parsed.bootstrapFromRouting || parsed.bootstrapFromSkill) {
     try {
+      if (args.includes('--follow') && !args.includes('--background')) throw new Error('--follow requires --background.');
+      if (args.includes('--background') && !readPrivateCodexConfig()) throw new Error('Background benchmark bootstrap requires private Codex subscription mode.');
+      if (args.includes('--background') && !parsed.dryRun && engine.kind === 'pglite') throw new Error('Background benchmark bootstrap requires PostgreSQL; PGLite runs inline.');
+      if (args.includes('--background') && !parsed.dryRun && engine.kind !== 'pglite' && scope.backgroundAllowance) {
+        const job = await (await import('../core/skillopt/codex-bootstrap-job.ts')).submitCodexBootstrapJob(engine, {
+          operationContext: scope.operationContext, engine, mode: parsed.bootstrapFromRouting ? 'routing' : 'skill', skillsDir,
+          skillName: parsed.skillName, optimizer: models.optimizer, taskCount: parsed.bootstrapTasks ?? 15, force: parsed.force,
+          dryRun: false, modelsStrict: parsed.modelsStrict, maxCostUsd: parsed.maxCostUsd, maxCostSource: parsed.maxCostSource,
+        }, { plan: [{ touchpoint: 'optimizer', ...models.optimizer, active: true }], strict: await (await import('../core/skillopt/models-plan.ts')).strictVerdict(
+          [{ touchpoint: 'optimizer', ...models.optimizer, active: true }], await (await import('../core/skillopt/models-plan.ts')).resolveModelsStrict(engine, parsed.modelsStrict)) },
+        batchSubmissionScope(scope), scope.backgroundAllowance);
+        process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; bootstrap job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
+        process.stdout.write(`job_id=${job.id}\n`);
+        if (args.includes('--follow')) {
+          const { spawnCliChild } = await import('../core/cli-force-exit.ts');
+          const child = spawnCliChild(process.argv[0] ?? 'bun', [process.argv[1] ?? '', 'jobs', 'follow', String(job.id)]);
+          await new Promise<void>(resolve => child.on('exit', () => resolve()));
+        }
+        process.exit(0); return;
+      }
       const run = await runGuardedBootstrap({
         operationContext: scope.operationContext, engine,
         mode: parsed.bootstrapFromRouting ? 'routing' : 'skill',
@@ -605,9 +625,8 @@ export function parseFlags(args: string[]): ParsedFlags {
     throw new Error(`--all and --bootstrap-from-routing are mutually exclusive (run bootstrap per skill)`);
   }
   // --bootstrap-from-skill is a standalone short-circuit: it cannot combine with
-  // the other-source / multi-run flags or background optimizer execution.
+  // the other-source / multi-run flags.
   if (bootstrapFromSkill) {
-    if (args.includes('--background') || args.includes('--follow')) throw new Error('Bootstrap generation runs in the foreground.');
     if (bootstrapFromRouting) throw new Error(`--bootstrap-from-skill and --bootstrap-from-routing are mutually exclusive`);
     if (benchmarkPath) throw new Error(`--bootstrap-from-skill and --benchmark are mutually exclusive`);
     if (all) throw new Error(`--bootstrap-from-skill and --all are mutually exclusive (run bootstrap per skill)`);

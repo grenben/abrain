@@ -50,7 +50,11 @@ export async function submitCodexSkillOpt(engine: BrainEngine, input: SkillOptJo
   return engine.transaction(async tx => {
     await declareDurablePersistence(tx);
     await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
+    await tx.executeRaw('SELECT gbrain_codex_subscription_lock_path($1)', [`codex-skillopt:${requestId}`]);
     if ((await tx.executeRaw('SELECT run_id FROM codex_subscription_runs WHERE run_id=$1', [`codex-skillopt:${requestId}`])).length) conflict();
+    if ((await tx.executeRaw(`SELECT request_id::text FROM codex_skillopt_batch_submissions WHERE request_id=$1::uuid
+      UNION ALL SELECT request_id::text FROM codex_skillopt_bootstraps WHERE request_id=$1::uuid
+      UNION ALL SELECT run_id FROM codex_skillopt_bootstraps WHERE run_id=$2`, [requestId, `codex-skillopt:${requestId}`])).length) conflict();
     const [source] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [original.sourceId]);
     if (!source || source.archived || source.incarnation !== prepared.source.incarnation) conflict();
     const policy = readPrivateCodexConfig();

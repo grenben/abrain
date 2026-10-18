@@ -303,7 +303,7 @@ describe('parseFlags — --bootstrap-from-skill CLI surface', () => {
     expect(() => parseFlags([SKILL, '--bootstrap-from-skill', '--resume', 'run-1'])).toThrow(/mutually exclusive/);
   });
 
-  test('bootstrap remains foreground-only when optimizer background flags are parsed', () => {
-    expect(() => parseFlags([SKILL, '--bootstrap-from-skill', '--background'])).toThrow(/foreground/);
+  test('private bootstrap accepts durable background mode flags', () => {
+    expect(parseFlags([SKILL, '--bootstrap-from-skill', '--background']).bootstrapFromSkill).toBe(true);
   });
 });

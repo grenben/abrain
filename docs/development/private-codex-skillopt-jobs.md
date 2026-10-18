@@ -10,7 +10,9 @@ and their configuration have not changed.
 `--background` uses the same explicit Codex attempt/turn/deadline flags, request
 UUID, source and read prefixes as foreground execution. `--follow` requires
 background mode. Dry-run creates no job or allowance. Benchmark bootstrap is
-still foreground-only; its private standalone admission remains incomplete.
+also supports PostgreSQL background submission through its own immutable input
+plan and fenced worker publication. PGLite keeps bootstrap inline because it has
+no worker daemon.
 
 `submitCodexSkillOpt` reconstructs the real job options and calls the shared
 `prepareCodexSkillOpt` preflight. It validates the complete input, model pins,
@@ -88,8 +90,8 @@ not established by these fault-injection tests.
 
 ## Remaining scope and upgrade
 
-Managed shared-skill staging/prepared-publication recovery, cycle, batch/fleet,
-standalone bootstrap, remote producers and broader tool registries remain work.
+Managed shared-skill staging/prepared-publication recovery, cycle, remote
+producers and broader tool registries remain work.
 Production runtime qualification is still empty. Installation requires a separate
 authorized build/install and migration/worker cutover after remaining gates pass.
 This checkpoint leaves the installed GBrain unchanged.
