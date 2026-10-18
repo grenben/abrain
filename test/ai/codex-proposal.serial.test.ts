@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
+import { __registerCodexFixtureForTests, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
 import { afterAll, describe, expect, test } from 'bun:test';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCodexProposal } from '../../src/core/ai/providers/codex-proposal.ts';
+import { codexEnvironment, runCodexProcess } from '../../src/core/ai/providers/codex-process.ts';
 
 const root = await mkdtemp(join(tmpdir(), 'codex-proposal-test-'));
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
@@ -103,6 +104,20 @@ describe('Codex proposal production transport with fake executable', () => {
     await expect(runCodexProposal(input(bin))).rejects.toMatchObject({reason:'runtime_unqualified'});
     await expect(access(capture)).rejects.toThrow();
     await expect(runCodexProposal(input('/synthetic/unqualified-codex'))).rejects.toMatchObject({reason:'runtime_unqualified'});
+  });
+  test('a path replacement after qualification cannot change the spawned executable', async () => {
+    if (process.platform !== 'linux') return;
+    const bin = join(root, `codex-pin-${sequence++}`);
+    const original = '#!/bin/sh\nprintf "pinned-original\\n"\n';
+    await writeFile(bin, original, { mode: 0o700 });
+    const unregister = __registerCodexFixtureForTests(bin, createHash('sha256').update(original).digest('hex'));
+    const runtime = await openQualifiedCodexRuntime(bin);
+    try {
+      await rename(bin, `${bin}.old`);
+      await writeFile(bin, '#!/bin/sh\nprintf "replacement\\n"\n', { mode: 0o700 });
+      expect(await runCodexProcess({ runtimeFd: runtime.fd, args: [], cwd: root, env: codexEnvironment(env),
+        prompt: 'synthetic', timeoutMs: 5_000, maxOutputBytes: 1024 })).toBe('pinned-original\n');
+    } finally { await runtime.close(); unregister(); }
   });
   test('unconfirmed group termination retains scratch and an unresolved outcome', async () => {
     const {bin,capture}=await fake('unconfirmed');

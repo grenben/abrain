@@ -68,6 +68,20 @@ gate or silently switch to another provider to make those checks green.
 Bounded-feature development and fake-executable/storage tests can continue
 independently while this runtime boundary remains incomplete.
 
+## Executable identity at launch
+
+The admission check hashes the configured binary before reserving an attempt.
+At the actual proposal call, GBrain opens and hashes it again, keeps that file
+descriptor open through the child run, and launches `/proc/self/fd/3` on Linux
+(`/dev/fd/3` on macOS), passing the verified descriptor as child fd 3. A rename
+or symlink replacement of the configured pathname between verification and
+spawn cannot select different bytes. The fake-executable transport test replaces
+the pathname after opening and verifies that the original script runs. The
+original inode could still be edited in place by an actor with write access to
+it; runtime qualification and host file permissions must account for that
+separately. This descriptor pin closes the pathname race; it does **not**
+qualify the real Codex runtime or change the empty production allowlist.
+
 ## Per-call conservative model catalog
 
 The proposal adapter now writes one private `model-catalog.json` beside its

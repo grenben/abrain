@@ -2,7 +2,7 @@ import { spawn } from '../../spawn.ts';
 import { CodexProposalError, type CodexProposalFailure } from './codex-contract.ts';
 
 export interface CodexProcessInput {
-  bin: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv;
+  runtimeFd: number; args: string[]; cwd: string; env: NodeJS.ProcessEnv;
   prompt: string; signal?: AbortSignal; timeoutMs: number; maxOutputBytes: number;
 }
 
@@ -16,9 +16,12 @@ export function codexEnvironment(snapshot: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 export function runCodexProcess(input: CodexProcessInput): Promise<string> {
   if (process.platform === 'win32') return Promise.reject(new CodexProposalError('unsupported_platform'));
   if (input.signal?.aborted) return Promise.reject(new CodexProposalError('aborted'));
+  // fd 3 names the same open inode that qualification hashed. A rename or symlink
+  // swap of the configured path cannot change the executable at the spawn edge.
+  const pinnedBin = process.platform === 'linux' ? '/proc/self/fd/3' : '/dev/fd/3';
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
-    try { child = spawn(input.bin, input.args, { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); }
+    try { child = spawn(pinnedBin, input.args, { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe', input.runtimeFd], detached: true }); }
     catch { reject(new CodexProposalError('spawn')); return; }
     let closed = false;
     let settled = false;

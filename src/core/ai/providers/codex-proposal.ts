@@ -1,4 +1,4 @@
-import { assertCodexRuntimeQualified } from './codex-qualification.ts';
+import { openQualifiedCodexRuntime } from './codex-qualification.ts';
 /** One ephemeral proposal. Authorization and effects belong to the GBrain caller. */
 import { mkdtemp, writeFile, rm, chmod, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -29,11 +29,12 @@ export interface CodexProposalResult {
 export async function runCodexProposal(original: CodexProposalInput): Promise<CodexProposalResult> {
   const { input, prepared } = await prepareCodexInput(original);
   const { images, timeoutMs, maxOutputBytes } = input;
-  await assertCodexRuntimeQualified(input.bin);
-  const scratch = await mkdtemp(join(tmpdir(), 'gbrain-codex-proposal-'));
+  const runtime = await openQualifiedCodexRuntime(input.bin);
+  let scratch: string | undefined;
   let settled = true;
   let completion: {usage:CodexUsage|null} | undefined;
   try {
+    scratch = await mkdtemp(join(tmpdir(), 'gbrain-codex-proposal-'));
     await chmod(scratch, 0o700);
     const schemaFile = join(scratch, 'schema.json');
     const answerFile = join(scratch, 'answer.json');
@@ -52,7 +53,7 @@ export async function runCodexProposal(original: CodexProposalInput): Promise<Co
       const path = join(scratch, `image-${i}.${image.mime.split('/')[1]}`);
       await writeFile(path, image.bytes, { mode: 0o600, flag: 'wx' }); imageFiles.push(path);
     }
-    const stdout = await runCodexProcess({ bin: input.bin,
+    const stdout = await runCodexProcess({ runtimeFd: runtime.fd,
       args: codexProposalArgv({ cwd: scratch, model: input.model, schemaFile, answerFile, denyHook, instructionsFile, modelCatalogFile, imageFiles }),
       cwd: scratch, env: codexEnvironment(input.env ?? process.env), prompt: input.prompt,
       timeoutMs, maxOutputBytes, signal: input.signal });
@@ -82,6 +83,7 @@ export async function runCodexProposal(original: CodexProposalInput): Promise<Co
     if (error instanceof CodexProposalError) { settled = error.settled; error.terminalCompletion = completion; }
     throw error;
   } finally {
-    if (settled) await rm(scratch, { recursive: true, force: true });
+    try { await runtime.close(); }
+    finally { if (settled && scratch) await rm(scratch, { recursive: true, force: true }); }
   }
 }
