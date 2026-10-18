@@ -16,15 +16,22 @@ test/agent-journey-upgrade.serial.test.ts	global-state	global-state: binds local
 test/agent-journey.serial.test.ts	global-state	global-state: R3: constructs PGLiteEngine outside beforeAll
 test/agent-operator-gate-fixes.serial.test.ts	global-state	global-state: binds local servers/ports
 test/agent-recovery-consent-journeys.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME)
-test/ai/codex-actions.serial.test.ts	R1	R1: shared action contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
-test/ai/codex-calibration.serial.test.ts	R1	R1: isolated calibration contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification; hooks own database cleanup
-test/ai/codex-take-proposals.serial.test.ts	R1	R1: shared proposal contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification; shared hooks own engine lifecycle
-test/ai/codex-drift.serial.test.ts	R1	R1: shared drift contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification; engine lifecycle is in shared hooks
+test/ai/codex-actions.serial.test.ts	global-state	global-state: imported action contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-calibration.serial.test.ts	global-state	global-state: imported calibration contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-drift.serial.test.ts	global-state	global-state: imported drift contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-eval-cli.serial.test.ts	global-state	global-state: configures the process-wide AI gateway and runs isolated CLI children with a network tripwire
+test/ai/codex-facts.serial.test.ts	global-state	global-state: imported facts contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-gateway.serial.test.ts	R1	R1: mutates HOME/GBRAIN_HOME/CODEX_HOME and global fetch while configuring the process-wide AI gateway
+test/ai/codex-jobs.serial.test.ts	global-state	global-state: imported job contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-pins.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME), global fetch, atomic-write and output spies
-test/ai/codex-upgrade-jobs.serial.test.ts	R1	R1: shared upgrade contract mutates GBRAIN_HOME, global fetch and CLI output spies
-test/ai/codex-publication.serial.test.ts	R1	R1: shared publication contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
-test/ai/codex-synthesis.serial.test.ts	R1	R1: shared synthesis contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
-test/ai/codex-voice.serial.test.ts	R1	R1: shared voice contract mutates isolated HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification; hooks own engine cleanup
+test/ai/codex-proposal.serial.test.ts	global-state	global-state: registers a process-wide Codex runtime qualification fixture while exercising the proposal runner
+test/ai/codex-publication.serial.test.ts	global-state	global-state: imported publication contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-synthesis.serial.test.ts	global-state	global-state: imported synthesis contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-take-proposals.serial.test.ts	global-state	global-state: imported proposal contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-triage.serial.test.ts	R1	R1: mutates HOME/GBRAIN_HOME/CODEX_HOME and global fetch while configuring the process-wide AI gateway
+test/ai/codex-upgrade-jobs.serial.test.ts	global-state	global-state: imported upgrade contract changes GBRAIN_HOME, global fetch and CLI output spies
+test/ai/codex-voice.serial.test.ts	global-state	global-state: imported voice contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/private-policy.serial.test.ts	R1	R1: mutates GBRAIN_HOME and GBRAIN_MODEL while configuring the process-wide AI gateway
 test/ai/gateway-ledger-records.serial.test.ts	global-state	global-state: process-wide test seams __setChatTransportForTests, __setEmbedTransportForTests, __setRerankTransportForTests; configureGateway changes the process-wide AI gateway
 test/ai/gateway-model-sources.serial.test.ts	global-state	global-state: configureGateway changes the process-wide AI gateway; patches process stdout/stderr/console
 test/ai/header-transport.serial.test.ts	global-state	global-state: process-wide test seams __setRerankTransportForTests; configureGateway changes the process-wide AI gateway
@@ -81,7 +88,7 @@ test/cli-help-no-side-effects.serial.test.ts	global-state	global-state: spawns a
 test/code-callers-pin.serial.test.ts	global-state	global-state: spyOn console.log, console.error, process.exit; process.chdir changes the shared cwd
 test/code-def-refs-pin.serial.test.ts	global-state	global-state: spyOn console.log, console.error, process.exit; process.chdir changes the shared cwd
 test/codex-rollout-0154.serial.test.ts	R1	R1: mutates GBRAIN_HOME/CODEX_HOME for in-process session-end hook runs
-test/codex-take-accept.serial.test.ts	R1	R1: managed acceptance fixtures serialize isolated homes and a global network tripwire; real coordinated writes own engine cleanup
+test/codex-take-accept.serial.test.ts	global-state	global-state: replaces global fetch with a network tripwire while managed acceptance fixtures coordinate real engine writes
 test/company-brain-connect-cli.serial.test.ts	global-state	global-state: R3: constructs PGLiteEngine outside beforeAll; R4: PGLiteEngine without an afterAll disconnect
 test/company-brain-recovery.serial.test.ts	global-state	global-state: R3: constructs PGLiteEngine outside beforeAll
 test/compile-context-core.serial.test.ts	R1	R1: mutates process.env (HOME, GBRAIN_HOME, CODEX_HOME) around the compile-context runs
@@ -415,4 +422,4 @@ test/init-search-mode.serial.test.ts	global-state	global-state: spawns real gbra
 test/search/mode-receipt.serial.test.ts	global-state	global-state: configureGateway changes the process-wide AI gateway; process-wide test seams __setEmbedTransportForTests, __setRerankTransportForTests, __setChatTransportForTests, __setGenerateTextTransportForTests, __setGenerateObjectTransportForTests; R3: constructs PGLiteEngine outside beforeAll
 test/search/query-expand-capture-replay.serial.test.ts	global-state	global-state: spyOn replaces the hybridSearch module export process-wide
 test/sync-managed-implied-no-pull-6543.serial.test.ts	global-state	global-state: patches process stdout/stderr/console to keep the notice off stdout and traps process.exit for the --all path; R1: mutates process.env (GBRAIN_HOME, GBRAIN_SYNC_NO_DELEGATE)
-test/ai/codex-think.serial.test.ts	R1	R1: isolated calibration contract mutates HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification; hooks own database cleanup
+test/ai/codex-think.serial.test.ts	global-state	global-state: imported think contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
