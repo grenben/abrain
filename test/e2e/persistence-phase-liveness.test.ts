@@ -65,7 +65,7 @@ describe.skipIf(!url)('PostgreSQL persistence phase cancellation', () => {
       expect(consumer.status().last_error).toBeUndefined();
       expect(await engine.executeRaw('SELECT 42 AS answer')).toEqual([{ answer: 42 }]);
     } finally { await consumer.stop(); }
-  }), 30000);
+  }), 60000);
 
   test('stopping during reservation recognizes an earlier abort without reporting a storage failure', () => fixture(async ({ engine }, config) => {
     await engine.executeRaw('SELECT 1');

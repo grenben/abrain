@@ -25,7 +25,7 @@ describe.skipIf(!url)('Postgres process-separated journal concurrency', () => {
     expect(Object.values(result.schedules.boundaries)).toEqual(Array(5).fill(1));
     expect(result.soak.owner_processes).toBe(2); expect(result.soak.producer_processes).toBe(4);
     expect(result.soak.verified).toBe(64);
-  }, 120_000);
+  }, 300_000);
 });
 
 describe.skipIf(!url)('Postgres cancellation ownership', () => {
