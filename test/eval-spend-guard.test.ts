@@ -274,7 +274,8 @@ describe('eval-spend-guard.sh', () => {
   });
 
   test('a SIGTERMed guard stops the command and reconciles at the estimate (exit 143)', async () => {
-    const g = start(['10', '4', '--', 'sleep', '30']);
+    // Leave enough runway for a heavily loaded full-suite shard to deliver TERM.
+    const g = start(['10', '4', '--', 'sleep', '300']);
     // Deterministic: the `reserved $` line is printed AFTER the reservation
     // row lands and the traps are armed, so the signal can never race the
     // guard's own setup (the pre-fix flake: traps were installed after the
