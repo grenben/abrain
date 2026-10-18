@@ -151,7 +151,7 @@ describe('evidence delivery parity', () => {
         slug: r.slug, title: r.title, chunk_text: r.chunk_text, effective_date: r.effective_date ?? null, effective_date_source: r.effective_date_source ?? null,
         unit: r.delivered?.unit, spans: r.delivered?.match_spans, tokens: r.delivered?.tokens, truncated: r.delivered?.truncated, reason: r.delivered?.reason,
       }));
-      await engine.executeRaw(`UPDATE pages SET effective_date = '2026-02-03', effective_date_source = 'frontmatter' WHERE slug = 'chat/session-a'`);
+      await engine.executeRaw(`UPDATE pages SET effective_date = '2026-02-03T00:00:00Z', effective_date_source = 'frontmatter' WHERE slug = 'chat/session-a'`);
       try {
         let dated = 0;
         for (const packing of AUTO_PACKINGS) {

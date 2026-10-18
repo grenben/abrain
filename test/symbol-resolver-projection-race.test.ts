@@ -238,7 +238,7 @@ describe('symbol resolver and projection replacement serialization', () => {
             if (!invalidated && sql.includes('SELECT cc.id, cc.page_id, p.slug') && sql.includes('LIMIT $3')) {
               expect(rows.length).toBeGreaterThan(0);
               invalidated = true;
-              if (change === 'watermark') await tx.executeRaw("UPDATE content_chunks SET edges_backfilled_at='2099-01-01' WHERE page_id=$1", [snapshot.snapshot.page.id]);
+              if (change === 'watermark') await tx.executeRaw("UPDATE content_chunks SET edges_backfilled_at='2099-01-01T00:00:00Z' WHERE page_id=$1", [snapshot.snapshot.page.id]);
               if (change === 'projection') await tx.executeRaw('UPDATE pages SET text_projection_revision=NULL WHERE id=$1', [snapshot.snapshot.page.id]);
               if (change === 'archive') await tx.executeRaw('UPDATE sources SET archived=true WHERE id=$1', [sourceId]);
               if (change === 'slug') await tx.executeRaw("UPDATE pages SET slug='moved-example' WHERE id=$1", [snapshot.snapshot.page.id]);

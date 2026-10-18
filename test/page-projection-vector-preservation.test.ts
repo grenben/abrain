@@ -93,7 +93,7 @@ for (const kind of backends) {
       for (const chunk of stored) {
         expect(chunk.embedding).toBe(vectorText);
         expect(chunk.embedded_text_hash).toBeNull();
-        expect(chunk.embedded_at).toStartWith('2025-01-02T03:04:05');
+        expect(new Date(chunk.embedded_at!).toISOString()).toBe('2025-01-02T03:04:05.000Z');
       }
       return prepared.snapshot;
     }
