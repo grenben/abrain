@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, test, expect } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
@@ -9,6 +9,11 @@ import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { BudgetTracker } from '../../src/core/budget/budget-tracker.ts';
+import { hybridSearch } from '../../src/core/search/hybrid.ts';
+import { resetDecideSearchCache } from '../../src/core/search/decide-stage.ts';
+import { flushDecideWrites } from '../../src/core/ai/decide/store.ts';
+import { installFixtureChunks } from '../helpers/page-projection.ts';
+import { operations, type OperationContext } from '../../src/core/operations.ts';
 import { runDecide } from '../../src/core/ai/decide/index.ts';
 import { readDecideConfig } from '../../src/core/ai/decide/config.ts';
 import { llmCapability } from '../../src/core/ai/decide/providers/llm-structured.ts';
@@ -29,12 +34,13 @@ beforeAll(async()=>{
   process.env.GBRAIN_HOME=root;process.env.HOME=root;process.env.CODEX_HOME=root;
   globalThis.fetch=(()=>{throw new Error('forbidden network');}) as unknown as typeof fetch;
   mkdirSync(join(root,'.gbrain'));
-  writeFileSync(join(root,'.gbrain','config.json'),JSON.stringify({private_codex:{mode:'strict',model:'codex-cli:gpt-test',bin}}));
+  writeFileSync(join(root,'.gbrain','config.json'),JSON.stringify({embedding_disabled:true,private_codex:{mode:'strict',model:'codex-cli:gpt-test',bin}}));
   const script=`#!${Bun.which('node')}
 import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1];
 const schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8')),prompt=readFileSync(0,'utf8');
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt})+'\\n');
+if(prompt.includes('hold-first'))await new Promise(resolve=>setTimeout(resolve,200));
 const answers={};if(schema.properties.answers)for(const [id,shape] of Object.entries(schema.properties.answers.properties)){
   const p=shape.properties;if(p.noul)answers[id]={type:'noul',noul:0.7};
   else if(p.choice)answers[id]={type:'choice',choice:p.choice.enum[0],confidence:0.8,probabilities:Object.fromEntries(Object.keys(p.probabilities.properties).map((k,i)=>[k,i===0?0.8:0.2]))};
@@ -46,6 +52,8 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
 `;
   writeFileSync(bin,script,{mode:0o700});unregister=__registerCodexFixtureForTests(bin,createHash('sha256').update(script).digest('hex'));
   await engine.connect({database_url:''});await engine.initSchema();configureGateway({env:{},embedding_model:'openai:text-embedding-3-small'});
+  await engine.putPage('notes/decision',{type:'note',title:'Decision',compiled_truth:'alpha keyword decision'});
+  await installFixtureChunks(engine,'notes/decision',[{chunk_index:0,chunk_text:'alpha keyword decision',chunk_source:'compiled_truth'}]);
 });
 afterAll(async()=>{
   await engine.disconnect();unregister?.();globalThis.fetch=originalFetch;
@@ -83,6 +91,54 @@ test('private typed decisions use exact Codex schema, model identity and host ad
   expect(Object.keys(last.schema.properties.answers.properties).sort()).toEqual(['c','n','s']);
   expect(last.schema.properties.answers.additionalProperties).toBe(false);
   expect([...last.schema.properties.answers.required].sort()).toEqual(['c','n','s']);
+});
+test('parallel chat requests share one accepted-turn lane, and a queued abort never dispatches',async()=>{
+  const count=()=>existsSync(capture)?readFileSync(capture,'utf8').trim().split('\n').filter(Boolean).length:0;
+  const before=count();
+  await withRun(async()=>{
+    const results=await Promise.all(['one','two'].map(content=>chat({messages:[{role:'user',content}]})));
+    expect(results.map(result=>result.text)).toEqual(['','']);
+  },2);
+  expect(count()).toBe(before+2);
+  await withRun(async()=>{
+    const first=chat({messages:[{role:'user',content:'hold-first'}]});
+    const abort=new AbortController();
+    const queued=chat({messages:[{role:'user',content:'queued-abort'}],abortSignal:abort.signal});
+    setTimeout(()=>abort.abort(),20);
+    await expect(queued).rejects.toMatchObject({reason:'aborted'});
+    await first;
+  },2);
+  expect(count()).toBe(before+3);
+});
+test('standalone private search records its Codex decision without a paid provider',async()=>{
+  const keys={'decide.provider':'llm:codex-cli:gpt-test','decide.slots.intent.mode':'on','decide.slots.intent.threshold':'0.6','decide.slots.intent.wait_ms':'2000'};
+  for(const [key,value] of Object.entries(keys))await engine.setConfig(key,value);
+  resetDecideSearchCache();
+  try{
+    await withRun(async()=>{
+      const results=await hybridSearch(engine,'alpha keyword',{limit:5,expansion:false});
+      expect(results.some(result=>result.slug==='notes/decision')).toBe(true);
+    },2);
+    await flushDecideWrites();
+    const rows=await engine.executeRaw<Record<string,unknown>>('SELECT provider,model_resolved,call_site,answer_choice,outcome FROM decision_receipts WHERE slot=$1',['intent']);
+    expect(rows.some(row=>row.provider==='llm:codex-cli:gpt-test'&&row.model_resolved==='codex-cli:gpt-test'&&row.call_site==='search'&&row.answer_choice!==null)).toBe(true);
+  }finally{for(const key of Object.keys(keys))await engine.setConfig(key,'');resetDecideSearchCache();}
+});
+test('the query operation records a Codex answerability decision',async()=>{
+  const keys={'decide.provider':'llm:codex-cli:gpt-test','decide.slots.answerable.mode':'on','decide.slots.answerable.threshold':'0.5','decide.slots.answerable.force_on':'true'};
+  for(const [key,value] of Object.entries(keys))await engine.setConfig(key,value);
+  resetDecideSearchCache();
+  try{
+    const query=operations.find(op=>op.name==='query')!;
+    const ctx={engine,config:{engine:'pglite'},logger:{info(){},warn(){},error(){}},dryRun:false,remote:false,sourceId:'default'} as OperationContext;
+    await withRun(async()=>{
+      const result=await query.handler(ctx,{query:'alpha keyword',expand:false,limit:5});
+      expect(result).toBeDefined();
+    },2);
+    await flushDecideWrites();
+    const rows=await engine.executeRaw<Record<string,unknown>>('SELECT provider,model_resolved,call_site,answer_value,outcome FROM decision_receipts WHERE slot=$1',['answerable']);
+    expect(rows.some(row=>row.provider==='llm:codex-cli:gpt-test'&&row.model_resolved==='codex-cli:gpt-test'&&row.call_site==='query'&&row.answer_value!==null)).toBe(true);
+  }finally{for(const key of Object.keys(keys))await engine.setConfig(key,'');resetDecideSearchCache();}
 });
 test('valid empty expansion/OCR remains distinct from provider failure and uses image argv',async()=>{
   expect(await withRun(()=>expand('synthetic search'))).toEqual(['synthetic search']);

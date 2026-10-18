@@ -35,6 +35,7 @@ import { invokeAI, withAIInvocationGuard } from '../../src/core/ai/invocation-gu
 import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
 import { withCodexSubscription, type CodexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
+import { flushDecideWrites } from '../../src/core/ai/decide/store.ts';
 
 export function codexThinkContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
   const root=mkdtempSync(join(tmpdir(),'codex-think-')),bin=join(root,'fixture.mjs'),capture=join(root,'calls.jsonl'),control=join(root,'reply.json');
@@ -61,6 +62,11 @@ const prompt=readFileSync(0,'utf8');
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt,mode:statSync(arg('--output-schema')).mode&511,envKeys:Object.keys(process.env)})+'\\n');
 const configured=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));
 let value=configured.byRole?configured.byRole[schema.properties.claims?'extractor':schema.properties.citations?'reader':'judge']:configured;
+if(schema.properties.answers){const answers={};for(const [id,shape] of Object.entries(schema.properties.answers.properties)){
+  const p=shape.properties;if(p.noul)answers[id]={type:'noul',noul:0.9};
+  else if(p.choice){const label=p.choice.enum[0];answers[id]={type:'choice',choice:label,confidence:0.9,probabilities:Object.fromEntries(Object.keys(p.probabilities.properties).map(k=>[k,k===label?0.9:0]))};}
+  else answers[id]={type:'score',score:0,confidence:0.9,probabilities:Object.fromEntries(Object.keys(p.probabilities.properties).map(k=>[k,k==='0'?0.9:0]))};
+}value={answers};}
 if(value.autoReflect)value=value[JSON.parse(JSON.parse(prompt).messages[0].content).mode];
 if(value.autoBootstrap){const data=JSON.parse(JSON.parse(prompt).messages[0].content);value={tasks:Array.from({length:data.taskCount},(_,i)=>({task:data.intents?.[i]??('Synthetic grounded task '+(i+1)),checks:[{op:'contains',arg:'Grounded'},{op:'max_chars',arg:4096}]}))};}
 if(value.autoBrainstorm){if(schema.properties.ideas.items.properties.far_quote){const data=JSON.parse(JSON.parse(prompt).messages[0].content);value=value.badCross||(value.failCrossQuestion&&data.question.includes(value.failCrossQuestion))?{raw:'{}'}:value.emptyCross?{ideas:[]}:{ideas:[{text:'Connect the two domains through a testable constraint.',close_quote:data.close?.content??null,far_quote:data.far.content}]};}else value=value.badJudge?{raw:'{}'}:{autoJudge:true};}
@@ -143,6 +149,26 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   test('an enabled generative decision proxy fails before dispatch',async()=>{
     const before=calls().length;await engine.setConfig('decide.slots.intent.mode','on');
     await run(async()=>{await expect(think()).rejects.toMatchObject({code:'private_route_conflict',source:'think:decide.slots'});});expect(calls().length).toBe(before);
+  });
+  test('a configured Codex intent decision runs through think and writes a hashed receipt',async()=>{
+    await engine.setConfig('decide.provider','llm:codex-cli:gpt-test');
+    await engine.setConfig('decide.slots.intent.mode','on');
+    await engine.setConfig('decide.slots.intent.threshold','0.6');
+    await engine.setConfig('decide.slots.intent.wait_ms','2000');
+    try{
+      await run(async id=>{
+        expect((await think()).synthesisOk).toBe(true);
+        await flushDecideWrites();
+        const rows=await engine.executeRaw<Record<string,unknown>>('SELECT * FROM decision_receipts WHERE slot=$1 ORDER BY id',['intent']);
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.some(row=>row.provider==='llm:codex-cli:gpt-test'&&row.model_resolved==='codex-cli:gpt-test'&&row.call_site==='think'&&row.answer_choice!==null)).toBe(true);
+        expect(rows.some(row=>row.provider==='llm:codex-cli:gpt-test'&&row.model_resolved==='codex-cli:gpt-test'&&row.call_site==='search'&&row.answer_choice!==null)).toBe(true);
+        const dump=JSON.stringify(rows);expect(dump).not.toContain('Orbit launched in March');
+        const [runRow]=await engine.executeRaw<{attempts:number|string;accepted_turns:number|string}>('SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1',[id]);
+        expect(Number(runRow!.attempts)).toBeGreaterThan(1);
+        expect(Number(runRow!.accepted_turns)).toBe(Number(runRow!.attempts));
+      },{},8);
+    }finally{for(const key of ['decide.provider','decide.slots.intent.mode','decide.slots.intent.threshold','decide.slots.intent.wait_ms'])await engine.setConfig(key,'');}
   });
   test('calibration lookup is source scoped and hides unpublished profiles from remote callers',async()=>{
     async function profile(source:string,text:string){await engine.executeRaw(`INSERT INTO calibration_profiles(source_id,holder,published,total_resolved,pattern_statements,active_bias_tags,model_id,domain_scorecards,voice_gate_passed,voice_gate_attempts) VALUES($1,'self',false,5,$2::text[],ARRAY[]::text[],'fixture','{}'::jsonb,true,1)`,[source,[text]]);}

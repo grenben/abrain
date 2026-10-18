@@ -55,7 +55,7 @@ retained; this change does not assign a USD price to subscription inference.
 | Direct CLI | No private subscription allowance surface | Host-context calls supported; missing allowance fails before retrieval | Explicit CLI grant wiring; save/take publication now covered by the follow-up checkpoint |
 | Auto-think | Uses runThink with legacy admission/publication | Inherits validated private synthesis when host-admitted | Cycle budgets, canonical receipts, crash recovery and cooldown gates |
 | Calibration A/B | Injected runner and direct result insert | Existing harness remains unchanged | Actual private runner, failed-trial handling, scoped durable receipts |
-| System One decisions | Optional Typesafe/LLM proxy slots | Explicitly configured Codex slots can use closed typed schemas and host admission; TypeSafe, ordinary LLM and cross-provider fallback routes conflict before private dispatch | Slot calibration and feature-path receipts, real runtime qualification |
+| System One decisions | Optional Typesafe/LLM proxy slots | Explicit Codex slots use closed typed schemas, serialized host admission and hash-only search/query/think receipts in PGLite fixtures; paid providers and cross-provider fallbacks conflict | Calibrated action across slots, PostgreSQL proof and real runtime qualification |
 
 The existing `rounds` option is still single-pass scaffolding with an explicit
 warning for values above one. This checkpoint does not claim an iterative think

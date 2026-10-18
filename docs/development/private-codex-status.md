@@ -22,9 +22,12 @@ in strict private mode. Each batch uses a closed schema bound to its exact typed
 questions; the host validates answers before accepting the subscription turn.
 Query, search and background callers cannot dispatch TypeSafe, ordinary LLM, or
 cross-provider fallback decisions. A leftover TypeSafe key cannot auto-enable
-default paid slots while private mode is active. Fake-executable tests cover the typed answer
-shapes, model identity and admission. Slot calibration, receipts across actual
-feature paths, and real-runtime qualification remain open.
+default paid slots while private mode is active. Host-scoped Codex chat turns
+serialize through validation and acceptance, so parallel decision slots do not
+race the subscription lane. Fake-executable PGLite tests cover standalone
+search, the query operation and think decisions with hash-only receipts.
+Calibrated action across slots, PostgreSQL feature-path proof and real-runtime
+qualification remain open.
 
 ## Installation and source evidence (2026-10-09)
 
