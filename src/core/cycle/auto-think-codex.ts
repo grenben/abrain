@@ -9,7 +9,7 @@ import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { OperationError } from '../ops/contract.ts';
 import { resolveModel } from '../model-config.ts';
 import { digest } from '../persistence/digest.ts';
-import { embedQuery } from '../embedding.ts';
+import { embedQueryWithPrefix } from '../search/query-prefix.ts';
 import { hasAIInvocationGuard } from '../ai/invocation-guard.ts';
 import { withSubscriptionAuxiliaryBudget } from '../ai/subscription-auxiliary.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
@@ -90,7 +90,7 @@ async function runBatch(engine: BrainEngine, opts: AutoThinkPhaseOpts, config: A
             continue;
         }
         try {
-            const result = previous?.result ?? await withSubscriptionAuxiliaryBudget(engine, `group:auto-think:${context.runId}:${sourceId}:${inputHash}`, auxiliaryAuthorized ? config.budgetUsd : undefined, () => runThink(engine, { question: questions[i]!, sourceId, remote: false, model, save: config.autoCommit, embedQuestion: embedQuery }));
+            const result = previous?.result ?? await withSubscriptionAuxiliaryBudget(engine, `group:auto-think:${context.runId}:${sourceId}:${inputHash}`, auxiliaryAuthorized ? config.budgetUsd : undefined, () => runThink(engine, { question: questions[i]!, sourceId, remote: false, model, save: config.autoCommit, embedQuestion: (q: string) => embedQueryWithPrefix(engine, q) }));
             if (result.synthesisOk !== true)
                 return report('partial', 'Automatic think produced a valid empty answer; cooldown unchanged.', completed);
             if (!previous)

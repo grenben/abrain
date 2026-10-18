@@ -7,7 +7,8 @@ import { effectiveVisibility } from '../search/private-visibility.ts';
 import { isQuarantined } from '../quarantine.ts';
 import { hybridSearch } from '../search/hybrid.ts';
 import { INTERNAL_BREADTH_SEARCH_OPTS } from '../search/internal-breadth.ts';
-import { embedQuery, isAvailable } from '../ai/gateway.ts';
+import { isAvailable } from '../ai/gateway.ts';
+import { embedQueryWithPrefix } from '../search/query-prefix.ts';
 import { fetchFar, enumeratePrefixes } from './domain-bank.ts';
 import type { BrainstormProfile } from './orchestrator.ts';
 import { ensureWellFormed } from '../text-safe.ts';
@@ -57,7 +58,7 @@ export async function selectBrainstormPages(ctx: OperationContext, input: {
     holder: string;
     maxFarSet: number;
 }): Promise<BrainstormSelection> {
-    const engine = ctx.engine, embedding = isAvailable('embedding') ? await embedQuery(input.question) : null;
+    const engine = ctx.engine, embedding = isAvailable('embedding') ? await embedQueryWithPrefix(engine, input.question) : null;
     let degraded = false;
     const found = input.profile.k_close ? await hybridSearch(engine, input.question, { ...INTERNAL_BREADTH_SEARCH_OPTS, limit: input.profile.k_close, sourceIds: input.sourceIds,
         onMeta: m => { degraded = !!m.degraded?.some(d => !(d.stage === 'embed_unavailable' && d.reason === 'embedding_disabled')); } }) : [];

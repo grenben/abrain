@@ -1,4 +1,4 @@
-import { embedQuery } from '../core/embedding.ts';
+import { embedQueryWithPrefix } from '../core/search/query-prefix.ts';
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../core/engine.ts';
 import { resolveSourceId } from '../core/source-resolver.ts';
@@ -61,7 +61,7 @@ export async function runCalibrationAb(engine: BrainEngine, args: string[]): Pro
             throw usageError('ab-run requires explicit strict private configuration.', 'Configure private Codex on the host before authorizing trials.');
         const question = positional.join(' '), trialId = requireUuid(values.get('--codex-request-id') ?? randomUUID());
         const holder = resolveOwnerHolder({ override: values.get('--holder'), configValue: await engine.getConfig('emotional_weight.user_holder') });
-        const opts = { question, sourceId, remote: false as const, model: values.get('--model'), calibrationHolder: holder, embedQuestion: embedQuery };
+        const opts = { question, sourceId, remote: false as const, model: values.get('--model'), calibrationHolder: holder, embedQuestion: (q: string) => embedQueryWithPrefix(engine, q) };
         const allowanceArgs = THINK_ALLOWANCE_FLAGS.filter(flag => flag !== '--codex-request-id' && values.has(flag)).flatMap(flag => [flag, values.get(flag)!]);
         const trial = await withThinkSubscription(engine, [...allowanceArgs, '--codex-request-id', trialId], opts, () => preparePrivateAbTrial({ ...opts, engine, trialId, holder }), 'calibration-ab');
         process.stdout.write(json ? JSON.stringify(output(trial), null, 2) + '\n' : `Trial ${trial.trial_id} (${trial.state})\n\nBaseline:\n${trial.baseline!.answer}\n\nWith calibration:\n${trial.calibrated!.answer}\n\nRecord your preference with calibration ab-rate ${trial.trial_id} --source ${sourceId} --prefer <choice>.\n`);

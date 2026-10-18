@@ -12,7 +12,7 @@ import { OperationError } from '../ops/contract.ts';
 import { digest, requireUuid, jsonBytes } from '../persistence/digest.ts';
 import { getLatestProfile } from '../../commands/calibration.ts';
 import { resolveModel } from '../model-config.ts';
-import { embedQuery } from '../embedding.ts';
+import { embedQueryWithPrefix } from '../search/query-prefix.ts';
 import { abConflict, authorizeTrial, checkTrialGeneration, readTrial, rateTrial, saveTrialAnswer, type ABTrial, type ABPreference } from './think-ab-store.ts';
 export interface PrivateABInput {
     engine: BrainEngine;
@@ -101,7 +101,7 @@ export async function preparePrivateAbTrial(input: PrivateABInput): Promise<ABTr
                 continue;
             await context.checkAuthority?.();
             await checkTrialGeneration(engine, trial);
-            const opts = { question, sourceId, remote: false as const, model, withCalibration: side === 'calibrated', calibrationHolder: holder, embedQuestion: embedQuery };
+            const opts = { question, sourceId, remote: false as const, model, withCalibration: side === 'calibrated', calibrationHolder: holder, embedQuestion: (q: string) => embedQueryWithPrefix(engine, q) };
             const captured = await withThinkEvidence(thinkPublicationContext(engine, opts), opts, () => runThink(engine, opts));
             await saveTrialAnswer(engine, trial, side, { ...captured.result, comparison_evidence: captured.evidence });
             trial = await readTrial(engine, id, sourceId);
