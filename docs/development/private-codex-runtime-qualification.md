@@ -167,6 +167,25 @@ The production hash registry remains empty while real-runtime action-path,
 host-support, and wider process-crash checks remain incomplete. This local
 synthetic settlement result does not establish macOS behavior.
 
+`scripts/codex-runtime-cancel-probe.ts` now exercises the exact real CLI
+against a credential-free loopback provider that accepts one request but holds
+its response. It uses the production PID-namespace runner and current proposal
+argv; the held request must advertise zero tools. Run both modes on a candidate
+Linux host:
+
+```sh
+bun scripts/codex-runtime-cancel-probe.ts /absolute/path/to/codex gpt-6.1-sol abort
+bun scripts/codex-runtime-cancel-probe.ts /absolute/path/to/codex gpt-6.1-sol timeout
+```
+
+On this host, abort returned reason `aborted`, `settled: true`, one request
+with zero tools, and 432 ms elapsed. The five-second deadline returned
+`timeout`, `settled: true`, one request with zero tools, and 5,262 ms elapsed.
+The runner reports settlement only after its child closes and its process
+group is gone. This adds real-CLI cancellation evidence to the detached-child
+synthetic test; it does not prove every descendant or crash path. The local
+ELF is still user-owned and not admissible as a production runtime.
+
 ## Reproducible local boundary probe
 
 `scripts/codex-runtime-boundary-probe.ts` runs the exact configured ELF by its

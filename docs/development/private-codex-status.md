@@ -102,7 +102,9 @@ zero-tool request plan, synthetic PNG transport, hostile ancestor instructions,
 and rejection of seven forced local calls, including a shell call with a
 non-denying hook. One signed-in synthetic schema-and-image call also completed
 with a valid answer and no native-action event. The local 0.162.0 binary
-passes these bounded checks but fails production inode protection because it
+also settled after abort and timeout against a held credential-free mock
+response, with zero tools in both requests. It passes these bounded checks
+but fails production inode protection because it
 is user-owned; all-path qualification is unfinished and the production registry
 remains empty.
 [Private drift](private-codex-drift.md) now validates native proposals and preserves
