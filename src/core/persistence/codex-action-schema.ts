@@ -16,7 +16,7 @@ END $codex_protocol$;
 ${guard.replace('ELSIF version<>1 THEN', 'ELSIF version NOT IN (1,3) OR (version=3 AND NEW.operation<>\'put_page\') THEN')};
 `;
 
-// Existing subagent_tool_executions receives host_binding in migration v262,
+// Existing subagent_tool_executions receives host_binding in migration v265,
 // after the published migrations add started_at and ended_at.
 export const CODEX_ACTION_WRITE_BOOTSTRAP_SQL = CODEX_ACTION_WRITE_SCHEMA_SQL.replace(
   'ALTER TABLE subagent_tool_executions ADD COLUMN IF NOT EXISTS host_binding JSONB;\n', '',

@@ -71,7 +71,7 @@ export function codexEvalAllowanceContract(f: Fixture) { describe('local Codex e
   test('missing schema and conflicting owner pins fail before grant creation and always close the owner',async()=>{
     const t=fixture(),engine=f.engine(),getConfig=engine.getConfig,before=f.calls().length;
     try{engine.getConfig=async key=>key==='version'?'236':getConfig.call(engine,key);
-      await expect(t.run()).rejects.toThrow('v272');engine.getConfig=getConfig;
+      await expect(t.run()).rejects.toThrow('v275');engine.getConfig=getConfig;
       await engine.setConfig('models.eval.longmemeval','anthropic:fixture');
       await expect(t.run()).rejects.toMatchObject({code:'private_route_conflict'});
       expect(await grant(t.runId)).toBeUndefined();expect(f.calls().length).toBe(before);expect(t.counts()).toEqual({connects:2,closes:2});

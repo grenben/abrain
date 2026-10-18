@@ -53,7 +53,7 @@ empty; malformed output, refusal, incomplete lifecycle and provider failure
 cannot become an empty success or a judgment. Failed judge calls retain accepted
 cross proposals for retry without reselecting evidence.
 
-Migration v273 adds `codex_brainstorm_runs` on both engines. It binds one grant to
+Migration v276 adds `codex_brainstorm_runs` on both engines. It binds one grant to
 one immutable request, selection, accepted result and publication plan. A renewable
 15-minute owner lease fences generation and result storage; expired ownership
 cannot bypass active or unresolved attempts. Changed inputs, models, settings,
@@ -111,7 +111,7 @@ No installation, production migration, live inference, credential change,
 service restart or private activation is performed by this development work.
 Rollback must park/drain protocol-5 requests before an older consumer runs;
 retain the tables and receipts instead of dropping recovery state. Both fresh
-schema generation and registered migrations include v273; production migration
+schema generation and registered migrations include v276; production migration
 and deployment are separate upgrade steps.
 
 ## Deterministic checks
@@ -135,7 +135,7 @@ environment; the PostgreSQL runner creates and stops its disposable cluster.
 | `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=30000 test/ai/codex-think.serial.test.ts` | 295 passed; 1,086 assertions |
 | `python3 /tmp/maxbrain-test-postgres-think.py` | Same 295 passed and 1,086 assertions; cluster stopped |
 | `python3 /tmp/maxbrain-codex-brainstorm-regressions.py` | Seven legacy suites, each a separate process: 110 passed; 291 assertions |
-| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | v273 catalog refresh, then catalog + migration replay: 12 passed; 31 assertions; PgBouncer skipped; cluster stopped |
+| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | v276 catalog refresh, then catalog + migration replay: 12 passed; 31 assertions; PgBouncer skipped; cluster stopped |
 | `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 75 checks passed; admin build explicitly skipped |
 | `python3 /tmp/maxbrain-stream-check.py bun run build` | Compiled 3,687 modules |
 | `git diff --check` | Passed |

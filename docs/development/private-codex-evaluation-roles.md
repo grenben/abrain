@@ -22,7 +22,7 @@ verbatim text, mentioned entities, real dates anchored in the excerpt or supplie
 session date, and a numeric metric or an event. Invalid rows, duplicate proposals,
 authority fields and malformed output reject the whole batch. Valid empty output
 is explicit. The old parsed-text cache is bypassed; scoped native reuse retains
-the raw proposal and revalidates it through the v271 cache.
+the raw proposal and revalidates it through the v274 cache.
 
 Private entity resolution uses the existing strict resolver with storage errors
 propagated. It refuses ambiguous identities and cannot turn a failed lookup into
@@ -116,7 +116,7 @@ enforced while that work proceeds. Full A–G acceptance remains incomplete.
 No installed executable, configuration, credentials, database or service changed.
 Production runtime qualification remains unverified; no live inference occurred.
 An eventual authorized upgrade must include the reviewed source/build and
-registered migrations through v271, plus the remaining activation gates.
+registered migrations through v274, plus the remaining activation gates.
 
 ## Disposable benchmark ownership follow-up
 
@@ -138,7 +138,7 @@ fails, the question becomes invalid and cannot perform further inference. Its
 derived state must be rebuilt through the next reset; no durable benchmark result
 receipt is claimed here.
 
-A native proposal retained in the host v271 cache can be revalidated and inserted
+A native proposal retained in the host v274 cache can be revalidated and inserted
 into a rebuilt corpus without a second inference charge. The real keyword CLI
 fixture now runs extraction, reader and judge for two questions, preserving six
 attempts/accepted turns in the external host database. Injected expansion,
@@ -153,7 +153,7 @@ Pages and chunks run sequentially. An explicit concurrency above one, legacy
 unset legacy dollar default cannot authorize subscription inference. Non-private
 runs retain their prior cache, concurrency and dollar cap behavior.
 
-Raw proposals live in the host's v271 cache. The host request ID and native
+Raw proposals live in the host's v274 cache. The host request ID and native
 synopsis protocol bind the namespace; each request also binds its full prompt,
 source evidence, schema and model. Rebuilding a temporary corpus can reuse a
 validated proposal without repeating its inference charge or copying its tokens
@@ -183,7 +183,7 @@ transport, with a network tripwire; embedding opt-in changes only the disposable
 fixture configuration and is restored afterward. This does not qualify real
 Codex isolation or activate the installed brain.
 
-Full benchmark CLI grant creation, dataset/request binding and durable result recovery remain incomplete. An authorized future installation still needs migrations through v271 and runtime qualification.
+Full benchmark CLI grant creation, dataset/request binding and durable result recovery remain incomplete. An authorized future installation still needs migrations through v274 and runtime qualification.
 
 ## Native fact-key follow-up
 
@@ -217,7 +217,7 @@ the fact-key protocol, model, vector column and actual keyed text. Original
 vectors for embeddings of plain or title-wrapped text. The target must be a
 factory-owned temporary brain under an active host scope.
 
-Both modes retain raw native responses in the host v271 cache. Every hit repeats
+Both modes retain raw native responses in the host v274 cache. Every hit repeats
 schema and semantic validation and reports no new native token charge. The
 production extractor now uses that cache only when a host explicitly supplies a
 scope; ordinary calls retain their normal admission. Private malformed or

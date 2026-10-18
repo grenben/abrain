@@ -1,7 +1,7 @@
 import type { Migration } from './types.ts';
 
-export const v261: Migration = {
-  version: 261, name: 'codex_publication_plans', idempotent: true,
+export const v264: Migration = {
+  version: 264, name: 'codex_publication_plans', idempotent: true,
   sql: `CREATE TABLE IF NOT EXISTS codex_publication_plans (
     plan_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,

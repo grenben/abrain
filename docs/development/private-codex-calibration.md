@@ -68,7 +68,7 @@ shortened by its enclosing deadline. Subscription attempts/accepted turns and
 account-lane ownership still apply. USD cost remains null. No auxiliary paid
 inference is authorized by the direct command.
 
-Migration **v266** adds retained profile evidence and a unique source/holder/run
+Migration **v269** adds retained profile evidence and a unique source/holder/run
 receipt key, identically on PostgreSQL and PGLite. The sole profile insert is
 transactional and unpublished. Evidence stores protocol/version, source
 incarnation, principal, pack identity, snapshot hash, aggregate metrics, supplied
@@ -145,7 +145,7 @@ fake executable. No real inference or production database was used.
 - The first native concurrency run exposed two simultaneous shared-to-exclusive
   lock upgrades. Admission now takes the exclusive brain lock before declaring
   the shared persistence protocol; the corrected native contract passes.
-- Schema goldens also incorporate the previously implemented v265 take-proposal
+- Schema goldens also incorporate the previously implemented v268 take-proposal
   column, whose migration-record golden was stale. No prior migration changed.
 
 | Final command (isolated harness) | Result |

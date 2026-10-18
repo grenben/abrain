@@ -62,7 +62,7 @@ core-page, empty-overwrite, timeline, canonical-file and indexing-debt rules sti
 apply. GBrain stamps `minion:codex` provenance; the model cannot supply authority.
 No OAuth credential is copied into the action history.
 
-Migration 262 adds the host binding and page request protocol 3. Old consumers
+Migration 265 adds the host binding and page request protocol 3. Old consumers
 refuse that protocol. Current admission and publication revalidate the retained
 job claim and payload, subscription deadline, writer grants, source incarnation,
 canonical identity and request contents. Publication rechecks the observed target

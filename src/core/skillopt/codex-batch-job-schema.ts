@@ -1,4 +1,4 @@
-/** Permanent batch request to queued worker identity; migration 284. */
+/** Permanent batch request to queued worker identity; migration 287. */
 export const CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_skillopt_batch_submissions (
   request_id UUID PRIMARY KEY,

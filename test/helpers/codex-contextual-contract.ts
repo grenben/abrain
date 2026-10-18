@@ -1,4 +1,4 @@
-import { v270 } from '../../src/core/schema-migrations/v270-precise-auxiliary-spend.ts';
+import { v273 } from '../../src/core/schema-migrations/v273-precise-auxiliary-spend.ts';
 import { reserveGroup, settle } from '../../src/core/minions/budget-meter.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
 import { runWithJobSpend, jobSpendAuthorization } from '../../src/core/minions/spend-authorization.ts';
@@ -65,7 +65,7 @@ export function codexContextualContract(f:Fixture){describe('native contextual s
     await engine.transaction(async tx=>{
       await tx.executeRaw('ALTER TABLE mcp_spend_reservations ALTER COLUMN estimated_cents TYPE NUMERIC(12,4), ALTER COLUMN actual_cents TYPE NUMERIC(12,4)');
       await tx.executeRaw('ALTER TABLE mcp_spend_log ALTER COLUMN spend_cents TYPE NUMERIC(12,4)');
-      for(let replay=0;replay<2;replay++)for(const statement of v270.sql!.split(';').filter(part=>part.trim()))await tx.executeRaw(statement);
+      for(let replay=0;replay<2;replay++)for(const statement of v273.sql!.split(';').filter(part=>part.trim()))await tx.executeRaw(statement);
       const [row]=await tx.executeRaw<{actual_cents:number;estimated_cents:number}>('SELECT actual_cents,estimated_cents FROM mcp_spend_reservations WHERE reservation_id=$1',[hold.reservationId]);expect(Number(row!.actual_cents)).toBe(0.1255);expect(Number(row!.estimated_cents)).toBe(0.25);
       const columns=await tx.executeRaw<{numeric_scale:number}>("SELECT numeric_scale FROM information_schema.columns WHERE table_schema='public' AND ((table_name='mcp_spend_reservations' AND column_name IN ('actual_cents','estimated_cents')) OR (table_name='mcp_spend_log' AND column_name='spend_cents'))");expect(columns.map(row=>Number(row.numeric_scale))).toEqual([12,12,12]);
     });

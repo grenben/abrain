@@ -34,7 +34,7 @@ export async function runLocalLongMemEval(args: string[], connect: () => Promise
   const owner=await connect();
   try {
     const version=await owner.engine.getConfig('version');
-    if (!version || !/^\d+$/.test(version) || Number(version)<272) throw usageError('Private evaluation requires the registered v272 schema.', 'Upgrade the selected host schema explicitly before retrying. This command does not apply migrations.');
+    if (!version || !/^\d+$/.test(version) || Number(version)<272) throw usageError('Private evaluation requires the registered v275 schema.', 'Upgrade the selected host schema explicitly before retrying. This command does not apply migrations.');
     await reconfigureGatewayWithEngine(owner.engine);
     await withLocalEvalAllowance(owner.engine,split.allowance,()=>runEvalLongMemEval(split.args,{exitOnError:false}));
   } finally { await owner.close(); }

@@ -14,7 +14,7 @@ provider fallback. Strict mode rejects injected runners and remote authority.
 The legacy injectable harness remains outside private mode, with explicit empty
 answer and invalid preference refusals.
 
-Migration v269 adds `codex_think_ab_trials` with RLS and parity across PGLite and
+Migration v272 adds `codex_think_ab_trials` with RLS and parity across PGLite and
 PostgreSQL. Each trial binds a host UUID, subscription run, source incarnation,
 question, holder, model, original local authority and optional worker fence.
 It retains the actual calibration profile and each validated answer before the
@@ -94,7 +94,7 @@ reports. Focused legacy tests preserve report thresholds and non-private behavio
 | `git diff --check` | Passed |
 
 Catalog goldens were deliberately regenerated on both engines, inspected for
-only the new v269 table, constraints and indexes, then tested with updates off.
+only the new v272 table, constraints and indexes, then tested with updates off.
 No existing migration or size ceiling was changed. Admin UI dependency fetching,
 PgBouncer, full CI and live-runtime qualification remain unverified. Local logs
 are `/tmp/maxbrain-ab-{contract-final,postgres,regression,schema,pg-schema,verify,build}.log`.
@@ -114,7 +114,7 @@ change does not authorize resetting its allowance or replaying unknown effects.
 
 After separately authorized deployment and the remaining gates: build the
 verified source, preserve/back up the actual database target, apply the registered
-migrations through v269, update every consumer and restart the actual services.
+migrations through v272, update every consumer and restart the actual services.
 Bounded authorized live schema/image, maintenance, iterative recovery and
 cancellation checks must pass before explicit activation. The installed GBrain
 retains its original capabilities.

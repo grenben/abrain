@@ -21,7 +21,7 @@ wikilinks. Other link markup and model-authored authority are refused. Existing 
 deleted targets are never overwritten. Schema, lifecycle, or semantic failures fail
 explicitly; there is no content repair, agentic fallback, or provider fallback.
 
-Migration **v261** adds an immutable accepted-plan payload with a digest, source
+Migration **v264** adds an immutable accepted-plan payload with a digest, source
 incarnation, protocol version, and a unique pending slot per source/incarnation/kind.
 The host stores writer authority, evidence identities/revisions, expected target
 revisions, complete page contents, and the intended watermark. Source purge cascades
@@ -104,5 +104,5 @@ PgBouncer remain unverified in this checkpoint; neither was provisioned here.
 - Full queue-handler publication races, process-crash injection at every persistence
   seam, cross-worker database contention and live cancellation acceptance remain open.
 - No migration was applied to the installed database. Future authorized deployment
-  must include v261, a consistent executable across workers, and the broader runtime,
+  must include v264, a consistent executable across workers, and the broader runtime,
   routing, accounting and action-loop gates in the status document.

@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, test, expect } from 'bun:test';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
-import { v258 } from '../../src/core/schema-migrations/v258-codex-subscription-admission.ts';
+import { v261 } from '../../src/core/schema-migrations/v261-codex-subscription-admission.ts';
 import { createSubscriptionRun, reserveSubscriptionAttempt, settleSubscriptionAttempt, acceptSubscriptionTurn } from '../../src/core/ai/subscription-admission.ts';
 let engine: PGLiteEngine;
 beforeAll(async () => { engine = new PGLiteEngine(); await engine.connect({database_url:''}); await engine.initSchema(); });
@@ -9,7 +9,7 @@ const hash = 'a'.repeat(64);
 const envelope = (runId:string, accountLane=runId, maxAttempts=3, maxTurns=maxAttempts) => ({runId,accountLane,maxAttempts,maxTurns,deadline:new Date(Date.now()+60_000)});
 const reserve = (runId:string, attemptId:string, repair=false) => reserveSubscriptionAttempt(engine,{runId,attemptId,requestHash:hash,timeoutMs:1000,repair});
 test('migration is idempotent and missing subscription admission fails closed', async () => {
-  await engine.transaction(tx => tx.runMigration(v258.version, v258.sql));
+  await engine.transaction(tx => tx.runMigration(v261.version, v261.sql));
   await expect(reserve('absent','attempt-absent')).rejects.toMatchObject({code:'subscription_required'});
 });
 test('immutable run envelopes cannot be reused with a larger allowance', async () => {

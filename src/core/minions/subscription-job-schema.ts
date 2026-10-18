@@ -16,7 +16,7 @@ CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON minion_jobs
   FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol();
 `;
 
-// Existing minion_jobs receives this column in migration v259, after the
+// Existing minion_jobs receives this column in migration v262, after the
 // published migrations add their columns. Keep that ordinal on fresh installs.
 export const SUBSCRIPTION_JOB_BOOTSTRAP_SQL = SUBSCRIPTION_JOB_SCHEMA_SQL.replace(
   'ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS codex_claim_token BIGINT;\n', '',

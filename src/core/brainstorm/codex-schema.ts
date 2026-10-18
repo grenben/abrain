@@ -1,6 +1,6 @@
 import { SHARED_SKILLS_PERSISTENCE_SCHEMA_STATEMENTS } from '../shared-skills/persistence-schema.ts';
 const guard=SHARED_SKILLS_PERSISTENCE_SCHEMA_STATEMENTS.find(s=>s.startsWith('CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol()'))!;
-/** Durable native brainstorm selection, results and publication, migration v273. */
+/** Durable native brainstorm selection, results and publication, migration v276. */
 export const CODEX_BRAINSTORM_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_brainstorm_runs (
   run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),

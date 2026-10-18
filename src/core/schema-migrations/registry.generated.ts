@@ -258,34 +258,34 @@ import { v254 } from './v254-segment-reader-marks.ts';
 import { v255 } from './v255-page-body-staging-texts.ts';
 import { v256 } from './v256-chunk-retirement-index.ts';
 import { v257 } from './v257-pages-live-origin-key.ts';
-import { v258 } from './v258-codex-subscription-admission.ts';
-import { v259 } from './v259-codex-subscription-jobs.ts';
-import { v260 } from './v260-extract-subscription-cost.ts';
-import { v261 } from './v261-codex-publication-plans.ts';
-import { v262 } from './v262-codex-action-write-bindings.ts';
-import { v263 } from './v263-codex-upgrade-receipts.ts';
-import { v264 } from './v264-codex-job-parking.ts';
-import { v265 } from './v265-codex-take-proposal-evidence.ts';
-import { v266 } from './v266-codex-calibration-evidence.ts';
-import { v267 } from './v267-codex-think-publications.ts';
-import { v268 } from './v268-codex-auto-think-runs.ts';
-import { v269 } from './v269-codex-think-ab-trials.ts';
-import { v270 } from './v270-precise-auxiliary-spend.ts';
-import { v271 } from './v271-codex-proposal-cache.ts';
-import { v272 } from './v272-codex-eval-results.ts';
-import { v273 } from './v273-codex-brainstorm-runs.ts';
-import { v274 } from './v274-codex-brainstorm-fixtures.ts';
-import { v275 } from './v275-codex-subscription-groups.ts';
-import { v276 } from './v276-codex-skillopt-rollouts.ts';
-import { v277 } from './v277-codex-skillopt-runs.ts';
-import { v278 } from './v278-codex-skillopt-submissions.ts';
-import { v279 } from './v279-codex-shared-skill-optimization.ts';
-import { v280 } from './v280-codex-bootstrap-runs.ts';
-import { v281 } from './v281-codex-subscription-tree.ts';
-import { v282 } from './v282-codex-skillopt-batches.ts';
-import { v283 } from './v283-codex-skillopt-cycles.ts';
-import { v284 } from './v284-codex-skillopt-batch-submissions.ts';
-import { v285 } from './v285-codex-bootstrap-jobs.ts';
+import { v261 } from './v261-codex-subscription-admission.ts';
+import { v262 } from './v262-codex-subscription-jobs.ts';
+import { v263 } from './v263-extract-subscription-cost.ts';
+import { v264 } from './v264-codex-publication-plans.ts';
+import { v265 } from './v265-codex-action-write-bindings.ts';
+import { v266 } from './v266-codex-upgrade-receipts.ts';
+import { v267 } from './v267-codex-job-parking.ts';
+import { v268 } from './v268-codex-take-proposal-evidence.ts';
+import { v269 } from './v269-codex-calibration-evidence.ts';
+import { v270 } from './v270-codex-think-publications.ts';
+import { v271 } from './v271-codex-auto-think-runs.ts';
+import { v272 } from './v272-codex-think-ab-trials.ts';
+import { v273 } from './v273-precise-auxiliary-spend.ts';
+import { v274 } from './v274-codex-proposal-cache.ts';
+import { v275 } from './v275-codex-eval-results.ts';
+import { v276 } from './v276-codex-brainstorm-runs.ts';
+import { v277 } from './v277-codex-brainstorm-fixtures.ts';
+import { v278 } from './v278-codex-subscription-groups.ts';
+import { v279 } from './v279-codex-skillopt-rollouts.ts';
+import { v280 } from './v280-codex-skillopt-runs.ts';
+import { v281 } from './v281-codex-skillopt-submissions.ts';
+import { v282 } from './v282-codex-shared-skill-optimization.ts';
+import { v283 } from './v283-codex-bootstrap-runs.ts';
+import { v284 } from './v284-codex-subscription-tree.ts';
+import { v285 } from './v285-codex-skillopt-batches.ts';
+import { v286 } from './v286-codex-skillopt-cycles.ts';
+import { v287 } from './v287-codex-skillopt-batch-submissions.ts';
+import { v288 } from './v288-codex-bootstrap-jobs.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -542,9 +542,6 @@ export const MIGRATIONS: Migration[] = [
   v255,
   v256,
   v257,
-  v258,
-  v259,
-  v260,
   v261,
   v262,
   v263,
@@ -570,4 +567,7 @@ export const MIGRATIONS: Migration[] = [
   v283,
   v284,
   v285,
+  v286,
+  v287,
+  v288,
 ];

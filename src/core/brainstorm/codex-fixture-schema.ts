@@ -1,4 +1,4 @@
-/** Separate durable fixture identity from its single shared native allowance (v274). */
+/** Separate durable fixture identity from its single shared native allowance (v277). */
 export const CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL = `
 ALTER TABLE codex_brainstorm_runs ADD COLUMN IF NOT EXISTS subscription_run_id TEXT;
 UPDATE codex_brainstorm_runs SET subscription_run_id=run_id WHERE subscription_run_id IS NULL;

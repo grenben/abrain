@@ -8,7 +8,7 @@ private mode. The installed GBrain retains its original capabilities.
 `private-codex pins` operates on one explicitly selected configuration plane.
 Use the verified source build and a controlled cutover with other configuration
 writers stopped. The database plane requires the existing selected brain to have
-registered migration **v263**; these commands never apply startup migrations.
+registered migration **v266**; these commands never apply startup migrations.
 Correct conflicting file/environment pins before connecting a database with strict
 mode already enabled, since the existing connection bootstrap validates routing.
 

@@ -13,7 +13,7 @@ makes the normal admitted call. No CLI or installed configuration enables this
 cache automatically.
 
 The cache resides in the **subscription context's database**, not an arbitrary
-benchmark database. Registered migration **v271** adds its bounded raw response
+benchmark database. Registered migration **v274** adds its bounded raw response
 storage with row-level security on both PGLite and PostgreSQL. Each entry retains
 the originating subscription run. Namespace, authority binding, model, complete
 prompt, schema, semantic protocol version and generation parameters determine
@@ -86,6 +86,6 @@ refused under strict mode. These tests do not establish full private benchmark
 support or authorize an additional database/account lane.
 
 Installed GBrain retains its original capabilities. An eventual upgrade must
-include the reviewed artifact and registered migrations through v271, followed
+include the reviewed artifact and registered migrations through v274, followed
 by authorized runtime qualification and activation gates. Production native
 isolation, live subscription behavior and full feature coverage remain open.

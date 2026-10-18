@@ -54,12 +54,12 @@ an exact already-written draft, but cannot publish an accepted unwritten draft.
 
 Fixtures use fake Codex executables, synthetic files, fresh isolated homes and
 databases, disabled discovery, absent credentials and forbidden-network checks.
-Unless identified as the v285 integration check, the counts below describe the
+Unless identified as the v288 integration check, the counts below describe the
 old-source checkpoint and have not been rerun against this integration branch.
 
 - PGLite: `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/ai/codex-think.serial.test.ts --timeout=180000 -t 'native skill benchmark generation|native standalone bootstrap admission'` — 40 passed, 174 assertions.
 - Final PGLite additions: the same isolated command with `-t 'native standalone bootstrap admission'` — 16 passed, 82 assertions, including expiry and source-incarnation boundaries.
-- v285 integration, background CLI/job contract on isolated PGLite: `bun test test/ai/codex-actions.serial.test.ts -t 'background Codex benchmark bootstrap jobs'` — 5 passed, 24 assertions; CLI refuses background mode on PGLite, while producer/worker behavior uses fake Codex and no inference during admission.
+- v288 integration, background CLI/job contract on isolated PGLite: `bun test test/ai/codex-actions.serial.test.ts -t 'background Codex benchmark bootstrap jobs'` — 5 passed, 24 assertions; CLI refuses background mode on PGLite, while producer/worker behavior uses fake Codex and no inference during admission.
 - Background CLI/job contract on a disposable PostgreSQL cluster on the old-source branch: 5 passed, 25 assertions; the PostgreSQL path remains unverified in this integration checkout.
 - PostgreSQL: `python3 /tmp/maxbrain-test-postgres-bootstrap-local.py` — final combined suite: 43 passed, 187 assertions; disposable server stopped afterward.
 - Background queue submission, worker publication, same-request replay and changed-file refusal are covered by `test/helpers/codex-bootstrap-job-contract.ts` in the shared PGLite/PostgreSQL action contracts.
@@ -83,7 +83,7 @@ isolation. The full container CI, admin UI and PgBouncer gates remain unverified
 
 ## Upgrade boundary
 
-Migration 265 is registered for PGLite and PostgreSQL; it has only been applied to
+Migration 268 is registered for PGLite and PostgreSQL; it has only been applied to
 isolated test databases here. A later authorized deployment must build this source,
 apply registered migrations to the intended target, and update compatible consumers.
 Keep plans and accepted drafts for reconciliation; a binary rollback does not

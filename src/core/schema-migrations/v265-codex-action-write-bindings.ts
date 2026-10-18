@@ -1,12 +1,12 @@
 import type { Migration } from './types.ts';
-import { CODEX_UPGRADE_SCHEMA_SQL } from '../ai/private-upgrade-schema.ts';
+import { CODEX_ACTION_WRITE_SCHEMA_SQL } from '../persistence/codex-action-schema.ts';
 
 // Applied by src/core/migrate.ts on the next initSchema(); see docs/ENGINES.md
 // ("Canonical schema sources") for when schema.sql or a TS fragment also changes.
-export const v263: Migration = {
-  version: 263,
-  name: 'codex_upgrade_receipts',
+export const v265: Migration = {
+  version: 265,
+  name: 'codex_action_write_bindings',
   // Re-running must be safe: CREATE ... IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
   idempotent: true,
-  sql: CODEX_UPGRADE_SCHEMA_SQL,
+  sql: CODEX_ACTION_WRITE_SCHEMA_SQL,
 };

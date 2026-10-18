@@ -1,4 +1,4 @@
-/** Source-scoped scheduled optimizer selection and completion; migration 283. */
+/** Source-scoped scheduled optimizer selection and completion; migration 286. */
 export const CODEX_SKILLOPT_CYCLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_skillopt_cycles (
   run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),

@@ -4,7 +4,7 @@ This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
 The isolated integration checkout is restamped onto upstream 0.60.296.0 as
-source version 0.60.297.0. Its private migrations are registered at v258–v285.
+source version 0.60.297.0. Its private migrations are registered at v261–v288.
 This checkout has passed the repository verification gates; the installed
 0.60.96.0 package and its database have not been changed.
 
@@ -71,11 +71,11 @@ The installed artifact has not changed. Private activation and live verification
 |---|---|---|---|---|
 | A. Schema/image transport and lifecycle | absent | partial prototype | partial | `codex-proposal`, `codex-input`, `codex-schema`, `codex-lifecycle`, `codex-process` and fake executable tests. Real schema file/argv, JSONL completion, local validation, private scratch, filtered env, process-group settlement. Runtime native-action/instruction isolation remains unqualified; PNG validation checks complete chunks, bounded inflation and decoded pixels before admission; JPEG/WebP now validate complete containers and decoded pixels using pinned local WASM. Windows process trees unsupported. |
 | B. Strict routing | absent | absent | partial | `private-policy`, gateway/provider construction guards, `model-config`, special atom resolver, and legacy subagent entry gate. Explicit conflicting pins fail; default roles choose the configured Codex model. Complete queue/eval/pin-plane coverage remains open. |
-| C. Subscription accounting | absent | absent | partial | `subscription-admission`, migration v258, `codex-dispatch`, async host scopes, honest null costs, independent auxiliary USD guards. PGLite and native PostgreSQL tests cover account concurrency, immutable envelopes, bounds, stale ownership and unresolved retention. Queue/worker binding is implemented below; explicit CLI and two scheduled producers now issue allowances; other producers and durable operator reconciliation remain open. Migration v260 preserves unknown subscription totals in extraction rollups alongside API subtotals. The lane is shared within one brain DB, not across unrelated DBs. |
+| C. Subscription accounting | absent | absent | partial | `subscription-admission`, migration v261, `codex-dispatch`, async host scopes, honest null costs, independent auxiliary USD guards. PGLite and native PostgreSQL tests cover account concurrency, immutable envelopes, bounds, stale ownership and unresolved retention. Queue/worker binding is implemented below; explicit CLI and two scheduled producers now issue allowances; other producers and durable operator reconciliation remain open. Migration v263 preserves unknown subscription totals in extraction rollups alongside API subtotals. The lane is shared within one brain DB, not across unrelated DBs. |
 | D. Bounded feature coverage | absent | absent | partial | Actual gateway chat/expansion/OCR use the proposal path; schema/image transport and valid empty outcomes tested. `private-roles` inventories roles without claiming feature acceptance. Facts/classifiers, atoms, grading, drift, take proposals and chunk synopses now have native schemas and semantic checks; private take acceptance retains reviewer plans and reconciles canonical receipts; see the bounded-role follow-up. Other roles and full publication recovery still require fixtures and fixes. |
-| E. Synthesis/pattern publication | absent | unverified | partial | Private patterns now use native proposals, v261 retained plans, stable prepared-write receipts, evidence revision checks, source-scoped provenance and partial-commit recovery. PGLite/PostgreSQL fixtures cover the pattern path. Bounded private synthesis now shares the retained-plan path, with multi-chunk completion, required summary receipts and transcript-to-pattern fixtures on both engines. Existing-page edits, full worker/crash acceptance and operator reconciliation tooling remain open; see the synthesis checkpoint. |
-| F. Host-owned action loop | absent | absent | partial | Explicit `codex-host-read-v1` and `codex-host-actions-v1` jobs use sequential native proposals, scoped page reads and receipt-backed page writes. Migration v262 retains host authority; page protocol 3 preserves untrusted write semantics and fences publication against stale jobs/revisions. Fake-executable PGLite/PostgreSQL fixtures cover 41 action cases. Native tools remain false; broader reads, operator reconciliation and complete process-crash acceptance remain open. See `private-codex-actions.md`. |
-| G. Diagnostics/migration | absent | absent | partial | `private-codex audit --json` is an engine-free, no-call source command, always incomplete until coverage closes. Pin migration v263 and job parking v264 have explicit previews, receipts and rollback. Queued-job previews identify drain requirements; durable fences prevent ordinary resume, and reviewed unstarted standalone jobs get new queue identities/grants. Started/ambiguous work and graph replacements require reconciliation/new workflow review. Full worker/pin inventory and operator reconciliation remain incomplete. See `private-codex-pins.md` and `private-codex-job-upgrade.md`. |
+| E. Synthesis/pattern publication | absent | unverified | partial | Private patterns now use native proposals, v264 retained plans, stable prepared-write receipts, evidence revision checks, source-scoped provenance and partial-commit recovery. PGLite/PostgreSQL fixtures cover the pattern path. Bounded private synthesis now shares the retained-plan path, with multi-chunk completion, required summary receipts and transcript-to-pattern fixtures on both engines. Existing-page edits, full worker/crash acceptance and operator reconciliation tooling remain open; see the synthesis checkpoint. |
+| F. Host-owned action loop | absent | absent | partial | Explicit `codex-host-read-v1` and `codex-host-actions-v1` jobs use sequential native proposals, scoped page reads and receipt-backed page writes. Migration v265 retains host authority; page protocol 3 preserves untrusted write semantics and fences publication against stale jobs/revisions. Fake-executable PGLite/PostgreSQL fixtures cover 41 action cases. Native tools remain false; broader reads, operator reconciliation and complete process-crash acceptance remain open. See `private-codex-actions.md`. |
+| G. Diagnostics/migration | absent | absent | partial | `private-codex audit --json` is an engine-free, no-call source command, always incomplete until coverage closes. Pin migration v266 and job parking v267 have explicit previews, receipts and rollback. Queued-job previews identify drain requirements; durable fences prevent ordinary resume, and reviewed unstarted standalone jobs get new queue identities/grants. Started/ambiguous work and graph replacements require reconciliation/new workflow review. Full worker/pin inventory and operator reconciliation remain incomplete. See `private-codex-pins.md` and `private-codex-job-upgrade.md`. |
 
 ## Changes developed
 
@@ -95,12 +95,12 @@ The old two-file prototype was not a gateway implementation. This branch adds:
 - A Codex recipe that reports subscription billing and schema proposals, with
   native tools and native subagent loops false. Its model is explicitly configured;
   no subscription model list or prices are invented.
-- A transactional subscription ledger (migration v258, identical SQL on both
+- A transactional subscription ledger (migration v261, identical SQL on both
   storage engines) and dispatch integration. It never expires ambiguous account
   ownership just because time elapsed. Failed attempts consume their allowance.
   Missing subscription admission cannot be replaced by a USD-only cap.
 - Durable PostgreSQL background submission for standalone benchmark bootstrap:
-  v285 request/job binding, immutable preflight input, strict model validation,
+  v288 request/job binding, immutable preflight input, strict model validation,
   fenced worker reuse of the retained proposal and review-draft writer, cross-
   workflow UUID collision checks, and queue retention of bound jobs. PGLite
   remains inline; the installed artifact is unchanged.
@@ -135,7 +135,7 @@ incomplete.
 
 [Private take proposals](private-codex-take-proposals.md) add whole-batch native
 schema/quote validation, cache isolation and transactional proposal persistence.
-Migration v265 retains host-bound source/revision/quote evidence. Failed proposals
+Migration v268 retains host-bound source/revision/quote evidence. Failed proposals
 never become empty cache entries; receipt permission failures preserve committed
 proposal counts. Canonical take acceptance now retains reviewer edits and atomically
 commits the proposal claim and write admission atomically before effects; retries reconcile the original receipt, including
@@ -160,7 +160,7 @@ legacy jobs still need an explicit drain/park/resubmit disposition before activa
 `runWithJobSpend` carries this grant in both inline and isolated worker handlers.
 It rechecks the live job lease, durable payload, authority, source incarnation and
 private route before dispatch and acceptance, and carries the worker's cancellation
-signal into the adapter. Migration **v259** fences each subscription job claim;
+signal into the adapter. Migration **v262** fences each subscription job claim;
 old workers cannot claim those rows. Child readiness independently requires
 `codex-subscription-v1`, preventing a newer parent from invoking an older child.
 
@@ -335,7 +335,7 @@ Pattern publication now has the deterministic recovery coverage described below.
 The [publication checkpoint](private-codex-publication.md) describes the new private
 pattern path and its limits. The adapter, routing, subscription admission and
 prepared-write coordinator were pre-existing; this step connects them through a
-retained whole-proposal plan and deterministic receipt identities. Migration v261
+retained whole-proposal plan and deterministic receipt identities. Migration v264
 has parity across both supported engines. The installed artifact, production
 schema, runtime qualification and activation remain unchanged.
 
@@ -402,7 +402,7 @@ The [calibration checkpoint](private-codex-calibration.md) adds native structure
 voice judgments and explicit failure handling with one shared content-repair
 allowance. The inventory separates profile generation, voice review and the
 think A/B harness. Private profile generation now implements source-scoped
-metrics, native patterns/tags, explicit CLI allowances and v266 retained receipts
+metrics, native patterns/tags, explicit CLI allowances and v269 retained receipts
 with authority/revision checks. Broader calibration remains partial: think A/B,
 full scheduled dispatch and live runtime qualification are unverified. Supported
 judge modes are not proof of wired product surfaces. Installed status is unchanged.
@@ -419,7 +419,7 @@ GBrain and activation are unchanged.
 
 ## Think publication follow-up
 
-The [publication checkpoint](private-codex-think-publication.md) adds v267 retained
+The [publication checkpoint](private-codex-think-publication.md) adds v270 retained
 think plans, protocol-4 canonical page/take requests, citation transactionality,
 stable replay and durable worker fences. Managed-file partial completion is
 exercised on both engines. CLI subscription grants, auto-think completion,
@@ -430,7 +430,7 @@ activation are unchanged.
 
 [CLI allowances and automatic think](private-codex-think-automation.md) wrap the
 local command in durable subscription and independent paid-retrieval limits. The
-actual cycle dispatcher now includes opt-in `auto_think`; v268 retains source-bound
+actual cycle dispatcher now includes opt-in `auto_think`; v271 retains source-bound
 batches and answers, fences writes, blocks replacement of unfinished work, and
 starts cooldown only after all selected answers and required saves complete.
 Installed capabilities and activation remain unchanged; runtime qualification,
@@ -439,7 +439,7 @@ operator reconciliation and remaining generation coverage are incomplete.
 ## Calibration A/B follow-up
 
 [Native calibration A/B trials](private-codex-think-ab.md) connect the production
-think path to retained v269 comparisons and explicit atomic preference receipts.
+think path to retained v272 comparisons and explicit atomic preference receipts.
 Profile/evidence drift, failures and partial trials do not become votes. Local
 CLI generation uses explicit subscription allowances; inspection and rating are
 model-free. Runtime isolation, full crash acceptance, operator recovery and the
@@ -459,12 +459,12 @@ not qualify a production Codex executable or activate the installed brain.
 service calls, retain independent embedding admission, and fence publication
 against job/source/cancellation changes. Native synopsis schema v2 binds prompt
 and chunk evidence. Contextual job identities are v2 and require an explicit
-source. Migration v270 preserves small paid charges in both accounting tables.
+source. Migration v273 preserves small paid charges in both accounting tables.
 This is source development with isolated checks, not an installed upgrade.
 
 ## Proposal-cache follow-up
 
-[Native proposal caching](private-codex-proposal-cache.md) adds v271 durable raw
+[Native proposal caching](private-codex-proposal-cache.md) adds v274 durable raw
 responses in the subscription owner's database. The synopsis seam revalidates
 schema, quote evidence, authority and grant lifetime on every scoped reuse;
 failed calls never become cache entries or refunded attempts. LongMemEval's
@@ -541,8 +541,8 @@ durable source/evidence selection, owner leases, accepted-result recovery and
 protocol-5 prepared publication in strict private mode. Local CLI allowances
 bind explicit attempts, turns and deadlines; auxiliary USD budgets are separate.
 Judgments retain complete ID coverage, host scoring and accepted-chunk reuse.
-Migration v273 is registered for both engines. Multi-fixture evaluation admission now shares one allowance across durable
-fixture results, with migration v274 and the existing evaluation lease store.
+Migration v276 is registered for both engines. Multi-fixture evaluation admission now shares one allowance across durable
+fixture results, with migration v277 and the existing evaluation lease store.
 Remaining producer coverage and live runtime qualification are incomplete. Installed
 GBrain is unchanged. See [scope and evidence](private-codex-brainstorm.md).
 
@@ -582,13 +582,13 @@ proposal reuse. Unmanaged drafts preserve review and ownership guards; inputs
 and output are checked for drift before writing. The guarded entry requires a
 host subscription allowance and reports unknown monetary cost. Standalone
 bootstrap now has immutable PostgreSQL background submission, a fenced worker
-path and retained draft publication (migration v285); PGLite stays inline.
+path and retained draft publication (migration v288); PGLite stays inline.
 Whole-optimizer publication remains work; [scope and verification](private-codex-bootstrap-cli.md).
 No deployment or activation was performed.
 
 ## Aggregate subscription admission checkpoint
 
-Migration v275 adds parent/child subscription envelopes with one aggregate
+Migration v278 adds parent/child subscription envelopes with one aggregate
 attempt, turn and repair budget. The database enforces counter coupling and
 immutable parent identity; the existing shared account lane retains unresolved
 attempts. This is a dependency for durable optimizer rollout jobs, whose complete
@@ -597,11 +597,11 @@ No installed database migration or activation was performed.
 
 ## Bounded subscription tree checkpoint
 
-Migration v281 and `subscription-tree-schema.ts` add a maximum three-level
+Migration v284 and `subscription-tree-schema.ts` add a maximum three-level
 host allowance tree. `subscription-admission.ts` reserves and accepts under
 root-first row locks. Counter deltas charge every ancestor atomically; failed
 attempts stay charged, counter refunds are rejected, and unresolved calls retain
-the lane. Historical v275 remains unchanged. No optimizer producer was granted
+the lane. Historical v278 remains unchanged. No optimizer producer was granted
 new authority; batch/cycle coordination is the next integration task.
 
 Verification used fresh credential-free homes, model discovery disabled, fake
@@ -636,7 +636,7 @@ runtime. Full container CI, admin UI and PgBouncer remain unverified here.
 
 `runBatchAll` now dispatches strict private mode to the native batch coordinator.
 The CLI admits foreground `--all` with explicit subscription and read scope.
-Migration v282 retains the validated manifest, canonical members and owner lease
+Migration v285 retains the validated manifest, canonical members and owner lease
 before effects. Child optimizers require persisted membership and host authority;
 their existing checkpoints, rollout ledgers and publication receipts remain the
 recovery mechanism. Batch completion verifies actual member results and receipt
@@ -694,7 +694,7 @@ root-lock change, and the no-call CLI contract covers the reporting extraction.
 Implemented the private `runPhaseSkillopt` branch through the existing retained
 batch coordinator. The real cycle dispatcher threads explicit source and job
 deadline. New trusted configuration binds the source, directory, permitted reads
-and per-skill limits. Migration 268 retains the frozen selection, source
+and per-skill limits. Migration 271 retains the frozen selection, source
 incarnation and completion receipt hash. Only verified batch completion earns
 the source-scoped success cooldown. Preflight failures have a separate 24-hour
 error cooldown; partial or ambiguous batches stay pending and block new roots.
@@ -773,7 +773,7 @@ CI, admin UI, PgBouncer and live subscription acceptance remain unverified.
 ## Queued optimizer batches
 
 `skillopt --all --background` now preflights selected benchmarks before one job
-is submitted. Migration 269 binds the request, payload and job; the worker checks
+is submitted. Migration 272 binds the request, payload and job; the worker checks
 the host lease and retained per-skill hashes before using the existing batch
 coordinator. Retries reuse the job and child receipts. PGLite keeps its inline
 path because it has no worker daemon.

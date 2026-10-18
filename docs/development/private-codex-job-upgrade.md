@@ -2,7 +2,7 @@
 
 This source checkpoint adds explicit legacy-job dispositions. It does not stop
 services, run inference, change an installed executable or activate private mode.
-The database requires registered migration **v264** on the selected existing brain.
+The database requires registered migration **v267** on the selected existing brain.
 The commands use the existing connection bootstrap with startup migrations disabled.
 
 ## Review and drain

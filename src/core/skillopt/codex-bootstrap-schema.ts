@@ -1,4 +1,4 @@
-/** Durable standalone benchmark generation; migration 280. */
+/** Durable standalone benchmark generation; migration 283. */
 export const CODEX_BOOTSTRAP_RUN_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_skillopt_bootstraps (
   run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),
