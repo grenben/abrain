@@ -1,7 +1,7 @@
 /** Per-call controls. Unsupported CLI settings fail without a weaker retry. */
 export function codexProposalArgv(input: {
   cwd: string; model: string; schemaFile: string; answerFile: string;
-  denyHook: string; instructionsFile: string; imageFiles: string[];
+  denyHook: string; instructionsFile: string; modelCatalogFile: string; imageFiles: string[];
 }): string[] {
   const settings = [
     'model_provider="openai"', 'forced_login_method="chatgpt"',
@@ -9,6 +9,7 @@ export function codexProposalArgv(input: {
     'project_doc_max_bytes=0', 'shell_environment_policy.inherit="none"',
     'suppress_unstable_features_warning=true',
     `model_instructions_file=${JSON.stringify(input.instructionsFile)}`,
+    `model_catalog_json=${JSON.stringify(input.modelCatalogFile)}`,
     'features.shell_tool=false', 'features.unified_exec=false',
     'features.multi_agent=false', 'features.multi_agent_v2=false',
     'features.apps=false', 'features.plugins=false', 'features.remote_plugin=false',

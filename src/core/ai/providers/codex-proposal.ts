@@ -10,6 +10,7 @@ import { parseCodexLifecycle } from './codex-lifecycle.ts';
 import type { CodexImage } from './codex-images.ts';
 import { codexEnvironment, runCodexProcess } from './codex-process.ts';
 import { CODEX_DENY_NATIVE_HOOK, CODEX_PROPOSAL_INSTRUCTIONS, codexProposalArgv } from './codex-runtime.ts';
+import { codexProposalModelCatalog } from './codex-model-catalog.ts';
 export { CodexProposalError } from './codex-contract.ts';
 export type { CodexProposalFailure } from './codex-contract.ts';
 export type { CodexImage } from './codex-images.ts';
@@ -38,17 +39,19 @@ export async function runCodexProposal(original: CodexProposalInput): Promise<Co
     const answerFile = join(scratch, 'answer.json');
     const denyHook = join(scratch, 'deny-native');
     const instructionsFile = join(scratch, 'instructions.txt');
+    const modelCatalogFile = join(scratch, 'model-catalog.json');
     await writeFile(schemaFile, prepared.serialized, { mode: 0o600, flag: 'wx' });
     await writeFile(answerFile, '', { mode: 0o600, flag: 'wx' });
     await writeFile(denyHook, CODEX_DENY_NATIVE_HOOK, { mode: 0o700, flag: 'wx' });
     await writeFile(instructionsFile, CODEX_PROPOSAL_INSTRUCTIONS, { mode: 0o600, flag: 'wx' });
+    await writeFile(modelCatalogFile, codexProposalModelCatalog(input.model), { mode: 0o600, flag: 'wx' });
     const imageFiles: string[] = [];
     for (const [i, image] of images.entries()) {
       const path = join(scratch, `image-${i}.${image.mime.split('/')[1]}`);
       await writeFile(path, image.bytes, { mode: 0o600, flag: 'wx' }); imageFiles.push(path);
     }
     const stdout = await runCodexProcess({ bin: input.bin,
-      args: codexProposalArgv({ cwd: scratch, model: input.model, schemaFile, answerFile, denyHook, instructionsFile, imageFiles }),
+      args: codexProposalArgv({ cwd: scratch, model: input.model, schemaFile, answerFile, denyHook, instructionsFile, modelCatalogFile, imageFiles }),
       cwd: scratch, env: codexEnvironment(input.env ?? process.env), prompt: input.prompt,
       timeoutMs, maxOutputBytes, signal: input.signal });
     const lifecycle = parseCodexLifecycle(stdout);
