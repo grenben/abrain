@@ -132,11 +132,13 @@ describe('refreshGatewayEnvFromFilePlane guards (review-army addition)', () => {
     resetGateway();
     expect(() => refreshGatewayEnvFromFilePlane()).not.toThrow();
     expect(isAvailable('chat', 'anthropic:claude-sonnet-4-6')).toBe(false); // still unconfigured
+    // Configure while the file is valid/absent. Strict private routing refuses
+    // a corrupt file at configure time; refresh still has a fail-soft fold.
+    configureGateway({ chat_model: 'anthropic:claude-sonnet-4-6', env: {} });
     // Corrupt config.json: loadConfig throws inside → cfg=null → process-env fold.
     mkdirSync(join(tmpHome, '.gbrain'), { recursive: true });
     writeFileSync(join(tmpHome, '.gbrain', 'config.json'), '{not json');
     process.env.ANTHROPIC_API_KEY = 'sk-ant';
-    configureGateway({ chat_model: 'anthropic:claude-sonnet-4-6', env: {} });
     expect(() => refreshGatewayEnvFromFilePlane()).not.toThrow();
     expect(isAvailable('chat', 'anthropic:claude-sonnet-4-6')).toBe(true);
   });

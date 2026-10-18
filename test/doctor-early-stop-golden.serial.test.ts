@@ -62,6 +62,8 @@ function enterHome(config?: Record<string, unknown>): DoctorHome {
   delete process.env.GBRAIN_DATABASE_URL;
   // harness_wiring reads agent markers and harness config homes.
   for (const k of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CODEX_SANDBOX', 'CODEX_CI', 'CODEX_HOME', 'OPENCODE', 'OPENCODE_PID', 'XDG_CONFIG_HOME']) delete process.env[k];
+  process.env.CODEX_HOME = join(h.home, '.codex');
+  process.env.XDG_CONFIG_HOME = join(h.home, '.config');
   if (config) {
     mkdirSync(join(h.home, '.gbrain'), { recursive: true });
     writeFileSync(join(h.home, '.gbrain', 'config.json'), JSON.stringify(config) + '\n');
