@@ -24,7 +24,8 @@
 #   GBRAIN_SERIAL_POOL=N          pool width (default min(detect_cpus, 4),
 #                                 then memory-adapted; 1 restores the old
 #                                 fully-sequential behavior)
-#   GBRAIN_SERIAL_FILE_TIMEOUT=S  wall-clock kill per file (default 300;
+#   GBRAIN_SERIAL_FILE_TIMEOUT=S  wall-clock kill per file (default 300,
+#                                 900 for the full Codex actions contract;
 #                                 needs timeout/gtimeout on PATH, else no wrap)
 #   GBRAIN_TEST_MEM_PER_FILE_MB   per-process memory budget (default 1536)
 #   GBRAIN_TEST_NO_MEM_ADAPT=1    skip the memory clamp
@@ -243,8 +244,9 @@ write_timings() {
       const exitCode = rawExit === "" ? null : Number(rawExit);
       const rawMs = read(key + ".duration-ms"), start = Number(read(key + ".start-ms"));
       const durationMs = rawMs ? Number(rawMs) : start ? Math.max(0, Date.now() - start) : null;
+      const fileTimeout = Number(read(key + ".timeout") || timeout);
       const status = exitCode === 0 ? "pass" : exitCode === null ? "cancelled"
-        : exitCode === 124 || (exitCode === 137 && durationMs >= Number(timeout) * 1000) ? "timeout"
+        : exitCode === 124 || (exitCode === 137 && durationMs >= fileTimeout * 1000) ? "timeout"
         : exitCode === 137 || exitCode === 143 ? "external-kill" : "fail";
       const attempts = byFile.get(file) ?? [];
       attempts.push({ attempt: attempts.length + 1, durationMs, status, exitCode });
@@ -309,8 +311,15 @@ run_one_file() {
   # $1 file, $2 log path, $3 exit-sentinel path, $4 wrap ("wrap"|"nowrap"),
   # $5 receipt kind (primary|rescue; default primary)
   local f="$1" log="$2" exitf="$3" wrap="$4" kind="${5:-primary}" rc=0
-  local key="${log%.log}" started finished
+  local key="${log%.log}" started finished file_timeout="$PER_FILE_TIMEOUT"
+  # This contract runs hundreds of sequential fake-provider/DB cases in one
+  # process. It exceeded 300s with 121 passing tests and no assertion failure.
+  # An explicit operator timeout still takes precedence for every file.
+  if [ -z "${GBRAIN_SERIAL_FILE_TIMEOUT:-}" ] && [ "$f" = "test/ai/codex-actions.serial.test.ts" ]; then
+    file_timeout=900
+  fi
   printf '%s\n' "$f" > "$key.file"
+  printf '%s\n' "$file_timeout" > "$key.timeout"
   started=$(now_ms)
   printf '%s\n' "$started" > "$key.start-ms"
   # COVERAGE_DIR (opt-in): every bun process needs its OWN coverage dir — a
@@ -325,7 +334,7 @@ run_one_file() {
   fi
   receipt_begin "$kind" "$RECEIPT_TAG-$(basename "$log" .log)" "$RECEIPT_SHARD" "$RECEIPT_OF" "" "$f"
   if [ "$wrap" = "wrap" ] && [ -n "$TIMEOUT_BIN" ]; then
-    "$TIMEOUT_BIN" -k 15 "$PER_FILE_TIMEOUT" \
+    "$TIMEOUT_BIN" -k 15 "$file_timeout" \
       bun test --max-concurrency=1 --timeout=120000 ${cov_args[@]+"${cov_args[@]}"} ${RECEIPT_ARGS[@]+"${RECEIPT_ARGS[@]}"} "$f" > "$log" 2>&1 || rc=$?
   else
     bun test --max-concurrency=1 --timeout=120000 ${cov_args[@]+"${cov_args[@]}"} ${RECEIPT_ARGS[@]+"${RECEIPT_ARGS[@]}"} "$f" > "$log" 2>&1 || rc=$?
@@ -391,6 +400,8 @@ i=0
 for f in ${ordered_files[@]+"${ordered_files[@]}"}; do
   dur="?"
   [ -f "$LOG_DIR/$i.dur" ] && dur=$(cat "$LOG_DIR/$i.dur")
+  file_timeout="$PER_FILE_TIMEOUT"
+  [ -f "$LOG_DIR/$i.timeout" ] && file_timeout=$(cat "$LOG_DIR/$i.timeout")
   if [ ! -f "$LOG_DIR/$i.exit" ]; then
     echo "[serial-tests] KILLED ${dur}s $f — missing exit sentinel (external kill/OOM) — queued for serial rescue" >&2
     rescue_files+=("$f")
@@ -401,11 +412,11 @@ for f in ${ordered_files[@]+"${ordered_files[@]}"}; do
       n=$(printf '%s' "$summary" | grep -oE '^[0-9]+' || echo 0)
       pass_total=$((pass_total + n))
       echo "[serial-tests] PASS ${dur}s $f ${summary:+($summary)}"
-    elif [ "$rc" = "137" ] && [ "$dur" != "?" ] && [ "$dur" -ge "$PER_FILE_TIMEOUT" ] 2>/dev/null; then
+    elif [ "$rc" = "137" ] && [ "$dur" != "?" ] && [ "$dur" -ge "$file_timeout" ] 2>/dev/null; then
       # 137 with full duration = OUR timeout's SIGKILL escalation (a hang
       # that ignored SIGTERM), not an external kill — a real failure; a
       # rescue re-run would just re-hang for another ~315s.
-      echo "[serial-tests] FAIL ${dur}s $f — exit 137 (hang survived SIGTERM; killed by ${PER_FILE_TIMEOUT}s per-file timeout)" >&2
+      echo "[serial-tests] FAIL ${dur}s $f — exit 137 (hang survived SIGTERM; killed by ${file_timeout}s per-file timeout)" >&2
       cat "$LOG_DIR/$i.log" >&2
       fail_count=$((fail_count + 1))
       failed_files+=("$f")
@@ -414,7 +425,7 @@ for f in ${ordered_files[@]+"${ordered_files[@]}"}; do
       rescue_files+=("$f")
     else
       note=""
-      [ "$rc" = "124" ] && note=" (killed by ${PER_FILE_TIMEOUT}s per-file timeout)"
+      [ "$rc" = "124" ] && note=" (killed by ${file_timeout}s per-file timeout)"
       echo "[serial-tests] FAIL ${dur}s $f — exit $rc$note" >&2
       cat "$LOG_DIR/$i.log" >&2
       fail_count=$((fail_count + 1))
