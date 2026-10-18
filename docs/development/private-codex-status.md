@@ -220,6 +220,12 @@ that; images are handled only through the verified image interface; and process
 containment settles descendants, including attempts to detach. Fake tests prove
 GBrain transport and accounting, not those native runtime properties.
 
+Linux production-hash admission now refuses root execution, mutable system
+configuration parents, and any `/etc/codex` path. The actual host check passes
+on this PC, and synthetic fixtures cover denial cases. This closes one known
+managed-config route for an admitted non-root host; the production hash allowlist
+is still empty while tool and process-tree isolation remain unproven.
+
 The [image-validation follow-up](private-codex-images.md) records the current
 runtime blocker and complete PNG/JPEG/WebP container and pixel checks.
 

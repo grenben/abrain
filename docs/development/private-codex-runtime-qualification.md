@@ -132,6 +132,17 @@ settings. The probe provider returned 401 to every request, so no tool was
 executed. This confirms the managed-config boundary is an execution-safety
 condition, not just a cosmetic tool-list difference.
 
+Production-hash admission now fails closed on Linux unless GBrain runs as a
+non-root user, `/` and `/etc` are root-owned directories without group/other
+write access, and `/etc/codex` is absent (including a dangling symlink). The
+check runs after hashing the executable and before returning its open handle;
+filesystem errors also refuse admission. A synthetic-filesystem test covers an
+absent layer, present directory, symlink, mutable parent, and root-equivalent
+caller. This removes the known cross-host managed-config override from the
+admitted configuration on such a host. It is not a substitute for mount-level
+isolation against privileged host changes or for the remaining tool and
+process-tree qualification; the production hash registry remains empty.
+
 ## Linux process-tree containment experiment
 
 The local host permits unprivileged user and PID namespaces. A disposable

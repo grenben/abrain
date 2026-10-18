@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { __registerCodexFixtureForTests, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
+import { __assertCodexManagedConfigForTests, __registerCodexFixtureForTests, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
 import { afterAll, describe, expect, test } from 'bun:test';
-import { access, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCodexProposal } from '../../src/core/ai/providers/codex-proposal.ts';
@@ -104,6 +104,30 @@ describe('Codex proposal production transport with fake executable', () => {
     await expect(runCodexProposal(input(bin))).rejects.toMatchObject({reason:'runtime_unqualified'});
     await expect(access(capture)).rejects.toThrow();
     await expect(runCodexProposal(input('/synthetic/unqualified-codex'))).rejects.toMatchObject({reason:'runtime_unqualified'});
+  });
+  test('production host boundary refuses inherited managed configuration and mutable parents', async () => {
+    const hostRoot = join(root, `codex-host-boundary-${sequence++}`);
+    const etc = join(hostRoot, 'etc');
+    await mkdir(etc, { recursive: true });
+    await chmod(hostRoot, 0o755); await chmod(etc, 0o755);
+    const trustedUid = (await stat(hostRoot)).uid;
+    const callerUid = trustedUid + 1;
+    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).resolves.toBeUndefined();
+    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid + 2, callerUid)).rejects.toThrow();
+    await mkdir(join(etc, 'codex'));
+    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await rm(join(etc, 'codex'), { recursive: true });
+    await symlink('missing-codex', join(etc, 'codex'));
+    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await rm(join(etc, 'codex'));
+    await chmod(etc, 0o777);
+    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await chmod(etc, 0o755);
+    await expect(__assertCodexManagedConfigForTests(hostRoot, trustedUid, trustedUid)).rejects.toThrow();
+    const symlinkRoot = join(root, `codex-host-link-${sequence++}`);
+    await mkdir(symlinkRoot); await chmod(symlinkRoot, 0o755);
+    await symlink(etc, join(symlinkRoot, 'etc'));
+    await expect(__assertCodexManagedConfigForTests(symlinkRoot, trustedUid, callerUid)).rejects.toThrow();
   });
   test('a path replacement after qualification cannot change the spawned executable', async () => {
     if (process.platform !== 'linux') return;
