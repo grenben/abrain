@@ -132,6 +132,20 @@ settings. The probe provider returned 401 to every request, so no tool was
 executed. This confirms the managed-config boundary is an execution-safety
 condition, not just a cosmetic tool-list difference.
 
+## Linux process-tree containment experiment
+
+The local host permits unprivileged user and PID namespaces. A disposable
+`unshare --user --map-root-user --pid --fork --kill-child --mount-proc` wrapper
+successfully launched the exact local Codex ELF through `/proc/self/fd/3`; its
+offline `--version` returned 0.162.0. A synthetic PID-namespace init then
+spawned a `setsid` child that wrote a short heartbeat. SIGTERM to the wrapper
+or its process group did not settle the namespace init, but SIGKILL to the
+group stopped the detached heartbeat through namespace teardown. This is a
+manual proof of one possible Linux containment mechanism and confirms that
+the existing timed SIGKILL escalation matters. GBrain does **not** launch
+proposals in a PID namespace yet; the experiment does not qualify real runtime
+process settlement, availability on another host, or macOS behavior.
+
 ## Disposable live transport probe — 2026-10-18
 
 The signed-in local 0.162.0 binary was invoked from a private scratch directory
