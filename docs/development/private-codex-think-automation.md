@@ -11,7 +11,7 @@ This implements source behavior; fake executables do not qualify a live runtime.
 | Local `think` | Core subscription and publication support; CLI supplied no allowance | Explicit attempts, accepted turns, deadline and stable request UUID wrap generation and required saves |
 | Paid retrieval | Core required an enclosing paid guard | CLI has a separate durable `--max-usd` budget; unknown usage keeps its reservation |
 | Automatic questions | Standalone legacy function; no actual cycle dispatcher entry | Opt-in `auto_think` phase in ordinary, scheduled and queued cycles |
-| Private automatic completion | No retained batch or complete-batch cooldown | v283 stores source-bound questions, accepted answers and completion; every selected answer and required save must succeed |
+| Private automatic completion | No retained batch or complete-batch cooldown | v268 stores source-bound questions, accepted answers and completion; every selected answer and required save must succeed |
 | Managed API-mode save | Direct maintenance transaction | Existing canonical prepared-write path, retaining legacy citation behavior |
 
 Earlier descriptions of automatic think as already dispatched were incorrect.
@@ -52,7 +52,7 @@ not authorize it. Questions are sequential: at most 20 selected from a validated
 configuration of at most 100 distinct, nonempty questions, each at most 16,000
 characters. Dry runs consume no allowance and retain no batch.
 
-Migration v283 registers `codex_auto_think_runs` for both storage engines. A batch
+Migration v268 registers `codex_auto_think_runs` for both storage engines. A batch
 binds the original source incarnation, authority, selected questions, settings,
 model and any job fence. Acceptance serializes against topology changes; one
 unfinished batch per source is enforced by a partial unique index. Another run
@@ -92,7 +92,7 @@ fake inference. The shared contract installs a forbidden-network tripwire.
 | `git diff --check` | Passed |
 
 Catalog goldens were regenerated deliberately on both engines, then verified
-with updates disabled. Differences add only the v283 table, constraints and
+with updates disabled. Differences add only the v268 table, constraints and
 indexes. Native clusters were stopped after testing. No production migration was
 applied. Admin UI dependency fetching, PgBouncer and full CI remain unverified.
 
@@ -125,7 +125,7 @@ open. No automatic lease reclamation or new-run regeneration bypass is provided.
 
 After separately authorized deployment and passing remaining runtime gates:
 build the verified source, preserve/back up the actual database target, apply
-registered migrations through v283 using the installation's supported procedure,
+registered migrations through v268 using the installation's supported procedure,
 upgrade all consumers and restart the actual services. Then perform bounded live
 schema/image, maintenance, action-recovery and cancellation checks before explicit
 activation. No installed executable was replaced in this development session.

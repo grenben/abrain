@@ -4086,8 +4086,8 @@
         "idempotent": true,
         "name": "codex_action_write_bindings",
         "sql": {
-          "length": 2993,
-          "sha256": "f4ad39cb2e5aadaf4cc53399fcd001eded8a5fe512e2917800b784045ecbdae8"
+          "length": 3288,
+          "sha256": "2c05717428b142901322879ffc935611f5b68958c42461436fbabcdb16a06e5b"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -4151,8 +4151,8 @@
         "idempotent": true,
         "name": "codex_think_publications",
         "sql": {
-          "length": 3668,
-          "sha256": "2f0876a9d6ec6c8732aaba536be6efd0d57611bf4e1906bddf51c1222a66ae36"
+          "length": 3963,
+          "sha256": "c77c3f3acce631b55ce80c62374e599cdd6216c5e9ff42456c11d386526fbca9"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -4229,8 +4229,8 @@
         "idempotent": true,
         "name": "codex_brainstorm_runs",
         "sql": {
-          "length": 4608,
-          "sha256": "f8c60873d9676073f8b9033be219f1cdd961c72739e96143d5e65448e37af41d"
+          "length": 4903,
+          "sha256": "34dd2afcd3536ec3635d4336db1af9f3935a02c43dade2af8977ea30a70061ad"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -4242,8 +4242,8 @@
         "idempotent": true,
         "name": "codex_brainstorm_fixtures",
         "sql": {
-          "length": 1006,
-          "sha256": "abb85a00e9b418343077e82acd222149a5f888611e77faa8b0158ba108df343d"
+          "length": 1472,
+          "sha256": "5ec390401473b20c256b4ed6b326a83840e45f416fbc0cf8f5cbbe25757db23e"
         },
         "sqlFor": "absent",
         "transaction": "absent",
@@ -4307,8 +4307,8 @@
         "idempotent": true,
         "name": "codex_shared_skill_optimization",
         "sql": {
-          "length": 4432,
-          "sha256": "00f6fecd64f7808ca9a1da2a88dceca1624eff6cf6354935a7f6511d968a72b3"
+          "length": 4727,
+          "sha256": "3573a96cecf118f8ca1c230d8e53dd8e48f5e58fa95bc6bb135ea4f85db42af4"
         },
         "sqlFor": "absent",
         "transaction": "absent",

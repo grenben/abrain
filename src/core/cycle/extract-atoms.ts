@@ -988,7 +988,7 @@ export async function runPhaseExtractAtoms(
       writeRequests.push(...published);
       if (!managed && truncated) await recordPartialDisposition(engine, sourceId, item, maxInputChars);
       else if (!managed && item.kind === 'page') await stampAtomsScanHash(item);
-      else if (!managed) await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
+      else if (!managed && item.kind === 'transcript') await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
       await commitAtomsWatermark(item, input, published);
     }
     if (item.kind === 'transcript') transcriptsProcessed++;

@@ -1416,8 +1416,6 @@ CREATE TABLE IF NOT EXISTS subagent_tool_executions (
   -- (job_id, message_idx, content_blocks index, tool_name).
   ordinal             INTEGER,
   gbrain_tool_use_id  UUID,
-  -- Host-owned Codex write authority and stable request binding; never supplied by model arguments.
-  host_binding       JSONB,
   started_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   ended_at            TIMESTAMPTZ,
   CONSTRAINT subagent_tool_executions_stable_id UNIQUE (job_id, message_idx, ordinal),
@@ -1641,8 +1639,6 @@ CREATE TABLE IF NOT EXISTS calibration_profiles (
   judge_model_agreement   REAL,
   codex_evidence          JSONB
 );
-CREATE UNIQUE INDEX IF NOT EXISTS calibration_profiles_codex_request
-  ON calibration_profiles(source_id,holder,(codex_evidence->>'subscription_run_id')) WHERE codex_evidence IS NOT NULL;
 CREATE INDEX IF NOT EXISTS calibration_profiles_holder_recent_idx
   ON calibration_profiles (source_id, holder, generated_at DESC);
 CREATE INDEX IF NOT EXISTS calibration_profiles_bias_tags_gin
@@ -3259,8 +3255,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS codex_subscription_account_active
   ON codex_subscription_attempts(account_lane) WHERE state IN ('active','unresolved');
 -- END GENERATED from src/core/ai/subscription-schema.ts (SUBSCRIPTION_SCHEMA_SQL)
 
--- BEGIN GENERATED from src/core/minions/subscription-job-schema.ts (SUBSCRIPTION_JOB_SCHEMA_SQL). Edit that file, then run: bun run build:schema
-ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS codex_claim_token BIGINT;
+-- BEGIN GENERATED from src/core/minions/subscription-job-schema.ts (SUBSCRIPTION_JOB_BOOTSTRAP_SQL). Edit that file, then run: bun run build:schema
 CREATE OR REPLACE FUNCTION enforce_codex_job_protocol() RETURNS trigger SET search_path = pg_catalog, public AS $protocol$
 BEGIN
   IF NEW.status = 'active' AND (OLD.status <> 'active' OR NEW.lock_token IS DISTINCT FROM OLD.lock_token)
@@ -3274,12 +3269,17 @@ $protocol$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS codex_job_protocol ON minion_jobs;
 CREATE TRIGGER codex_job_protocol BEFORE UPDATE ON minion_jobs
   FOR EACH ROW EXECUTE FUNCTION enforce_codex_job_protocol();
--- END GENERATED from src/core/minions/subscription-job-schema.ts (SUBSCRIPTION_JOB_SCHEMA_SQL)
+-- END GENERATED from src/core/minions/subscription-job-schema.ts (SUBSCRIPTION_JOB_BOOTSTRAP_SQL)
 
--- BEGIN GENERATED from src/core/persistence/codex-action-schema.ts (CODEX_ACTION_WRITE_SCHEMA_SQL). Edit that file, then run: bun run build:schema
-ALTER TABLE subagent_tool_executions ADD COLUMN IF NOT EXISTS host_binding JSONB;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3));
+-- BEGIN GENERATED from src/core/persistence/codex-action-schema.ts (CODEX_ACTION_WRITE_BOOTSTRAP_SQL). Edit that file, then run: bun run build:schema
+DO $codex_protocol$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid='persistence_requests'::regclass
+    AND c.conname='persistence_requests_protocol_version_check'
+    AND pg_get_constraintdef(c.oid) ~ '(^|[^0-9])3([^0-9]|$)') THEN
+    ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
+    ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3));
+  END IF;
+END $codex_protocol$;
 CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
   DECLARE target text; version integer; floor integer; active boolean; record jsonb;
   BEGIN
@@ -3317,7 +3317,7 @@ CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGU
     END IF;
     RETURN NEW;
   END $$;
--- END GENERATED from src/core/persistence/codex-action-schema.ts (CODEX_ACTION_WRITE_SCHEMA_SQL)
+-- END GENERATED from src/core/persistence/codex-action-schema.ts (CODEX_ACTION_WRITE_BOOTSTRAP_SQL)
 
 -- BEGIN GENERATED from src/core/ai/private-upgrade-schema.ts (CODEX_UPGRADE_SCHEMA_SQL). Edit that file, then run: bun run build:schema
 CREATE TABLE IF NOT EXISTS codex_upgrade_receipts (
@@ -3378,8 +3378,14 @@ CREATE TABLE IF NOT EXISTS codex_think_publications (
   UNIQUE(run_id,request_key)
 );
 ALTER TABLE codex_think_publications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4));
+DO $codex_protocol$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid='persistence_requests'::regclass
+    AND c.conname='persistence_requests_protocol_version_check'
+    AND pg_get_constraintdef(c.oid) ~ '(^|[^0-9])4([^0-9]|$)') THEN
+    ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
+    ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4));
+  END IF;
+END $codex_protocol$;
 CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
   DECLARE target text; version integer; floor integer; active boolean; record jsonb;
   BEGIN
@@ -3527,8 +3533,14 @@ CREATE TABLE IF NOT EXISTS codex_brainstorm_runs (
   CHECK (state<>'complete' OR result IS NOT NULL)
 );
 ALTER TABLE codex_brainstorm_runs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4,5));
+DO $codex_protocol$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid='persistence_requests'::regclass
+    AND c.conname='persistence_requests_protocol_version_check'
+    AND pg_get_constraintdef(c.oid) ~ '(^|[^0-9])5([^0-9]|$)') THEN
+    ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
+    ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4,5));
+  END IF;
+END $codex_protocol$;
 CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
   DECLARE target text; version integer; floor integer; active boolean; record jsonb;
   BEGIN
@@ -3573,12 +3585,20 @@ ALTER TABLE codex_brainstorm_runs ADD COLUMN IF NOT EXISTS subscription_run_id T
 UPDATE codex_brainstorm_runs SET subscription_run_id=run_id WHERE subscription_run_id IS NULL;
 ALTER TABLE codex_brainstorm_runs ALTER COLUMN subscription_run_id SET NOT NULL;
 ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_run_id_fkey;
-ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_subscription_run_id_fkey;
-ALTER TABLE codex_brainstorm_runs ADD CONSTRAINT codex_brainstorm_runs_subscription_run_id_fkey
-  FOREIGN KEY(subscription_run_id) REFERENCES codex_subscription_runs(run_id);
-ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_protocol_check;
-ALTER TABLE codex_brainstorm_runs ADD CONSTRAINT codex_brainstorm_runs_protocol_check
-  CHECK ((protocol=1 AND run_id=subscription_run_id) OR protocol=2);
+DO $codex_fixture_fk$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='codex_brainstorm_runs'::regclass AND conname='codex_brainstorm_runs_subscription_run_id_fkey') THEN
+    ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_subscription_run_id_fkey;
+    ALTER TABLE codex_brainstorm_runs ADD CONSTRAINT codex_brainstorm_runs_subscription_run_id_fkey
+      FOREIGN KEY(subscription_run_id) REFERENCES codex_subscription_runs(run_id);
+  END IF;
+END $codex_fixture_fk$;
+DO $codex_fixture_check$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='codex_brainstorm_runs'::regclass AND conname='codex_brainstorm_runs_protocol_check') THEN
+    ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_protocol_check;
+    ALTER TABLE codex_brainstorm_runs ADD CONSTRAINT codex_brainstorm_runs_protocol_check
+      CHECK ((protocol=1 AND run_id=subscription_run_id) OR protocol=2);
+  END IF;
+END $codex_fixture_check$;
 CREATE INDEX IF NOT EXISTS codex_brainstorm_runs_subscription_run ON codex_brainstorm_runs(subscription_run_id);
 -- END GENERATED from src/core/brainstorm/codex-fixture-schema.ts (CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL)
 
@@ -3722,8 +3742,14 @@ CREATE TABLE IF NOT EXISTS codex_shared_skill_optimizations (
   CHECK (response IS NULL OR (result IS NOT NULL AND jsonb_typeof(response)='object' AND octet_length(response::text)<=524288 AND response_hash ~ '^[a-f0-9]{64}$'))
 );
 ALTER TABLE codex_shared_skill_optimizations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4,5,6));
+DO $codex_protocol$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid='persistence_requests'::regclass
+    AND c.conname='persistence_requests_protocol_version_check'
+    AND pg_get_constraintdef(c.oid) ~ '(^|[^0-9])6([^0-9]|$)') THEN
+    ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
+    ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4,5,6));
+  END IF;
+END $codex_protocol$;
 CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
   DECLARE target text; version integer; floor integer; active boolean; record jsonb;
   BEGIN

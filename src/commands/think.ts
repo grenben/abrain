@@ -206,7 +206,7 @@ API provider enables synthesis; without one, gather-only output remains availabl
         // injection degrades to visibility='world' rows.
         remote: false as const,
         // #3734: activate takes' vector retrieval arm for CLI think.
-        embedQuestion: (q) => embedQueryWithPrefix(engine, q),
+        embedQuestion: (q: string) => embedQueryWithPrefix(engine, q),
         // #4508/#4652: thread the validated scope (RunThinkOpts.sourceId /
         // allowedSources — the array wins inside runGather, same as search).
         ...(sourceId ? { sourceId } : {}),

@@ -41,7 +41,7 @@ describe('PHASE_SCOPE coverage', () => {
     expect(invalid).toEqual([]);
   });
 
-  test('all 30 phases covered (regression on accidental omission)', () => {
+  test('all 31 phases covered (regression on accidental omission)', () => {
     // Pin the count so a future PR that adds a phase to ALL_PHASES
     // without updating PHASE_SCOPE notices here too. The v0.39.1.0
     // master merge brought in the 17th phase (`schema-suggest`); v0.41
@@ -54,8 +54,8 @@ describe('PHASE_SCOPE coverage', () => {
     // questions adds 'standing_questions' for 27.
     // #6188 adds 'fence_repair' for 28; #6377 adds 'content_repair' for 29;
     // private Codex adds 'auto_think' and #6865 adds 'unindexed_files' for 31.
-    expect(ALL_PHASES.length).toBe(30);
-    expect(Object.keys(PHASE_SCOPE).length).toBe(30);
+    expect(ALL_PHASES.length).toBe(31);
+    expect(Object.keys(PHASE_SCOPE).length).toBe(31);
   });
 
   test('embed remains global (the headline brain-wide phase)', () => {

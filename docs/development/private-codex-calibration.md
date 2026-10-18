@@ -68,7 +68,7 @@ shortened by its enclosing deadline. Subscription attempts/accepted turns and
 account-lane ownership still apply. USD cost remains null. No auxiliary paid
 inference is authorized by the direct command.
 
-Migration **v281** adds retained profile evidence and a unique source/holder/run
+Migration **v266** adds retained profile evidence and a unique source/holder/run
 receipt key, identically on PostgreSQL and PGLite. The sole profile insert is
 transactional and unpublished. Evidence stores protocol/version, source
 incarnation, principal, pack identity, snapshot hash, aggregate metrics, supplied

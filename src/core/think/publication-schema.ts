@@ -16,7 +16,13 @@ CREATE TABLE IF NOT EXISTS codex_think_publications (
   UNIQUE(run_id,request_key)
 );
 ALTER TABLE codex_think_publications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
-ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4));
+DO $codex_protocol$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid='persistence_requests'::regclass
+    AND c.conname='persistence_requests_protocol_version_check'
+    AND pg_get_constraintdef(c.oid) ~ '(^|[^0-9])4([^0-9]|$)') THEN
+    ALTER TABLE persistence_requests DROP CONSTRAINT IF EXISTS persistence_requests_protocol_version_check;
+    ALTER TABLE persistence_requests ADD CONSTRAINT persistence_requests_protocol_version_check CHECK (protocol_version IN (1,2,3,4));
+  END IF;
+END $codex_protocol$;
 ${guard.replace('ELSIF version<>1 THEN', "ELSIF version NOT IN (1,3,4) OR (version=3 AND NEW.operation<>'put_page') OR (version=4 AND NEW.operation NOT IN ('put_page','takes_add')) THEN")};
 `;

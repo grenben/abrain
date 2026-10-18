@@ -18,8 +18,8 @@ import { AUTO_THINK_SCHEMA_SQL } from '../src/core/cycle/auto-think-schema.ts';
 import { THINK_PUBLICATION_SCHEMA_SQL } from '../src/core/think/publication-schema.ts';
 import { CODEX_UPGRADE_SCHEMA_SQL } from '../src/core/ai/private-upgrade-schema.ts';
 import { CODEX_JOB_UPGRADE_SCHEMA_SQL } from '../src/core/minions/codex-upgrade-schema.ts';
-import { CODEX_ACTION_WRITE_SCHEMA_SQL } from '../src/core/persistence/codex-action-schema.ts';
-import { SUBSCRIPTION_JOB_SCHEMA_SQL } from '../src/core/minions/subscription-job-schema.ts';
+import { CODEX_ACTION_WRITE_BOOTSTRAP_SQL } from '../src/core/persistence/codex-action-schema.ts';
+import { SUBSCRIPTION_JOB_BOOTSTRAP_SQL } from '../src/core/minions/subscription-job-schema.ts';
 /**
  * Schema text generator (refactor wave 1, W2): one copy of schema DDL.
  *
@@ -137,8 +137,8 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/write-gate-schema.ts', expr: 'WRITE_GATE_SCHEMA_SQL', postgres: WRITE_GATE_SCHEMA_SQL, pglite: WRITE_GATE_SCHEMA_SQL },
   { source: 'src/core/questions/schema.ts', expr: 'PINNED_QUESTIONS_SCHEMA_SQL', postgres: PINNED_QUESTIONS_SCHEMA_SQL, pglite: PINNED_QUESTIONS_SCHEMA_SQL },
   { source: 'src/core/ai/subscription-schema.ts', expr: 'SUBSCRIPTION_SCHEMA_SQL', postgres: SUBSCRIPTION_SCHEMA_SQL, pglite: SUBSCRIPTION_SCHEMA_SQL },
-  { source: 'src/core/minions/subscription-job-schema.ts', expr: 'SUBSCRIPTION_JOB_SCHEMA_SQL', postgres: SUBSCRIPTION_JOB_SCHEMA_SQL, pglite: SUBSCRIPTION_JOB_SCHEMA_SQL },
-  { source: 'src/core/persistence/codex-action-schema.ts', expr: 'CODEX_ACTION_WRITE_SCHEMA_SQL', postgres: CODEX_ACTION_WRITE_SCHEMA_SQL, pglite: CODEX_ACTION_WRITE_SCHEMA_SQL },
+  { source: 'src/core/minions/subscription-job-schema.ts', expr: 'SUBSCRIPTION_JOB_BOOTSTRAP_SQL', postgres: SUBSCRIPTION_JOB_BOOTSTRAP_SQL, pglite: SUBSCRIPTION_JOB_BOOTSTRAP_SQL },
+  { source: 'src/core/persistence/codex-action-schema.ts', expr: 'CODEX_ACTION_WRITE_BOOTSTRAP_SQL', postgres: CODEX_ACTION_WRITE_BOOTSTRAP_SQL, pglite: CODEX_ACTION_WRITE_BOOTSTRAP_SQL },
   { source: 'src/core/ai/private-upgrade-schema.ts', expr: 'CODEX_UPGRADE_SCHEMA_SQL', postgres: CODEX_UPGRADE_SCHEMA_SQL, pglite: CODEX_UPGRADE_SCHEMA_SQL },
   { source: 'src/core/minions/codex-upgrade-schema.ts', expr: 'CODEX_JOB_UPGRADE_SCHEMA_SQL', postgres: CODEX_JOB_UPGRADE_SCHEMA_SQL, pglite: CODEX_JOB_UPGRADE_SCHEMA_SQL },
   { source: 'src/core/think/publication-schema.ts', expr: 'THINK_PUBLICATION_SCHEMA_SQL', postgres: THINK_PUBLICATION_SCHEMA_SQL, pglite: THINK_PUBLICATION_SCHEMA_SQL },

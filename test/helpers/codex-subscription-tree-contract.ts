@@ -4,8 +4,8 @@ import { createSubscriptionRun, reserveSubscriptionAttempt, settleSubscriptionAt
 import { codexSubscriptionContext, withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { runReflect } from '../../src/core/skillopt/reflect.ts';
 import type { SubscriptionGroupFixture } from './codex-subscription-group-contract.ts';
-import { v260 } from '../../src/core/schema-migrations/v260-codex-subscription-groups.ts';
-import { v266 } from '../../src/core/schema-migrations/v266-codex-subscription-tree.ts';
+import { v275 } from '../../src/core/schema-migrations/v275-codex-subscription-groups.ts';
+import { v281 } from '../../src/core/schema-migrations/v281-codex-subscription-tree.ts';
 
 export function codexSubscriptionTreeContract(f: SubscriptionGroupFixture) {
   describe('bounded Codex subscription tree', () => {
@@ -114,20 +114,20 @@ export function codexSubscriptionTreeContract(f: SubscriptionGroupFixture) {
       await f.run(async root => {
         // Restore the historical guard only in this isolated fixture, then run
         // the real registered upgrade against already-spent parent/child rows.
-        await f.engine().transaction(tx => tx.runMigration(v260.version, v260.sql));
+        await f.engine().transaction(tx => tx.runMigration(v275.version, v275.sql));
         try {
           const middle = await child(root);
           await failed(middle);
           await expect(child(middle)).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
-          await f.engine().transaction(tx => tx.runMigration(v266.version, v266.sql));
-          await f.engine().transaction(tx => tx.runMigration(v266.version, v266.sql));
+          await f.engine().transaction(tx => tx.runMigration(v281.version, v281.sql));
+          await f.engine().transaction(tx => tx.runMigration(v281.version, v281.sql));
           const leaf = await child(middle);
           const attempt = await success(leaf);
           await acceptSubscriptionTurn(f.engine(), attempt);
           for (const runId of [root, middle]) expect(await counts(runId)).toEqual({ attempts: 2, accepted_turns: 1, repairs: 0 });
           expect(await counts(leaf)).toEqual({ attempts: 1, accepted_turns: 1, repairs: 0 });
           await expect(reserve(leaf)).rejects.toMatchObject({ code: 'subscription_exhausted' });
-        } finally { await f.engine().transaction(tx => tx.runMigration(v266.version, v266.sql)); }
+        } finally { await f.engine().transaction(tx => tx.runMigration(v281.version, v281.sql)); }
       }, {}, 2);
     });
   });
