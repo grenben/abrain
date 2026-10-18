@@ -38,7 +38,7 @@ host subscription scope is inherited without accepting additional CLI grants.
 
 `withThinkSubscription` binds the allowance to source incarnations under the
 brain persistence lock and uses the existing shared account lane. It wraps both
-`runThink` and save/take publication. The pre-existing v232 retained plans and
+`runThink` and save/take publication. The pre-existing v267 retained plans and
 canonical receipts implement save recovery; this change does not replace them.
 Subscription cost and remaining quota remain null. Measured token counts remain
 available. The auxiliary guard reserves the full known maximum before dispatch;
@@ -59,7 +59,7 @@ unfinished batch per source is enforced by a partial unique index. Another run
 cannot replace it. Resume the original run and inputs; changed inputs fail.
 
 Accepted answers are retained before their required effects. Draft-only answers
-remain in this owner-side table. Saved answers use the v232 publication plan,
+remain in this owner-side table. Saved answers use the v267 publication plan,
 evidence checks and actual committed receipts. A retry skips completed questions
 and uses retained accepted answers. Cooldown starts only when every selected
 question completes, and is source scoped. A valid empty answer, refused proposal,

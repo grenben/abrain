@@ -31,7 +31,7 @@ native judging; it is not an unfinished cross proposal. Every retained summary
 also binds the original native brainstorm result hash. Replays revalidate the
 source/evidence-backed brainstorm result before exporting the summary.
 
-Migration v259 separates brainstorm invocation IDs from their subscription
+Migration v274 separates brainstorm invocation IDs from their subscription
 grant IDs. Ordinary single runs retain protocol 1; evaluation fixtures use
 protocol 2 with host-derived IDs. Repeated identical question rows have distinct
 fixture identities and proposal caches. All dispatch still reserves against
@@ -79,7 +79,7 @@ create and stop disposable clusters.
 | --- | --- |
 | `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test --timeout=30000 test/ai/codex-think.serial.test.ts` | 311 passed; 1,139 assertions |
 | `python3 /tmp/maxbrain-test-postgres-think.py` | Same 311 passed and 1,139 assertions; cluster stopped |
-| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | v259 catalog refresh, then catalog/replay: 12 passed; 31 assertions; PgBouncer skipped; cluster stopped |
+| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | v274 catalog refresh, then catalog/replay: 12 passed; 31 assertions; PgBouncer skipped; cluster stopped |
 | `python3 /tmp/maxbrain-codex-brainstorm-regressions.py` | Seven separate legacy processes: 110 passed; 291 assertions |
 | `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 74 passed; admin build skipped; one test-registration type error found |
 | `python3 /tmp/maxbrain-stream-check.py bun run typecheck` | Passed after removing the unused extra test-registration property |

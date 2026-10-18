@@ -34,7 +34,7 @@ providers.
 ## Retained plan and execution
 
 Before effects, `codex-batch.ts` snapshots and validates every skill, benchmark,
-source incarnation, model route, read scope and output target. Migration v267
+source incarnation, model route, read scope and output target. Migration v282
 adds `codex_skillopt_batches` and `codex_skillopt_batch_members`. The complete
 manifest (bounded to 8 MiB), immutable input hashes, canonical child IDs and
 child allowances are persisted in one transaction.

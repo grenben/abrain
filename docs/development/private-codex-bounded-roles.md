@@ -66,14 +66,14 @@ Atom receipts and phase reports return `null` total USD and expose the known API
 subtotal separately. Unknown embedding prices still refuse mixed-workflow
 admission; the subscription envelope cannot authorize paid embeddings.
 
-Registered migration **v225**, shared by both engines, adds
+Registered migration **v260**, shared by both engines, adds
 `extract_rollup_7d.subscription_run_count`. The existing `cost_usd` column retains
 known API spend. Dashboard, explain and doctor readers expose an unknown total
 when a subscription run is present, plus `api_metered_cost_7d_usd`. Legacy rows
-retain their prior meaning. Reads work before v225 using optional JSON row-field
+retain their prior meaning. Reads work before v260 using optional JSON row-field
 lookup; subscription writes never silently retry an older schema without the
 counter. Rollups remain best-effort operational caches, not an authoritative
-per-attempt ledger. Durable subscription admission remains in v223/v224.
+per-attempt ledger. Durable subscription admission remains in v258/v259.
 
 No migration was applied to the installed database. PostgreSQL catalog goldens
 were regenerated only from fresh isolated test databases; the diff adds one

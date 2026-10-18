@@ -39,7 +39,7 @@ checks do not prove live subscription behavior.
 There is no separate polish caller. The `polish` call shape is scaffolding;
 strict calls without a schema are refused. This does not add a model dependency
 to deterministic parsing. No cache migration is required beyond the existing
-v099 table. The branch's earlier v269 migration remains part of any later upgrade.
+v099 table. Other registered migrations remain part of any later upgrade.
 
 ## Deterministic verification
 

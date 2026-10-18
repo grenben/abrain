@@ -40,7 +40,7 @@ changes remain review proposals; original skill files are not replaced.
 
 ## Selection, completion and recovery
 
-Migration 268 retains the source incarnation, configuration/model binding and
+Migration 283 retains the source incarnation, configuration/model binding and
 selected skill names under the original subscription run. Selection is sorted,
 bounded and persisted before optimizer effects. Repeating that run uses the
 same selection even if new skills appear. Missing selected skills and changed

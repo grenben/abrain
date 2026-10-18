@@ -20,7 +20,7 @@ Registered migration **241**, shared by PostgreSQL and PGLite, permanently maps
 `(run_id, invocation_id)` to a real subagent job. Its hash binds the full
 candidate/task, source incarnation, model/runtime selection, tool scope and turn
 bound. Changed inputs require a different host invocation ID. The root lock
-serializes insertion and bounds child count by `max_attempts`. Migration 240's
+serializes insertion and bounds child count by `max_attempts`. Migration 275's
 aggregate admission charges child calls to the root allowance.
 
 Children use the existing native action handler, fenced queue claims, message
@@ -89,7 +89,7 @@ and explicit optimizer protocol marker. Logs use `/tmp/maxbrain-rollout-`.
 - Qualify real Codex isolation and bounded live subscription behavior. The
   production runtime qualification allowlist remains empty.
 
-Migration 241 was applied only in disposable tests. Installing this source,
+Migration 276 was applied only in disposable tests. Installing this source,
 migrating the actual database and cutting workers over require the separately
 authorized upgrade. No installed executable, pin, service, production database
 or private activation changed here. Full container CI, admin UI and live checks

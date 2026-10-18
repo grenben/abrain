@@ -29,8 +29,8 @@ once. One content-repair allowance spans the entire tree. Creating more children
 does not add capacity. A failed call consumes an attempt; unresolved calls retain
 the account lane. No USD conversion or remaining subscription quota is inferred.
 
-Migration v260 adds the parent reference and original group guard. Migration
-v266 replaces that guard with bounded tree accounting and adds
+Migration v275 adds the parent reference and original group guard. Migration
+v281 replaces that guard with bounded tree accounting and adds
 `gbrain_codex_subscription_lock_path`. Existing counters and attempt records are
 preserved without recalculation. Admission and acceptance lock root, intermediate
 and leaf rows in that order. The database guard propagates deltas recursively

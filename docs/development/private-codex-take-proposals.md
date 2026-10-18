@@ -64,7 +64,7 @@ holder or weight. Canonical provenance names the proposal and marks edits.
 
 `take-proposal-codex-plan.ts` freezes reviewer inputs and a host-generated request
 UUID, together with a fingerprint of the original proposal and evidence. The plan
-lives in v230's existing JSONB evidence column; no additional migration is needed.
+lives in v265's existing JSONB evidence column; no additional migration is needed.
 `take-proposal-codex-accept.ts` uses the existing page preparation, authorization,
 journal admission and coordinated publication. A locked transaction commits the
 proposal claim, frozen plan and journal request together. This also serializes
@@ -106,7 +106,7 @@ unresolved inference. These are deterministic fixtures, not live Codex calls.
 PostgreSQL
 tests use an authorized disposable cluster and stop it afterwards. No production
 schema or installed executable is changed. Deployment still needs the verified
-source build, reviewed migrations v258–v250 as applicable, runtime qualification,
+source build, reviewed migrations v258–v285 as applicable, runtime qualification,
 authorized isolated live acceptance and explicit activation.
 
 ### Commands and results

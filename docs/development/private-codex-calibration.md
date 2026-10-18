@@ -145,7 +145,7 @@ fake executable. No real inference or production database was used.
 - The first native concurrency run exposed two simultaneous shared-to-exclusive
   lock upgrades. Admission now takes the exclusive brain lock before declaring
   the shared persistence protocol; the corrected native contract passes.
-- Schema goldens also incorporate the previously implemented v230 take-proposal
+- Schema goldens also incorporate the previously implemented v265 take-proposal
   column, whose migration-record golden was stale. No prior migration changed.
 
 | Final command (isolated harness) | Result |

@@ -1,7 +1,7 @@
 # Private Codex synthesis checkpoint
 
 This checkpoint connects the synthesis dispatcher to bounded Codex proposals and
-the retained publication plans introduced in v226. It is source development only:
+the retained publication plans introduced in v261. It is source development only:
 the installed GBrain, production database, credentials and activation are unchanged.
 
 ## Implemented behavior
@@ -123,7 +123,7 @@ matrix or live subscription acceptance has run.
 - Host-owned iterative minions, other bounded roles and pin/job migration remain
   incomplete. This is not an activation-ready implementation of every GBrain service.
 
-No additional schema migration was needed: plans use registered v226, and the
+No additional schema migration was needed: plans use registered v261, and the
 bounded admission/cooldown/completion records use existing config transactions.
 Future authorized deployment must include the earlier registered migrations, a
 consistent artifact across workers and all remaining qualification/activation gates.

@@ -34,7 +34,7 @@ than being silently truncated.
 Registered migration **242** adds `codex_skillopt_runs` on both engines. It retains
 the complete input snapshot/hash, deadline, fenced owner lease, checkpoint,
 accepted result and hashes. Repetition IDs feed the child-job protocol added in
-migration 241. Retries reuse its original histories, proposal caches and completed
+migration 276. Retries reuse its original histories, proposal caches and completed
 stages. Runtime/model changes stop a run before another call. Active or unresolved
 attempts block recovery and retain their subscription account lane.
 
@@ -114,7 +114,7 @@ prepared-publication recovery. Those paths must preserve independent budgets,
 source grants and stable identities rather than creating fresh allowances.
 Broader tool coverage and real runtime qualification also remain incomplete.
 
-Migration 242 was applied only to disposable test databases. No production
+Migration 277 was applied only to disposable test databases. No production
 database, installed executable, pin or service was changed. Installation,
 migration of the real target, worker cutover, live checks and activation remain
 separate upgrade steps. The production runtime qualification allowlist is empty.
