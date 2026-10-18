@@ -27,7 +27,10 @@ export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, 
   await context.checkAuthority?.();
   if (context.signal?.aborted) throw new CodexProposalError('aborted');
   const decide = readDecideConfig(pickDecideConfig(await loadConfigSnapshot(engine)) ?? {});
-  if (Object.values(decide.slots).some(slot => slot.mode !== 'off')) throw new PrivateRoutingError('think:decide.slots');
+  const policy = readPrivateCodexConfig()!;
+  if (Object.values(decide.slots).some(slot => slot.mode !== 'off' && slot.provider !== `llm:${policy.model}`) ||
+    decide.egressFallback !== 'none' && decide.egressFallback !== `llm:${policy.model}`)
+    throw new PrivateRoutingError('think:decide.slots');
   const auxiliaryAuthorized = hasAIInvocationGuard();
   let denied: SubscriptionAdmissionError | undefined;
   const result = await withAIInvocationPreflight(async call => {

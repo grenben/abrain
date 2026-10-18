@@ -57,7 +57,7 @@ describe('strict private routing', () => {
     await expect(handler({} as any)).rejects.toMatchObject({code:'private_native_loop_unsupported'});
     expect(constructed).toBe(0);
   });
-  test('shared decision runner refuses every provider before query, search or background dispatch', async () => {
+  test('shared decision runner refuses paid providers before query or search dispatch', async () => {
     let calls = 0;
     configureGateway({ env: { TYPESAFE_API_KEY: 'synthetic' } });
     __setDecideTransportForTests(async () => { calls++; return new Response('{}'); });
@@ -66,7 +66,6 @@ describe('strict private routing', () => {
       const config = readDecideConfig({ 'decide.provider': 'typesafe:jev-1.13.0', 'decide.slots.intent.mode': 'on' });
       for (const [provider, slot, callSite] of [
         ['typesafe:jev-1.13.0', 'intent', 'search'], ['llm:openai:gpt-test', 'answerable', 'query'],
-        ['llm:codex-cli:gpt-test', 'conflict', 'sweep'],
       ] as const) {
         const question = slot === 'answerable'
           ? { id: 'q:0', kind: 'noul' as const, instructions: 'Is there evidence?' }
@@ -78,6 +77,11 @@ describe('strict private routing', () => {
     } finally {
       __setChatTransportForTests(null); __setDecideTransportForTests(null);
     }
+  });
+  test('private decision fallback cannot point to an ordinary LLM', async () => {
+    const config = readDecideConfig({ 'decide.provider': 'llm:codex-cli:gpt-test', 'decide.egress_fallback': 'llm:openai:gpt-test' });
+    await expect(runDecide({ slot: 'intent', callSite: 'search', state: {}, questions: [{ id: 'q', kind: 'noul', instructions: 'Check.' }] },
+      { engine: null, config })).rejects.toMatchObject({ source: 'decide:provider', code: 'private_route_conflict' });
   });
   test('DB cannot activate private mode; ordinary resolver retains its behavior', async () => {
     save({}); expect(readPrivateCodexConfig()).toBeUndefined();

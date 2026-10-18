@@ -19,7 +19,9 @@ import {
   applyOpenAICompatConfig, applyResolveAuth, authToHeaders, chat, decideTransport, getCurrentBudgetTracker, requireConfig,
 } from '../gateway.ts';
 import { invokeAI, isAIInvocationPolicyError, responseInvocationUsage } from '../invocation-guard.ts';
-import { readPrivateCodexConfig, PrivateRoutingError } from '../private-policy.ts';
+import { readPrivateCodexConfig, PrivateRoutingError, assertPrivateRoute } from '../private-policy.ts';
+import { SubscriptionAdmissionError } from '../subscription-admission.ts';
+import { CodexProposalError } from '../providers/codex-contract.ts';
 import { recordOnTracker } from '../budget-record.ts';
 import { getRecipe } from '../recipes/index.ts';
 import { typesafeApiKey } from '../recipes/typesafe.ts';
@@ -27,7 +29,7 @@ import { providerKind, readDecideConfig, type DecideConfig } from './config.ts';
 import { checkEgress } from './egress.ts';
 import { estimateContextTokens, orderQuestions, parseRetryAfterMs, planBatches, RateLimitedError, runBatches } from './pack.ts';
 import {
-  buildLlmPrompt, llmCapability, llmChatModel, llmModelIdentity, LLM_ANSWER_SCHEMA, LLM_SYSTEM_PROMPT, parseLlmReply,
+  buildLlmPrompt, codexDecideSchema, llmCapability, llmChatModel, llmModelIdentity, LLM_ANSWER_SCHEMA, LLM_SYSTEM_PROMPT, parseLlmReply,
 } from './providers/llm-structured.ts';
 import { buildTypeSafeRequest, classifyTypeSafeHttpError, parseTypeSafeResponse, toWireQuestion } from './providers/typesafe.ts';
 import { SLOT_SPECS } from './slots.ts';
@@ -82,9 +84,12 @@ export async function runDecide(req: DecideRequest, ctx: DecideContext): Promise
   const started = now();
   const cfg = ctx.config ?? await loadDecideConfig(ctx.engine);
   const provider = req.provider ?? cfg.slots[req.slot].provider;
-  // Query, search and background slots reach this runner without private think's gate.
-  // No decide provider has a qualified private Codex contract yet.
-  if (readPrivateCodexConfig()) throw new PrivateRoutingError('decide:provider');
+  const privateCodex = readPrivateCodexConfig();
+  if (privateCodex) {
+    if (provider !== `llm:${privateCodex.model}` || cfg.egressFallback !== 'none' && cfg.egressFallback !== provider)
+      throw new PrivateRoutingError('decide:provider');
+    assertPrivateRoute(privateCodex.model, 'decide:provider', privateCodex);
+  }
   const lane = req.lane ?? SLOT_SPECS[req.slot].lane;
   const kind = providerKind(provider);
   if (kind === 'none') throw new DecideError('no_provider', 'decide: no provider configured');
@@ -145,7 +150,8 @@ function withPartial(err: unknown, answers: Record<string, DecideAnswer>, models
 }
 
 function asDecideError(err: unknown, signal: AbortSignal, caller?: AbortSignal): unknown {
-  if (err instanceof DecideError || isAIInvocationPolicyError(err)) return err;
+  if (err instanceof DecideError || err instanceof PrivateRoutingError || err instanceof SubscriptionAdmissionError ||
+    err instanceof CodexProposalError || isAIInvocationPolicyError(err)) return err;
   if (signal.aborted) return caller?.aborted ? new DecideError('provider_error', 'decide: caller aborted') : new DecideError('timeout', 'decide: deadline exceeded');
   return new DecideError('provider_error', `decide: transport failed (${err instanceof Error ? err.name : 'error'})`);
 }
@@ -270,14 +276,14 @@ async function runLlm(req: DecideRequest, cfg: DecideConfig, a: RunArgs): Promis
       const questions = plan[i]!.indices.map((j) => a.ordered[j]!);
       const reply = await chat({
         model, system: LLM_SYSTEM_PROMPT, messages: [{ role: 'user', content: buildLlmPrompt(a.state, questions) }],
-        ...(capability === 'structured' ? { responseSchema: LLM_ANSWER_SCHEMA } : {}),
+        ...(capability === 'structured' ? { responseSchema: model.startsWith('codex-cli:') ? codexDecideSchema(questions) : LLM_ANSWER_SCHEMA } : {}),
         temperature: 0, abortSignal: signal, purpose: `decide:${req.slot}`, maxTokens: 64 + questions.length * 96,
         // The egress gate cleared this provider only; a chain hop would send the pack elsewhere.
         allowFallback: false,
       });
       inputTokens += reply.usage.input_tokens;
       outputTokens += reply.usage.output_tokens;
-      models.add(llmModelIdentity(model, reply.responseModel, baseUrl));
+      models.add(model.startsWith('codex-cli:') ? reply.model : llmModelIdentity(model, reply.responseModel, baseUrl));
       Object.assign(answers, parseLlmReply(reply.text, questions));
     }, { concurrency: a.lane === 'hot' ? cfg.maxConcurrency : cfg.backgroundConcurrency, deadlineAt: a.deadlineAt, signal, lane: a.lane, now: a.now });
   } catch (err) {

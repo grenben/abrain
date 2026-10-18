@@ -9,6 +9,9 @@ import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { BudgetTracker } from '../../src/core/budget/budget-tracker.ts';
+import { runDecide } from '../../src/core/ai/decide/index.ts';
+import { readDecideConfig } from '../../src/core/ai/decide/config.ts';
+import { llmCapability } from '../../src/core/ai/decide/providers/llm-structured.ts';
 import { PNG_PIXEL, JPEG_PIXELS, WEBP_PIXELS, syntheticPng } from '../helpers/codex-image-fixtures.ts';
 const root=mkdtempSync(join(tmpdir(),'codex-gateway-')); const bin=join(root,'fixture.mjs'), capture=join(root,'capture.jsonl');
 const saved=Object.fromEntries(['GBRAIN_HOME','HOME','CODEX_HOME'].map(k=>[k,process.env[k]]));
@@ -32,7 +35,12 @@ import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1];
 const schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8')),prompt=readFileSync(0,'utf8');
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({args,schema,prompt})+'\\n');
-const value=schema.properties.queries?{queries:[]}:schema.properties.answer?{answer:'bounded'}:{text:''};
+const answers={};if(schema.properties.answers)for(const [id,shape] of Object.entries(schema.properties.answers.properties)){
+  const p=shape.properties;if(p.noul)answers[id]={type:'noul',noul:0.7};
+  else if(p.choice)answers[id]={type:'choice',choice:p.choice.enum[0],confidence:0.8,probabilities:Object.fromEntries(Object.keys(p.probabilities.properties).map((k,i)=>[k,i===0?0.8:0.2]))};
+  else answers[id]={type:'score',score:0,confidence:0.8,probabilities:Object.fromEntries(Object.keys(p.probabilities.properties).map((k,i)=>[k,i===0?0.8:0.2]))};
+}
+const value=schema.properties.answers?{answers}:schema.properties.queries?{queries:[]}:schema.properties.answer?{answer:'bounded'}:{text:''};
 const text=JSON.stringify(value);writeFileSync(arg('--output-last-message'),text);
 for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:10,cached_input_tokens:2,output_tokens:3}}])console.log(JSON.stringify(event));
 `;
@@ -57,6 +65,24 @@ test('gateway transports caller schema to the real adapter and retains unknown m
   // The independently metered auxiliary request still cannot exceed the USD cap.
   try { tracker.reserve({modelId:'openai:text-embedding-3-small',kind:'embed',estimatedInputTokens:1_000_000,maxOutputTokens:0}); throw new Error('expected cap'); }
   catch(error) { expect(error).toMatchObject({reason:'cost'}); }
+});
+test('private typed decisions use exact Codex schema, model identity and host admission',async()=>{
+  expect(llmCapability('llm:codex-cli:gpt-test')).toBe('structured');
+  const config=readDecideConfig({'decide.provider':'llm:codex-cli:gpt-test'});
+  const request={slot:'intent' as const,callSite:'search',state:{query:{class:'query' as const,text:'synthetic'}},
+    questions:[{id:'n',kind:'noul' as const,instructions:'Check.'},{id:'c',kind:'choice' as const,instructions:'Pick.',options:{yes:'Yes',no:'No'}},
+      {id:'s',kind:'score' as const,instructions:'Score.',levels:['low','high']}],deadlineMs:20_000};
+  const before=readFileSync(capture,'utf8').trim().split('\n').length;
+  await expect(runDecide(request,{engine:null,config})).rejects.toMatchObject({code:'subscription_required'});
+  expect(readFileSync(capture,'utf8').trim().split('\n')).toHaveLength(before);
+  const result=await withRun(()=>runDecide(request,{engine:null,config}),2);
+  expect(result.provider).toBe('llm:codex-cli:gpt-test');expect(result.model_resolved).toBe('codex-cli:gpt-test');
+  expect(result.answers.n).toEqual({kind:'noul',p:0.7});expect(result.answers.c?.kind).toBe('choice');
+  expect(result.answers.s?.kind).toBe('score');expect(result.uncalibrated).toBe(true);
+  const last=JSON.parse(readFileSync(capture,'utf8').trim().split('\n').at(-1)!);
+  expect(Object.keys(last.schema.properties.answers.properties).sort()).toEqual(['c','n','s']);
+  expect(last.schema.properties.answers.additionalProperties).toBe(false);
+  expect([...last.schema.properties.answers.required].sort()).toEqual(['c','n','s']);
 });
 test('valid empty expansion/OCR remains distinct from provider failure and uses image argv',async()=>{
   expect(await withRun(()=>expand('synthetic search'))).toEqual(['synthetic search']);
