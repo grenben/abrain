@@ -37,7 +37,7 @@ than reinterpreted. Use the existing explicit drain/park/resubmit workflow;
 resubmission must include the source and fresh bounded subscription consent.
 Nothing in an ordinary read rewrites stored jobs.
 
-Registered migration **v255**, `precise_auxiliary_spend`, widens the reservation
+Registered migration **v285**, `precise_auxiliary_spend`, widens the reservation
 estimate, actual charge and spend-log fields from NUMERIC(12,4) to
 NUMERIC(20,12) cents on both engines. A 17-token embedding fixture costs
 0.000034 cents and previously rounded to zero per call. The new storage retains
@@ -109,7 +109,7 @@ after the check. Logs use `/tmp/maxbrain-contextual-` with suffixes
 
 This checkpoint is implemented in source and tested without real inference.
 Installed GBrain retains its original capabilities. Deployment still requires
-the reviewed branch/artifact, registered migrations through v255, worker
+the reviewed branch/artifact, registered migrations through v285, worker
 consistency and job dispositions, and explicit activation authorization.
 The production Codex executable qualification registry remains empty; native
 pre-execution isolation and bounded live subscription checks remain unverified.

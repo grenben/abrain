@@ -3092,6 +3092,14 @@ More: [docs/guides/windowed-reads.md#result_too_large](../../docs/guides/windowe
 |---|---|---|---|---|---|---|
 | Resume spec mismatch. | The request itself was wrong or no longer matches the brain; nothing was changed. | Correct the request using the message above, then retry. | agent | `repeat the read that failed` | 1 | no |
 
+### retrieval_failed
+
+<a id="retrieval_failed"></a>
+
+| Meaning | Why | Next step | Who acts · consent | Verify | Exit | Retryable |
+|---|---|---|---|---|---|---|
+| Required evidence retrieval failed; synthesis was not completed. | The server failed; this is not a caller mistake. | Resolve the retrieval failure and retry within a valid inference allowance. | host_admin | `gbrain doctor --json` | 1 | no |
+
 ### revision_changed
 
 <a id="revision_changed"></a>

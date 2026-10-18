@@ -30,7 +30,7 @@ missing terminal completion retains unresolved subscription ownership.
 
 ## Persistence and authority
 
-Migration **v250** adds nullable `take_proposals.codex_evidence`. Private rows
+Migration **v280** adds nullable `take_proposals.codex_evidence`. Private rows
 retain exact quotation, page revision, source incarnation, host principal and
 subscription run identity. Existing rows retain SQL NULL evidence. The model
 cannot provide authority or operation IDs. Proposed takes remain pending review;
@@ -106,7 +106,7 @@ unresolved inference. These are deterministic fixtures, not live Codex calls.
 PostgreSQL
 tests use an authorized disposable cluster and stop it afterwards. No production
 schema or installed executable is changed. Deployment still needs the verified
-source build, reviewed migrations v243–v250 as applicable, runtime qualification,
+source build, reviewed migrations v273–v250 as applicable, runtime qualification,
 authorized isolated live acceptance and explicit activation.
 
 ### Commands and results

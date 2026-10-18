@@ -33,7 +33,7 @@ is accepted. This catches known content, fence and canonical-file refusals befor
 any write. Each effect prepares and checks again under the existing coordinator.
 Prevalidation does not promise that a two-write plan commits atomically.
 
-Migration **v252** adds `codex_think_publications`, with fresh-schema and migration
+Migration **v282** adds `codex_think_publications`, with fresh-schema and migration
 parity for PostgreSQL and PGLite. The host generates the plan and request UUIDs.
 The normalized journal intent carries a reserved plan reference; callers cannot
 supply it through the normal page operation. Protocol 4 validates the exact
@@ -113,7 +113,7 @@ broader federated evidence/lineage review and real runtime isolation remain open
 
 After deployment authorization and the remaining acceptance gates: build the
 verified branch, back up the actual database, apply registered migrations through
-v252 using the installation's migration procedure, upgrade every consumer and
+v282 using the installation's migration procedure, upgrade every consumer and
 restart the actual services. Do not activate strict private mode until the runtime
 has passed bounded authorized live schema/image, maintenance, action recovery and
 cancellation checks. The installed GBrain retains its original capabilities.

@@ -6,7 +6,7 @@ import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts
 import { withCodexProposalCache, cachedCodexProposal } from '../../src/core/ai/codex-proposal-cache.ts';
 import { codexSynopsis } from '../../src/core/ai/codex-synopsis.ts';
 import { digest } from '../../src/core/persistence/digest.ts';
-import { v256 } from '../../src/core/schema-migrations/v256-codex-proposal-cache.ts';
+import { v271 } from '../../src/core/schema-migrations/v271-codex-proposal-cache.ts';
 interface Fixture {
   engine(): BrainEngine;
   run<T>(fn: (id: string) => Promise<T>, hooks?: Partial<CodexSubscriptionContext>, maxAttempts?: number): Promise<T>;
@@ -119,7 +119,7 @@ export function codexProposalCacheContract(f: Fixture) { describe('durable nativ
   test('migration replay preserves cached raw output and enforces bounded storage', async () => {
     const s = scope(); f.reply(valid);
     await withCodexProposalCache(s, () => f.run(async () => { await synopsis(); })); const before = await rows(s.namespace);
-    for (let i = 0; i < 2; i++) for (const sql of v256.sql!.split(';').filter(s => s.trim())) await f.engine().executeRaw(sql);
+    for (let i = 0; i < 2; i++) for (const sql of v271.sql!.split(';').filter(s => s.trim())) await f.engine().executeRaw(sql);
     expect(await rows(s.namespace)).toEqual(before);
     await expect(f.engine().executeRaw('UPDATE codex_proposal_cache SET response_text=$2 WHERE namespace=$1', [s.namespace, 'a'.repeat(262145)])).rejects.toThrow();
     const [table] = await f.engine().executeRaw<{ relrowsecurity: boolean }>("SELECT relrowsecurity FROM pg_class WHERE relname='codex_proposal_cache'");

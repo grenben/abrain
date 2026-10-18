@@ -10,6 +10,19 @@ credits are retained; no result has been reassigned to another provider. Origina
 identifiers and attribution are available in the pre-removal Git revision
 `6040075c6cb95be5881cc2e1b76ef7d71f4e5d29` (retained on 2026-09-23).
 
+## [0.60.297.0] - 2026-10-18
+
+**Private Codex proposals are retained and checked by the brain host before publication.**
+This development release adds source-bound subscription runs, durable proposal and
+attempt records, bounded auxiliary spend, and host-side checks for page, take,
+skill, cycle, evaluation, and contextual indexing workflows. A native proposal
+cannot publish after its grant, source binding, or job ownership expires. The
+new tables and guards are supplied by migrations v258–v285 for both engines.
+
+This is a source integration checkpoint. Production activation still requires
+runtime qualification, a configured private account lane, and validation against
+the target host database. The installed brain is not migrated by this release.
+
 ## [0.60.296.0] - 2026-10-18
 
 **Several live pages recording one file no longer stop a source's whole managed sync, verified duplicates heal on their own, and no writer can create such a pair any more.** Hotfix for #6948.

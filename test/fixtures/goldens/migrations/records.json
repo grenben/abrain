@@ -1,6 +1,6 @@
 {
   "golden": {
-    "count": 252,
+    "count": 280,
     "gaps": [
       17,
       18,
@@ -67,7 +67,7 @@
       "tableRows": "906d2413b13d76a06d5910885e47ed5c544be4ff3a2266e83146715721b24270",
       "verifyProjectionStatistics": "0d231b04ecfbc5a4109d6fca9567bf4e8c9e9db6c3fbbb35212e026579ed6f67"
     },
-    "latest": 257,
+    "latest": 285,
     "records": [
       {
         "handler": {
@@ -4028,6 +4028,370 @@
         "transaction": false,
         "verify": "absent",
         "version": 257
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_subscription_admission",
+        "sql": {
+          "length": 1324,
+          "sha256": "7052a8b29572e3c5da23ba97dc8b5e2cfdc04852995c52e8f82dc9c52d7a98ff"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 258
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_subscription_jobs",
+        "sql": {
+          "length": 858,
+          "sha256": "2b627759abd8993ae5083269f7e501a5605ad0d8b6412cff721cdb65584fd21f"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 259
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "extract_subscription_cost",
+        "sql": {
+          "length": 145,
+          "sha256": "2019c595efb807e891aee67bf170c975e24cf97379b5075d4847a9f69bb826ba"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 260
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_publication_plans",
+        "sql": {
+          "length": 753,
+          "sha256": "51714ee669a189e84c5e740e858e7eeb03854517e00a8941681e56c2ed88b96a"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 261
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_action_write_bindings",
+        "sql": {
+          "length": 2993,
+          "sha256": "f4ad39cb2e5aadaf4cc53399fcd001eded8a5fe512e2917800b784045ecbdae8"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 262
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_upgrade_receipts",
+        "sql": {
+          "length": 566,
+          "sha256": "38d9d99bee1946c6650415bcb43282457278c9132b85ecfcfd61a794af93c26c"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 263
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_job_parking",
+        "sql": {
+          "length": 1251,
+          "sha256": "b34d6729852234cd2789fdc757cfa1fa2ace782f86d74c253e955743ad8fc59e"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 264
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_take_proposal_evidence",
+        "sql": {
+          "length": 73,
+          "sha256": "af984fe86723c1fe3d1618bcabb0b237d7c1156910594335b38ccea57d45a5fb"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 265
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_calibration_evidence",
+        "sql": {
+          "length": 273,
+          "sha256": "84baba4342e50e2dc8e27456fdb56c346564da0b93c6e81720dad191185f53a0"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 266
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_think_publications",
+        "sql": {
+          "length": 3668,
+          "sha256": "2f0876a9d6ec6c8732aaba536be6efd0d57611bf4e1906bddf51c1222a66ae36"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 267
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_auto_think_runs",
+        "sql": {
+          "length": 872,
+          "sha256": "40a92f5b41ac320d7a8e75aa8463e8de38b05c92936cd103daf940caec0d3c98"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 268
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_think_ab_trials",
+        "sql": {
+          "length": 885,
+          "sha256": "4a124476c1bd28e6bef013f2c7cf997f80b5ee93164491ee4f20f499662ac2af"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 269
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "precise_auxiliary_spend",
+        "sql": {
+          "length": 230,
+          "sha256": "4fd446eed5eba826d03525df207df672e08a4a0ab56665894631c9c1f5248b62"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 270
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_proposal_cache",
+        "sql": {
+          "length": 655,
+          "sha256": "ece60baeebf249c0aec2e19267d004fb79b29cf4c462fffc3ffc29ddb6f82dba"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 271
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_eval_results",
+        "sql": {
+          "length": 1321,
+          "sha256": "864fe544d8b47188f6e1e8b50dd49517e5ce8122ae3990abfc736e970ad4d1e4"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 272
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_brainstorm_runs",
+        "sql": {
+          "length": 4608,
+          "sha256": "f8c60873d9676073f8b9033be219f1cdd961c72739e96143d5e65448e37af41d"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 273
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_brainstorm_fixtures",
+        "sql": {
+          "length": 1006,
+          "sha256": "abb85a00e9b418343077e82acd222149a5f888611e77faa8b0158ba108df343d"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 274
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_subscription_groups",
+        "sql": {
+          "length": 3158,
+          "sha256": "290364bcf276418e7764053f832ef6dea6c5772fc222fbc2b69a776f32bc49e9"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 275
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_skillopt_rollouts",
+        "sql": {
+          "length": 758,
+          "sha256": "c13d02abe2b474f291fba0b0a385072f82ab5a377fc8e361e6903bbba7a65938"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 276
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_skillopt_runs",
+        "sql": {
+          "length": 1075,
+          "sha256": "a5b02d2678f478138683cfd33a8d25e2b4d90dc8b2613ed7e3b912d5b2c6dd49"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 277
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_skillopt_submissions",
+        "sql": {
+          "length": 462,
+          "sha256": "d3403ee461ead0fdd75dbd4ccd7d178a84f79d39af1969a04449531260990691"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 278
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_shared_skill_optimization",
+        "sql": {
+          "length": 4432,
+          "sha256": "00f6fecd64f7808ca9a1da2a88dceca1624eff6cf6354935a7f6511d968a72b3"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 279
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_bootstrap_runs",
+        "sql": {
+          "length": 852,
+          "sha256": "6ac3843a64993f2928fc07acf1e214234205c98310aa78240371b302c1d17fb2"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 280
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_subscription_tree",
+        "sql": {
+          "length": 3747,
+          "sha256": "a5dc0638007d1490137d42d384348956354f954b380be24c3d8252394557c0f0"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 281
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_skillopt_batches",
+        "sql": {
+          "length": 1337,
+          "sha256": "4bac3d0001e9f8f4e344e1e8fa16d9e251ab415a31c5915ce4a00bffd3dcaf66"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 282
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_skillopt_cycles",
+        "sql": {
+          "length": 1241,
+          "sha256": "83282d8f6d6e4c69e6d7c6ff60dc859b87bb90d7136b13f8b07286eb5056bdd5"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 283
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_skillopt_batch_submissions",
+        "sql": {
+          "length": 478,
+          "sha256": "f583717fff50a033303d4c801f55ad06fe405ab13eaf124f764858dc764c3482"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 284
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_bootstrap_jobs",
+        "sql": {
+          "length": 847,
+          "sha256": "c4a47f1b52e7dfbe0b606c7de45a99a2bfd75109519d21365921ffdc490dca49"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 285
       }
     ],
     "versions": [
@@ -4282,7 +4646,35 @@
       254,
       255,
       256,
-      257
+      257,
+      258,
+      259,
+      260,
+      261,
+      262,
+      263,
+      264,
+      265,
+      266,
+      267,
+      268,
+      269,
+      270,
+      271,
+      272,
+      273,
+      274,
+      275,
+      276,
+      277,
+      278,
+      279,
+      280,
+      281,
+      282,
+      283,
+      284,
+      285
     ]
   },
   "normalizer": "migrations-record-v1"

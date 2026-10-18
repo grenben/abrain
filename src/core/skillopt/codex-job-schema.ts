@@ -1,4 +1,4 @@
-/** Permanent CLI request/job binding; migration 243. */
+/** Permanent CLI request/job binding; migration 273. */
 export const CODEX_SKILLOPT_JOB_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_skillopt_submissions (
   request_id UUID PRIMARY KEY,

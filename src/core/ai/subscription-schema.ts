@@ -1,4 +1,4 @@
-/** Shared by both storage engines through migration v243; no production application here. */
+/** Shared by both storage engines through migration v273; no production application here. */
 export const SUBSCRIPTION_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_subscription_runs (
   run_id TEXT PRIMARY KEY,

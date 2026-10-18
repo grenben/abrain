@@ -9,7 +9,7 @@ GBrain and production database are unchanged. The trusted local CLI creates expl
 auxiliary budgets. This module never infers subscription permission from a
 dollar cap or JSONL file.
 
-The v257 migration is registered and uses the same schema fragment for PGLite
+The v272 migration is registered and uses the same schema fragment for PGLite
 and PostgreSQL. `codex_eval_runs` binds a protocol version, hash, question count,
 required result stage, owner token and lease. `codex_eval_results` retains
 bounded, hashed JSONB receipts keyed by run, question and stage. No receipt is
@@ -126,7 +126,7 @@ gbrain eval longmemeval synthetic.jsonl --keyword-only --no-trajectory \
 ```
 
 Flags are validated before opening an owner. The CLI uses the canonically
-selected brain as the allowance/receipt owner, requires schema v257, and opens
+selected brain as the allowance/receipt owner, requires schema v272, and opens
 it without startup migrations. It does not import benchmark pages there. Help
 and explicitly pure keyword retrieval need neither a host connection nor an
 allowance. Generative or hybrid work without allowance flags fails before an
@@ -142,7 +142,7 @@ This is not account coordination across unrelated owner databases.
 The run binding now uses `codex-longmemeval-run-v2`. It includes each named
 auxiliary budget's owner brain ID, stable key and cap, including inherited named
 scopes. A changed cap/key/owner conflicts before dispatch. Storage protocol
-remains v257/protocol 1; no additional migration is required. Earlier development
+remains v272/protocol 1; no additional migration is required. Earlier development
 v1 bindings are not silently adopted: preserve their receipts and use an
 explicit new request UUID for a v2 run. Do not rewrite old bindings or counters.
 Unidentified custom invocation guards remain the enclosing host's responsibility;

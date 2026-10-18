@@ -47,7 +47,7 @@ approved closure, evaluation bytes, controls, effective model settings and outpu
 cap. Host-selected staging location is excluded from this queue identity, while
 the actual worker's retained plan binds its own private staging location.
 
-Submission uses the existing migration-243 permanent request/job identity and
+Submission uses the existing migration-273 permanent request/job identity and
 atomic queue/allowance admission. The worker reconstructs scope only from the
 application-authorized stored payload and its current claim. It compares the
 complete submitted identity before granting optimizer ownership or inference.
@@ -55,7 +55,7 @@ Changing inputs, limits, target or effective settings refuses. A shared payload
 cannot be downgraded to the earlier unmanaged protocol or executed directly
 without its authorized host scope.
 
-The migration-244 shared optimizer plan and publication protocol 6 carry the
+The migration-274 shared optimizer plan and publication protocol 6 carry the
 worker fence into the canonical write transaction. A replacement worker reuses
 acknowledged evaluations and rebinds ownership. Committed effects remain visible
 after a lost worker acknowledgement; recovery reuses the same request and receipt.
