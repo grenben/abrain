@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { __assertCodexHostBoundaryForTests, __registerCodexFixtureForTests, assertTrustedCodexExecutable, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
+import { __assertCodexHostBoundaryForTests, __registerCodexFixtureForTests, assertCodexNamespaceAvailable, assertTrustedCodexExecutable, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { access, chmod, mkdir, mkdtemp, open, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -149,6 +149,8 @@ sleep 3
     await mkdir(binDir, { recursive: true });
     const unshare = join(binDir, 'unshare');
     await writeFile(unshare, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const proof = join(binDir, 'true');
+    await writeFile(proof, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     await chmod(hostRoot, 0o755); await chmod(etc, 0o755);
     await chmod(join(hostRoot, 'usr'), 0o755); await chmod(binDir, 0o755);
     const trustedUid = (await stat(hostRoot)).uid;
@@ -160,6 +162,10 @@ sleep 3
     const mutableFile = await stat(unshare);
     expect(() => assertTrustedCodexExecutable(mutableFile, trustedUid)).toThrow();
     await chmod(unshare, 0o755);
+    expect(() => assertCodexNamespaceAvailable(unshare, proof)).not.toThrow();
+    await writeFile(unshare, '#!/bin/sh\nexit 1\n');
+    expect(() => assertCodexNamespaceAvailable(unshare, proof)).toThrow();
+    await writeFile(unshare, '#!/bin/sh\nexit 0\n');
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).resolves.toBeUndefined();
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid + 2, callerUid)).rejects.toThrow();
     await mkdir(join(etc, 'codex'));
@@ -174,10 +180,14 @@ sleep 3
     await chmod(unshare, 0o777);
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
     await chmod(unshare, 0o755);
+    await chmod(proof, 0o777);
+    await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+    await chmod(proof, 0o755);
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, trustedUid)).rejects.toThrow();
     const symlinkRoot = join(root, `codex-host-link-${sequence++}`);
     await mkdir(join(symlinkRoot, 'usr', 'bin'), { recursive: true });
     await writeFile(join(symlinkRoot, 'usr', 'bin', 'unshare'), '', { mode: 0o755 });
+    await writeFile(join(symlinkRoot, 'usr', 'bin', 'true'), '', { mode: 0o755 });
     await chmod(symlinkRoot, 0o755);
     await chmod(join(symlinkRoot, 'usr'), 0o755);
     await chmod(join(symlinkRoot, 'usr', 'bin'), 0o755);

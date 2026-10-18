@@ -136,10 +136,11 @@ condition, not just a cosmetic tool-list difference.
 
 Production-hash admission now fails closed on Linux unless GBrain runs as a
 non-root user, `/`, `/etc`, `/usr`, and `/usr/bin` are root-owned directories
-without group/other write access, `/usr/bin/unshare` is a root-owned executable
-file without group/other write access, and `/etc/codex` is absent (including a
-dangling symlink). The check runs after hashing the executable and before
-returning its open handle; filesystem errors also refuse admission. A
+without group/other write access, `/usr/bin/unshare` and `/usr/bin/true` are
+root-owned executable files without group/other write access, and `/etc/codex`
+is absent (including a dangling symlink). The check runs after hashing the
+executable and before returning its open handle; filesystem errors also refuse
+admission. A
 synthetic-filesystem test covers absent and present managed layers, symlinks,
 mutable parents, a mutable launcher, owner mismatch, and root-equivalent
 callers. This removes the known cross-host managed-config override from the
@@ -163,6 +164,12 @@ descriptor remains child fd 3. A focused test starts a bounded `setsid`
 heartbeat descendant, aborts the wrapper, and confirms the heartbeat stops
 after process-group SIGKILL and namespace teardown. Test fixtures still use
 the portable process-group path; unsupported production hosts fail closed.
+Before reserving a subscription attempt, production admission also launches a
+fixed `/usr/bin/true` probe through the same unprivileged namespace options.
+It fails closed on a spawn error, nonzero exit, signal, or two-second timeout.
+The focused synthetic test covers a passing and failing probe plus a mutable
+probe executable; the actual host preflight passed. This only proves namespace
+availability at admission time, not that a subsequent Codex process will run.
 The production hash registry remains empty while real-runtime action-path,
 host-support, and wider process-crash checks remain incomplete. This local
 synthetic settlement result does not establish macOS behavior.
