@@ -442,12 +442,14 @@ for f in "${files[@]}"; do
   # on 19134) plus several CLI register subprocesses, so its wall clock is
   # process-spawn-bound, not test-bound.
   # The native Codex actions contract has 169 sequential cases and took 608s
-  # on PostgreSQL. Give only that file a measured 1200s cap and a 180s Bun
-  # per-test ceiling; the other files keep the existing 180s/60s defaults.
+  # on PostgreSQL. Two PostgreSQL repair/liveness files also exceed the normal
+  # outer cap under concurrent shard load (liveness took 176.5s alone). Give
+  # only these files room to finish; the others retain 180s/60s defaults.
   default_file_timeout=180
   test_timeout_ms=60000
   case "$f" in
     */codex-actions.test.ts) default_file_timeout=1200; test_timeout_ms=180000 ;;
+    */persistence-phase-liveness.test.ts|*/repair-extractor-facts-postgres.test.ts) default_file_timeout=720 ;;
   esac
   file_timeout="${GBRAIN_E2E_FILE_TIMEOUT:-${E2E_FILE_TIMEOUT_SECS:-$default_file_timeout}}"
   # Digits-only validation (same strict positive-int posture as the TS env

@@ -293,23 +293,25 @@ printf '%s' '${output}'
   }, 10000);
 });
 
-test('Codex actions gets its measured file and per-test caps without changing other E2E files', () => {
+test('long E2E files get their measured outer caps while overrides and per-test caps remain scoped', () => {
   const root = setup();
   try {
     const actions = 'test/e2e/codex-actions.test.ts';
-    copyFileSync(join(root, 'test/e2e/a.test.ts'), join(root, actions));
+    const liveness = 'test/e2e/persistence-phase-liveness.test.ts';
+    const extractor = 'test/e2e/repair-extractor-facts-postgres.test.ts';
+    for (const file of [actions, liveness, extractor]) copyFileSync(join(root, 'test/e2e/a.test.ts'), join(root, file));
     const bunArgs = join(root, 'bun-args.txt');
     const outerCaps = join(root, 'outer-caps.txt');
     writeFileSync(join(root, 'bin/bun'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$BUN_ARGS_LOG"\nexec "$REAL_BUN" "$@"\n', { mode: 0o755 });
     const timeoutWrapper = '#!/bin/sh\nprintf "%s\\n" "$1" >> "$OUTER_CAPS_LOG"\nshift\nexec "$@"\n';
     for (const name of ['timeout', 'gtimeout']) writeFileSync(join(root, 'bin', name), timeoutWrapper, { mode: 0o755 });
     const base = { ...process.env, GBRAIN_NO_SNAPSHOT: '1', DATABASE_URL: '', GBRAIN_DATABASE_URL: '', SHARD: '', COVERAGE_DIR: '', PATH: `${join(root, 'bin')}:${process.env.PATH}`, REAL_BUN: process.execPath, BUN_ARGS_LOG: bunArgs, OUTER_CAPS_LOG: outerCaps };
-    for (const [file, override] of [['test/e2e/a.test.ts', ''], [actions, ''], [actions, '77']]) {
+    for (const [file, override] of [['test/e2e/a.test.ts', ''], [actions, ''], [liveness, ''], [extractor, ''], [liveness, '77'], [actions, '77']]) {
       const result = spawnSync('bash', ['scripts/run-e2e.sh', file], { cwd: root, encoding: 'utf8', env: { ...base, GBRAIN_E2E_FILE_TIMEOUT: override } });
       expect(result.status, result.stdout + result.stderr).toBe(0);
     }
-    expect(readFileSync(outerCaps, 'utf8').trim().split('\n')).toEqual(['180', '1200', '77']);
-    expect(readFileSync(bunArgs, 'utf8').trim().split('\n').map(line => line.match(/--timeout=(\d+)/)?.[1])).toEqual(['60000', '180000', '180000']);
+    expect(readFileSync(outerCaps, 'utf8').trim().split('\n')).toEqual(['180', '1200', '720', '720', '77', '77']);
+    expect(readFileSync(bunArgs, 'utf8').trim().split('\n').map(line => line.match(/--timeout=(\d+)/)?.[1])).toEqual(['60000', '180000', '60000', '60000', '60000', '180000']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
