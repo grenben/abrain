@@ -14,6 +14,11 @@ const PAGES = Number(process.env.GBRAIN_TEST_EXPORT_SCALE_PAGES ?? 100001);
 if (!Number.isInteger(PAGES) || PAGES < 1001 || PAGES % 100 !== 1 || PAGES > 999999) {
   throw new Error(`GBRAIN_TEST_EXPORT_SCALE_PAGES must be a multiple of 100 plus 1, between 1001 and 999901, got ${process.env.GBRAIN_TEST_EXPORT_SCALE_PAGES}`);
 }
+// Keep CI's 15-minute default; slower local filesystems can opt into a measured ceiling.
+const EXPORT_TIMEOUT_MS = Number(process.env.GBRAIN_TEST_EXPORT_SCALE_TIMEOUT_MS ?? 900000);
+if (!Number.isInteger(EXPORT_TIMEOUT_MS) || EXPORT_TIMEOUT_MS < 900000 || EXPORT_TIMEOUT_MS > 1800000) {
+  throw new Error(`GBRAIN_TEST_EXPORT_SCALE_TIMEOUT_MS must be an integer from 900000 to 1800000, got ${process.env.GBRAIN_TEST_EXPORT_SCALE_TIMEOUT_MS}`);
+}
 const FENCED = (PAGES - 1) / 100;
 const NONEMPTY_BATCHES = Math.ceil(PAGES / 256);
 const pageFile = (n: number) => `scale/p${String(n).padStart(6, '0')}.md`;
@@ -90,5 +95,5 @@ for (const backend of testBackends()) describe(`export scale: ${backend}`, () =>
       engine.executeRaw = real; engine.getRawData = raw; engine.transaction = transaction; ExportStage.prototype.close = close;
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 900000);
+  }, EXPORT_TIMEOUT_MS);
 });
