@@ -102,9 +102,14 @@ const CAPTURED = join(EVAL_FIXTURES, 'captured-sample.ndjson');
 
 /** One row per command-table record that declares `json`; a new declaration needs a row. */
 const JSON_ROWS: Record<string, JsonRow> = {
+  'private-codex': {
+    ok: ['private-codex', 'pins', 'receipts', '--plane', 'file', '--json'],
+    fail: ['private-codex', 'pins', 'preview', '--plane', 'file', '--model', 'invalid', '--json'],
+    okOnEmpty: true,
+  },
   errors: { ok: ['errors', 'unknown_flag', '--json'], fail: ['errors', 'definitely_not_a_code', '--json'], okOnEmpty: true },
   init: { ok: ['init', '--pglite', '--no-embedding', '--json'], fail: ['init', '--mcp-only', '--json', '--mcp-url', 'http://127.0.0.1:1/mcp'], okOnEmpty: true },
-  doctor: { ok: ['doctor', '--json', '--fast'], fail: ['doctor', '--json'] },
+  doctor: { ok: ['doctor', '--json', '--fast'], fail: ['doctor', '--json', '--bogus'] },
   sync: { ok: ['sync', '--source', 'notes', '--no-pull', '--json'], fail: ['sync', '--source', 'no-such-source', '--no-pull', '--json'], failOnBrain: true },
   embed: { ok: ['embed', '--stale', '--json'], fail: ['embed', '--all', '--json'], failOnBrain: true },
   'db-repair': { ok: ['db-repair', '--json'], fail: ['db-repair', '--json'], failOnBrain: true, okE2E: 'test/e2e/cli-json-commands-postgres.test.ts' },
@@ -123,7 +128,7 @@ const JSON_ROWS: Record<string, JsonRow> = {
   // #5575: the backfill dry run is read-only; explaining a ref that names nothing is a not_found envelope.
   trust: { ok: ['trust', 'backfill', '--dry-run', '--json'], fail: ['trust', 'explain', 'f999999', '--json'], failOnBrain: true },
   // D8: the dry run resolves and prints the target without writing; an unwired harness id is a coded refusal.
-  setup: { ok: ['setup', 'claude-code', '--dry-run', '--json', '--gbrain-bin', process.execPath], fail: ['setup', 'codex', '--json'], okOnEmpty: true },
+  setup: { ok: ['setup', 'claude-code', '--dry-run', '--json', '--gbrain-bin', process.execPath], fail: ['setup', 'codex', '--json', '--bogus'], okOnEmpty: true },
 };
 
 function parsedShape(mode: 'document' | 'ndjson', stdout: string): unknown[] {

@@ -65,6 +65,9 @@ const EXTRA_FLAGS: Record<string, string[]> = {
  * evidence. Their own imports are not walked. Keep commented.
  */
 const DELEGATED_MODULES: Record<string, string[]> = {
+  // `private-codex pins|jobs` pass argv to these handlers; their flags must
+  // survive the pre-dispatch validation before the handlers can parse them.
+  'private-codex': ['src/cli/private-codex/pins.ts', 'src/cli/private-codex/jobs.ts'],
   // `auth local-writer list|register|revoke` passes its argv to
   // runPersistenceAdminCli (#5595), and `auth rescope-client|rescope-token` to
   // parseRescopeGrantArgs; both parse --dry-run themselves.
