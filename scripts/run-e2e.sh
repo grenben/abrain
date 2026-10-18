@@ -451,6 +451,11 @@ for f in "${files[@]}"; do
   case "$f" in
     */codex-actions.test.ts) default_file_timeout=1800; test_timeout_ms=180000 ;;
     */persistence-chaos.test.ts) default_file_timeout=720; test_timeout_ms=300000 ;;
+    # These files contain explicit 300-380s tests or multiple costly schema boots.
+    # The generic 180s file cap can kill them before their own test deadline.
+    */persistence-skill-bundles-postgres.test.ts) default_file_timeout=720; test_timeout_ms=420000 ;;
+    */persistence-preparation-deadline.e2e.test.ts) default_file_timeout=720; test_timeout_ms=300000 ;;
+    */schema-catalog-golden.test.ts|*/unsupported-embedding-identity-postgres.test.ts) default_file_timeout=720 ;;
     */chronicle-auto-phase-postgres.test.ts|*/persistence-git-coalescing-5530-postgres.test.ts) default_file_timeout=720 ;;
     */persistence-dead-owner-reclaim-6650.test.ts|*/persistence-phase-liveness.test.ts|*/repair-extractor-facts-postgres.test.ts) default_file_timeout=720 ;;
     */reconcile-crash-unactivated.test.ts|*/codex-think.test.ts|*/codex-take-accept.test.ts|*/persistence-large-manifest-postgres.test.ts|*/single-write-fast-path-postgres.test.ts|*/reconcile-crash.test.ts|*/persistence-idle-pool.test.ts|*/unbound-source-postgres.test.ts|*/write-attribution-postgres.test.ts|*/w5-persistence-postgres.test.ts) default_file_timeout=720 ;;
