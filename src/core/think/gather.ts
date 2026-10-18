@@ -158,6 +158,7 @@ export async function runGather(
     chunk_text: lead, chunk_source: 'compiled_truth',
     chunk_id: 0, chunk_index: 0, score: 1 / (51 + rank), stale: false,
     source_id: page.source_id ?? 'default',
+    content_hash: page.content_hash ?? null,
     effective_date: page.effective_date instanceof Date ? page.effective_date.toISOString() : null,
     effective_date_source: page.effective_date_source ?? null,
   });

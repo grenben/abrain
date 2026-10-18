@@ -13,6 +13,7 @@ import { truncateUtf8 } from '../text-safe.ts';
 import { resolveCycleDate } from './cycle-date.ts';
 import { pendingPublication, retainPublication, executePublication, type PublicationEvidence, type PublicationPage } from './codex-publication-plan.ts';
 import { PAGE_SLUG_SEG } from '../cjk.ts';
+import { boundedBodyPrefixSql, overlaidBoundedPrefix } from '../page-window/bounded-lead.ts';
 
 interface Proposal { skipped: boolean; reason: string; pages: Array<{ slug: string; title: string; type: 'note'; body: string;
   evidence: Array<{ slug: string; quote: string }> }> }
@@ -43,8 +44,15 @@ export async function runPrivatePatterns(engine: BrainEngine, opts: PatternsPhas
   const minimum = Math.max(2, config.minEvidence), evidence: PublicationEvidence[] = [];
   for (const row of rows) {
     const snapshot = await engine.readPageSnapshot(row.slug, { sourceId, excludePrivate: true });
-    if (snapshot && !isQuarantined(snapshot.page.frontmatter) && (snapshot.page.frontmatter?.visibility ?? 'world') === 'world') evidence.push({ slug: row.slug,
-      id: snapshot.page.id, revision: snapshot.revision, excerpt: truncateUtf8(snapshot.page.compiled_truth ?? '', 600) });
+    if (snapshot && !isQuarantined(snapshot.page.frontmatter) && (snapshot.page.frontmatter?.visibility ?? 'world') === 'world') {
+      const [lead] = await engine.executeRaw<{ body_prefix: string | null }>(
+        `SELECT ${boundedBodyPrefixSql('p')} AS body_prefix FROM pages p
+          WHERE p.source_id=$1 AND p.slug=$2 AND p.deleted_at IS NULL AND p.knowledge_revision=$3::uuid`,
+        [sourceId, row.slug, snapshot.revision]);
+      if (!lead) continue;
+      const excerpt = await overlaidBoundedPrefix(engine, { slug: row.slug, source_id: sourceId, compiled_truth: lead.body_prefix });
+      evidence.push({ slug: row.slug, id: snapshot.page.id, revision: snapshot.revision, excerpt: truncateUtf8(excerpt, 600) });
+    }
   }
   if (evidence.length < minimum) return result('skipped', 'patterns: insufficient distinct public evidence', { reason: 'insufficient_evidence' });
   const watermark = new Date(rows[0]!.updated_at).toISOString();

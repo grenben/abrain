@@ -1,6 +1,6 @@
 import { SHARED_SKILLS_PERSISTENCE_SCHEMA_STATEMENTS } from './persistence-schema.ts';
 const guard = SHARED_SKILLS_PERSISTENCE_SCHEMA_STATEMENTS.find(s => s.startsWith('CREATE OR REPLACE FUNCTION gbrain_guard_request_protocol()'))!;
-/** Retained native optimizer staging and canonical publication; migration 259. */
+/** Retained native optimizer staging and canonical publication; migration 279. */
 export const CODEX_SHARED_OPTIMIZER_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_shared_skill_optimizations (
   run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),

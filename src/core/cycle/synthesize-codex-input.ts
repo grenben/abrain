@@ -32,7 +32,8 @@ export async function snapshotSynthesisInput(engine: BrainEngine, sourceId: stri
     if (!transcript.filePath.startsWith(prefix)) throw new Error('codex_synthesis_source_changed');
     const slug = transcript.filePath.slice(prefix.length), snapshot = await engine.readPageSnapshot(slug, { sourceId, excludePrivate: true });
     if (!snapshot || isQuarantined(snapshot.page.frontmatter) || (snapshot.page.frontmatter?.visibility ?? 'world') !== 'world') return null;
-    if (sha256(snapshot.page.compiled_truth) !== transcript.contentHash) throw new Error('codex_synthesis_input_changed');
+    if (!transcript.pageRevision || snapshot.revision !== transcript.pageRevision || sha256(transcript.content) !== transcript.contentHash)
+      throw new Error('codex_synthesis_input_changed');
     return { transcript, evidence: [{ slug, id: snapshot.page.id, revision: snapshot.revision, excerpt: '' }], files: [] };
   }
   const file = snapshotPublicationFile(transcript.filePath), parsed = parseMarkdown(file.content, 'transcript');

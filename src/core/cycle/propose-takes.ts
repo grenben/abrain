@@ -291,6 +291,7 @@ interface ProposeTakesPageRow {
   slug: string;
   source_id: string;
   compiled_truth: string | null;
+  revision: string;
 }
 
 /**
@@ -334,7 +335,7 @@ async function listCandidatePages(
   }
   params.push(limit);
   return engine.executeRaw<ProposeTakesPageRow>(
-    `SELECT slug, source_id, compiled_truth
+    `SELECT slug, source_id, compiled_truth, knowledge_revision::text AS revision
        FROM pages
       WHERE ${where.join(' AND ')}
       ORDER BY updated_at DESC, id DESC
@@ -982,7 +983,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
       // Idempotency check. If a row exists for (source_id, page_slug, content_hash,
       // prompt_version), this page was already processed — skip and count as cache hit.
       const sourceId = page.source_id ?? scope.sourceId ?? 'default';
-      const binding = privateMode ? await bindTakeProposalPage(engine, sourceId, page.slug, body, _ctx) : undefined;
+      const binding = privateMode ? await bindTakeProposalPage(engine, sourceId, page.slug, page.revision, _ctx) : undefined;
       if (binding) privateReporting.observe(binding);
       const cached = await engine.executeRaw<{ id: number }>(
         `SELECT id FROM take_proposals

@@ -1,4 +1,4 @@
-/** Durable optimizer progress and accepted publication plans; migration 242. */
+/** Durable optimizer progress and accepted publication plans; migration 277. */
 export const CODEX_SKILLOPT_RUN_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_skillopt_runs (
   run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),

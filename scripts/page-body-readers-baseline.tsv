@@ -46,7 +46,7 @@ src/commands/extract.ts	runExtractCore	field	STREAM
 src/commands/integrity.ts	integrityHitsOf	field	INLINE	segmented pages read their truth region block by block (bodyLines); the string branch runs only for inline pages
 src/commands/integrity.ts	scanIntegrityBatch	field	STREAM	inline rows only: a segmented row's NULL body goes to integrityHitsOf, which reads its segments
 src/commands/integrity.ts	scanIntegrityBatch	sql	STREAM	inline rows only: a segmented row's NULL body goes to integrityHitsOf, which reads its segments
-src/commands/jobs.ts	JOBS_HELP	sql	NONE	not the page body: help text
+src/commands/jobs/help.ts	JOBS_HELP	sql	NONE	help text names timeline; it does not query pages
 src/commands/lint.ts	lintContent	field	STREAM	
 src/commands/migrate-engine.ts	copyPageToTarget	call:putPage	SEGW	
 src/commands/migrate-engine.ts	copyPageToTarget	field	STREAM	
@@ -77,6 +77,7 @@ src/core/belief/purge.ts	pagePurgeClaims	sql	STREAM	segmented version: NULL body
 src/core/belief/purge.ts	registerVersionCarriers	field	STREAM	segmented version: NULL body registers no carriers; the backfill skips the same version (segmented_version_body), so nothing it appends can copy one
 src/core/belief/purge.ts	registerVersionCarriers	sql	STREAM	segmented version: NULL body registers no carriers; the backfill skips the same version (segmented_version_body), so nothing it appends can copy one
 src/core/belief/state.ts	readBeliefState	sql	META	size only (the over-1 MiB creation rule); a segmented page counts as large by body_storage
+src/core/brainstorm/codex-publication.ts	prepareBrainstormPublication	call:serializeMarkdown	NONE	serializes a newly proposed page from bounded model output
 src/core/brainstorm/domain-bank.ts	fetchFar	field	LEAD	
 src/core/brainstorm/orchestrator.ts	_runBrainstormInner	field	LEAD	
 src/core/by-mention.ts	scanStaleMentions	sql	STREAM	
@@ -130,6 +131,7 @@ src/core/cycle/extract-takes.ts	readPageTakes	field	INLINE	inline arm; a segment
 src/core/cycle/grade-takes.ts	GradeTakesPhase.process	field	STREAM	
 src/core/cycle/link-manifest.ts	buildLinkManifest	field	STREAM	
 src/core/cycle/pattern-claim-sources.ts	dedupePatternClaimSources	call:serializePageToMarkdown	SEGW	
+src/core/cycle/patterns-codex.ts	runPrivatePatterns	call:serializeMarkdown	NONE	serializes a newly proposed pattern page, not a stored body
 src/core/cycle/patterns.ts	gatherReflections	field	LEAD	bounded prefix row
 src/core/cycle/patterns.ts	gatherReflections	sql	LEAD	boundedBodyPrefixSql, truncated to a 600-byte excerpt
 src/core/cycle/patterns.ts	groundPatternPages	call:serializePageToMarkdown	SEGW	
@@ -152,6 +154,8 @@ src/core/cycle/phantom-redirect.ts	tryRedirectPhantom	field	SEGW	canonical targe
 src/core/cycle/propose-takes.ts	listCandidatePages	sql	STREAM	
 src/core/cycle/propose-takes.ts	ProposeTakesPhase.process	call:contentHash	META	
 src/core/cycle/propose-takes.ts	ProposeTakesPhase.process	field	STREAM	
+src/core/cycle/synthesize-codex-proposal.ts	proposeSynthesis	call:serializeMarkdown	NONE	serializes a newly proposed synthesis page
+src/core/cycle/synthesize-codex.ts	addSynthesisSummary	call:serializeMarkdown	NONE	serializes a newly generated summary page
 src/core/cycle/synthesize-concepts.ts	runPhaseSynthesizeConcepts	field	INLINE	
 src/core/cycle/synthesize-concepts.ts	runPhaseSynthesizeConcepts	sql	INLINE	
 src/core/cycle/synthesize-postprocess.ts	postprocessManagedSynthesis	call:serializePageToMarkdown	INLINE	
@@ -326,6 +330,7 @@ src/core/page-body/ingest.ts	materializeSegmentedBody	field	STREAM	the segment r
 src/core/page-body/ingest.ts	stageBody	field	NONE	not a stored body: the write's region byte streams and the per-region leads it computes
 src/core/page-body/page-shape.ts	fenceBody	field	INLINE	reads a body that is a string (inline or materialized); an unread segmented body holds no fences and reads as empty
 src/core/page-body/page-shape.ts	pageBodyBytes	field	INLINE	inline branch of pageBodyBytes; a segmented page answers body_bytes
+src/core/page-body/page-shape.ts	inlineTruthBody	field	INLINE	quote revalidation reads the snapshot overlay only after assertInlineBody; private proposal discovery selects inline pages
 src/core/page-body/schema.ts	PAGE_GENERATION_BUMP_FN_SQL	sql	STREAM	trigger DDL: compares the body columns of inline rows; segmented rows compare body_generation (lane 1a)
 src/core/page-body/segment-facts.ts	fileRegionDigests	field	NONE	scan.truth / scan.timeline are BodyScanner regions of the canonical file, streamed from the file; not a page body
 src/core/page-body/segment-ledger.ts	overlaySegmentText	field	NONE	not the page body: compiled_truth of overlayCanonicalBodies over one segment's text (at most one segment, never the whole body)
@@ -531,6 +536,9 @@ src/core/think/gather.ts	renderPagesBlockDetailed	field	LEAD	segmented page: get
 src/core/think/gather.ts	runGather	field	LEAD	visibleLeads reads Page.compiled_truth from listPages/search: segmented page: getter throws page_body_segmented (lead source in PR 2)
 src/core/think/index.ts	composeExtractiveFallback	field	LEAD	
 src/core/think/index.ts	persistSynthesis	call:putPage	SEGW	
+src/core/think/managed-save.ts	saveManagedThink	call:serializeMarkdown	NONE	serializes generated think text for a new page
+src/core/think/managed-save.ts	saveManagedThink	field	NONE	input fields are generated think text, not a stored Page
+src/core/think/publication.ts	retainPrivateThink	call:serializeMarkdown	NONE	serializes a newly generated answer page
 src/core/timeline-dedup-repair.ts	repairLegacyTimelineSourceRows	field	STREAM	
 src/core/timeline-dedup-repair.ts	repairLegacyTimelineSourceRows	sql	STREAM	
 src/core/timeline-extract.ts	pruneTimelineOrphans	sql	STREAM	

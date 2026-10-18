@@ -30,6 +30,8 @@ export interface DiscoveredTranscript {
   contentHash: string;
   /** Raw transcript text. */
   content: string;
+  /** Canonical page revision captured with a conversation page's text. */
+  pageRevision?: string;
   /** Filename basename without extension; used as a topic-slug seed. */
   basename: string;
   /** Inferred date if the basename matches `YYYY-MM-DD...` (or null). */
@@ -483,6 +485,7 @@ interface ConversationRow {
   slug: string;
   compiled_truth: string;
   frontmatter: Record<string, unknown> | string | null;
+  page_revision: string;
 }
 
 function frontmatterOf(row: ConversationRow): Record<string, unknown> {
@@ -513,7 +516,7 @@ export async function discoverConversationPages(
 ): Promise<DiscoveredTranscript[]> {
   const minChars = opts.minChars ?? 2000;
   const rows = await engine.executeRaw<ConversationRow>(
-    `SELECT slug, compiled_truth, frontmatter FROM pages
+    `SELECT slug, compiled_truth, frontmatter, knowledge_revision::text AS page_revision FROM pages
       WHERE source_id = $1 AND type = 'conversation' AND deleted_at IS NULL
         AND length(compiled_truth) >= $2::int
       ORDER BY slug`,
@@ -540,6 +543,7 @@ export async function discoverConversationPages(
       filePath: `${CONVERSATION_PAGE_URI_PREFIX}${opts.sourceId}/${row.slug}`,
       contentHash: hashContent(row.compiled_truth),
       content: row.compiled_truth,
+      pageRevision: row.page_revision,
       basename: row.slug.split('/').pop() ?? row.slug,
       inferredDate: date,
     });

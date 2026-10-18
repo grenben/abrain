@@ -6,6 +6,7 @@ import { OperationError } from './ops/contract.ts';
 import type { ProposalActionTarget, ProposalEdits, TakeProposalRow } from './take-proposals.ts';
 import type { WriteRequest } from './persistence/model.ts';
 import { digest, sha256 } from './persistence/digest.ts';
+import { inlineTruthBody } from './page-body/page-shape.ts';
 import { assertReplayIntent, intentDigest } from './persistence/journal.ts';
 import { submissionAuthority } from './persistence/authority.ts';
 import { initializeLocalPersistence } from './persistence/page-mutations.ts';
@@ -64,9 +65,13 @@ export async function validateCodexTakeInput(engine: BrainEngine, proposal: Take
     !snapshot || snapshot.page.deleted_at || snapshot.sourceIncarnation !== source.incarnation) {
     throw new OperationError('source_changed', 'The proposal source is no longer the accepted source.', 'Review the current source before extracting a new proposal.');
   }
+  // Acceptance must recheck the retained quote against the snapshot overlay.
+  // Proposal discovery supplies only inline bodies; a segmented replacement
+  // refuses explicitly before a whole-body read.
+  const body = inlineTruthBody(snapshot.page, 'private take acceptance');
   const evidence = proposal.codex_evidence as Record<string, unknown>;
-  if (snapshot.revision !== plan.params.expected_revision || sha256(snapshot.page.compiled_truth ?? '') !== proposal.content_hash ||
-    !(snapshot.page.compiled_truth ?? '').includes(evidence.source_quote as string)) {
+  if (snapshot.revision !== plan.params.expected_revision || sha256(body) !== proposal.content_hash ||
+    !body.includes(evidence.source_quote as string)) {
     throw new OperationError('revision_conflict', 'The proposal input changed before acceptance.', 'Review the current page and generate a fresh proposal; the old evidence was not silently reinterpreted.');
   }
 }

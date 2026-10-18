@@ -7,6 +7,7 @@ import { codexSubscriptionContext } from './ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from './ai/subscription-admission.ts';
 import { CodexProposalError } from './ai/providers/codex-contract.ts';
 import { hasAIInvocationGuard, withAIInvocationPreflight } from './ai/invocation-guard.ts';
+import { pageBodyBytes } from './page-body/page-shape.ts';
 
 /** Resolve every explicit pin, including a shadowed legacy argument, before work. */
 export async function privateContextualModel(args: ReembedPageArgs, fallback: string): Promise<string> {
@@ -60,7 +61,7 @@ export function contextualPublicationTransaction<T>(engine: BrainEngine, run: (t
 }
 
 /** Empty inventory is not proof that a nonempty page was successfully indexed. */
-export function assertPrivateEmptyProjection(page: { compiled_truth: string; timeline: string }): void {
-  if (readPrivateCodexConfig() && (page.compiled_truth.trim() || page.timeline.trim()))
+export function assertPrivateEmptyProjection(page: { compiled_truth: string; timeline: string; body_storage?: 'inline' | 'segmented' | null; body_bytes?: number | null }): void {
+  if (readPrivateCodexConfig() && pageBodyBytes(page) > 0)
     throw new Error('private_contextual_projection_incomplete');
 }

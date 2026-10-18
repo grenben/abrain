@@ -1,4 +1,4 @@
-/** Retained host batch manifest and canonical optimizer memberships; migration 267. */
+/** Retained host batch manifest and canonical optimizer memberships; migration 282. */
 export const CODEX_SKILLOPT_BATCH_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_skillopt_batches (
   run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),

@@ -1,4 +1,4 @@
-/** Separate durable fixture identity from its single shared native allowance (v259). */
+/** Separate durable fixture identity from its single shared native allowance (v274). */
 export const CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL = `
 ALTER TABLE codex_brainstorm_runs ADD COLUMN IF NOT EXISTS subscription_run_id TEXT;
 UPDATE codex_brainstorm_runs SET subscription_run_id=run_id WHERE subscription_run_id IS NULL;
@@ -12,7 +12,8 @@ DO $codex_fixture_fk$ BEGIN
   END IF;
 END $codex_fixture_fk$;
 DO $codex_fixture_check$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='codex_brainstorm_runs'::regclass AND conname='codex_brainstorm_runs_protocol_check') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='codex_brainstorm_runs'::regclass AND conname='codex_brainstorm_runs_protocol_check'
+    AND pg_get_constraintdef(oid) LIKE '%protocol = 2%') THEN
     ALTER TABLE codex_brainstorm_runs DROP CONSTRAINT IF EXISTS codex_brainstorm_runs_protocol_check;
     ALTER TABLE codex_brainstorm_runs ADD CONSTRAINT codex_brainstorm_runs_protocol_check
       CHECK ((protocol=1 AND run_id=subscription_run_id) OR protocol=2);

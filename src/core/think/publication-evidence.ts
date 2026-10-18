@@ -4,6 +4,8 @@ import type { OperationContext } from '../ops/contract.ts';
 import { OperationError } from '../ops/contract.ts';
 import { submissionAuthority, authorizeWrite } from '../persistence/authority.ts';
 import { digest } from '../persistence/digest.ts';
+import { boundedBodyPrefixSql, overlaidBoundedPrefix } from '../page-window/bounded-lead.ts';
+import { chunkVisibleFilter } from '../search/safe-chunks.ts';
 import type { ThinkGatherResult } from './gather.ts';
 import type { RunThinkOpts } from './index.ts';
 import type { ThinkEvidence } from './publication-model.ts';
@@ -34,8 +36,23 @@ export async function captureThinkEvidence(ctx: OperationContext, opts: RunThink
         for (const page of gather.pages.filter(p => p.page_id === Number(row.id))) {
             if (page.content_hash && page.content_hash !== snapshot!.page.content_hash)
                 changed();
-            if (!page.content_hash && page.chunk_text && !snapshot!.page.compiled_truth.includes(page.chunk_text))
-                changed();
+            if (!page.content_hash && page.chunk_text) {
+                if (page.chunk_id > 0) {
+                    const [liveChunk] = await ctx.engine.executeRaw<{ chunk_text: string }>(
+                        `SELECT c.chunk_text FROM content_chunks c JOIN pages p ON p.id=c.page_id
+                         WHERE c.id=$1 AND p.id=$2 AND p.source_id=$3 AND ${chunkVisibleFilter('p', 'c')}`,
+                        [page.chunk_id, row.id, row.source_id]);
+                    if (!liveChunk || liveChunk.chunk_text !== page.chunk_text) changed();
+                } else {
+                    const [lead] = await ctx.engine.executeRaw<{ body_prefix: string | null }>(
+                        `SELECT ${boundedBodyPrefixSql('p')} AS body_prefix FROM pages p
+                         WHERE p.id=$1 AND p.source_id=$2 AND p.knowledge_revision=$3::uuid`,
+                        [row.id, row.source_id, snapshot!.revision]);
+                    if (!lead) changed();
+                    const prefix = await overlaidBoundedPrefix(ctx.engine, { slug: row.slug, source_id: row.source_id, compiled_truth: lead.body_prefix });
+                    if (!prefix.includes(page.chunk_text)) changed();
+                }
+            }
         }
         const authority = await submissionAuthority({ ...ctx, sourceId: row.source_id }, 'think', row.source_id, row.incarnation, row.slug);
         const takes: ThinkEvidence['takes'] = [];

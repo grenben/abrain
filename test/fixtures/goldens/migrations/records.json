@@ -4242,8 +4242,8 @@
         "idempotent": true,
         "name": "codex_brainstorm_fixtures",
         "sql": {
-          "length": 1472,
-          "sha256": "5ec390401473b20c256b4ed6b326a83840e45f416fbc0cf8f5cbbe25757db23e"
+          "length": 1528,
+          "sha256": "7ee61472ba70224f25d0888a91fe92b503be0e1ef05d589726e9873aa76db91e"
         },
         "sqlFor": "absent",
         "transaction": "absent",

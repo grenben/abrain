@@ -8,8 +8,8 @@ import { OperationError, type OperationContext } from '../ops/contract.ts';
 import { submissionAuthority, authorizeWrite } from '../persistence/authority.ts';
 import type { WriteAuthority } from '../persistence/model.ts';
 
-export interface TakeProposalBinding { sourceId: string; incarnation: string; slug: string; revision: string; body: string; writer: WriteAuthority }
-export async function bindTakeProposalPage(engine: BrainEngine, sourceId: string, slug: string, body: string, ctx: OperationContext): Promise<TakeProposalBinding> {
+export interface TakeProposalBinding { sourceId: string; incarnation: string; slug: string; revision: string; writer: WriteAuthority }
+export async function bindTakeProposalPage(engine: BrainEngine, sourceId: string, slug: string, expectedRevision: string, ctx: OperationContext): Promise<TakeProposalBinding> {
   const authority = currentSubmissionAuthority();
   if (authority && authority.kind !== 'application' || currentVerifiedLocalWriter()?.remote) throw new OperationError('permission_denied', 'Private take proposals require local authority.', 'Use a trusted local cycle.');
   const [source] = await engine.executeRaw<{ incarnation: string }>('SELECT incarnation FROM sources WHERE id=$1 AND NOT archived', [sourceId]);
@@ -17,8 +17,8 @@ export async function bindTakeProposalPage(engine: BrainEngine, sourceId: string
   if (!currentVerifiedLocalWriter() && !ctx.auth?.principal) await registerLocalWriter(engine, 'cli');
   const writer = await submissionAuthority(ctx, 'submit_job', sourceId, source.incarnation, slug);
   const snapshot = await engine.readPageSnapshot(slug, { sourceId });
-  if (!source || !snapshot || snapshot.sourceIncarnation !== source.incarnation || snapshot.page.deleted_at || snapshot.page.compiled_truth !== body) throw new OperationError('source_changed', 'The proposal source changed.', 'Retry from a fresh source snapshot.');
-  return { sourceId, incarnation: source.incarnation, slug, revision: snapshot.revision, body, writer };
+  if (!source || !snapshot || snapshot.sourceIncarnation !== source.incarnation || snapshot.page.deleted_at || snapshot.revision !== expectedRevision) throw new OperationError('source_changed', 'The proposal source changed.', 'Retry from a fresh source snapshot.');
+  return { sourceId, incarnation: source.incarnation, slug, revision: snapshot.revision, writer };
 }
 interface ProposalBatch {
   sourceId: string; slug: string; hash: string; version: string; runId: string; model: string;
@@ -34,8 +34,8 @@ export async function persistTakeProposalBatch(engine: BrainEngine, batch: Propo
       const binding = batch.binding;
       const [source] = await tx.executeRaw<{ incarnation: string }>('SELECT incarnation FROM sources WHERE id=$1 AND NOT archived FOR SHARE', [binding.sourceId]);
       await authorizeWrite(tx, binding.writer, 'submit_job', binding.slug, true);
-      const [page] = await tx.executeRaw<{ revision: string; compiled_truth: string }>('SELECT knowledge_revision::text AS revision,compiled_truth FROM pages WHERE source_id=$1 AND slug=$2 AND deleted_at IS NULL FOR SHARE', [binding.sourceId, binding.slug]);
-      if (!source || source.incarnation !== binding.incarnation || !page || page.revision !== binding.revision || page.compiled_truth !== binding.body) throw new OperationError('revision_conflict', 'The proposal input changed before persistence.', 'Retry using the current page.');
+      const [page] = await tx.executeRaw<{ revision: string }>('SELECT knowledge_revision::text AS revision FROM pages WHERE source_id=$1 AND slug=$2 AND deleted_at IS NULL FOR SHARE', [binding.sourceId, binding.slug]);
+      if (!source || source.incarnation !== binding.incarnation || !page || page.revision !== binding.revision) throw new OperationError('revision_conflict', 'The proposal input changed before persistence.', 'Retry using the current page.');
     }
     let inserted = 0;
     const empty = batch.proposals.length === 0;

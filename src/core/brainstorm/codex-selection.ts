@@ -11,6 +11,7 @@ import { embedQuery, isAvailable } from '../ai/gateway.ts';
 import { fetchFar, enumeratePrefixes } from './domain-bank.ts';
 import type { BrainstormProfile } from './orchestrator.ts';
 import { ensureWellFormed } from '../text-safe.ts';
+import { boundedBodyPrefixSql, overlaidBoundedPrefix } from '../page-window/bounded-lead.ts';
 export interface BrainstormPage {
     sourceId: string;
     incarnation: string;
@@ -80,10 +81,16 @@ export async function selectBrainstormPages(ctx: OperationContext, input: {
         const page = await engine.readPageSnapshot(slug, { sourceId: sid });
         if (!source || !page || page.page.id !== id || isQuarantined(page.page.frontmatter))
             changed();
+        const [lead] = await engine.executeRaw<{ body_prefix: string | null }>(
+            `SELECT ${boundedBodyPrefixSql('p')} AS body_prefix FROM pages p
+             WHERE p.id=$1 AND p.source_id=$2 AND p.knowledge_revision=$3::uuid AND p.deleted_at IS NULL`,
+            [id, sid, page!.revision]);
+        if (!lead) changed();
+        const prefix = await overlaidBoundedPrefix(engine, { slug, source_id: sid!, compiled_truth: lead.body_prefix });
         const authority = await submissionAuthority({ ...ctx, sourceId: sid! }, 'get_page', sid!, source!.incarnation, slug);
         return { sourceId: sid!, incarnation: source!.incarnation, slug, id, revision: page!.revision, authority,
             private: effectiveVisibility({ kind: 'page', page: page!.page }) !== 'world', title: page!.page.title,
-            content: ensureWellFormed(page!.page.compiled_truth).slice(0, 4000) };
+            content: ensureWellFormed(prefix).slice(0, 4000) };
     };
     const close: BrainstormPage[] = [], distant: BrainstormSelection['far'] = [];
     for (const row of closeRows)

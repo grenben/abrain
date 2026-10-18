@@ -1,4 +1,4 @@
-/** Submission identity for background standalone benchmark generation; migration 270. */
+/** Submission identity for background standalone benchmark generation; migration 285. */
 export const CODEX_BOOTSTRAP_JOB_SCHEMA_SQL = `
 ALTER TABLE codex_skillopt_bootstraps ADD COLUMN IF NOT EXISTS request_id UUID;
 ALTER TABLE codex_skillopt_bootstraps ADD COLUMN IF NOT EXISTS job_id BIGINT REFERENCES minion_jobs(id) ON DELETE RESTRICT;

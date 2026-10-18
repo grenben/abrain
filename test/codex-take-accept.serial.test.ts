@@ -29,7 +29,7 @@ async function fixture(backend: string, run: (f: Fixture) => Promise<void>) {
       await put(ctx, slug, quote);
       const snapshot = (await engine.readPageSnapshot(slug, { sourceId: 'default' }))!;
       const body = snapshot.page.compiled_truth!;
-      const binding = await bindTakeProposalPage(engine, 'default', slug, body, ctx);
+      const binding = await bindTakeProposalPage(engine, 'default', slug, snapshot.revision, ctx);
       const runId = randomUUID();
       await createSubscriptionRun(engine, { runId, accountLane: runId, maxAttempts: 1, maxTurns: 1, deadline: new Date(Date.now() + 60000) });
       await withCodexSubscription({ engine, runId }, () => persistTakeProposalBatch(engine, {

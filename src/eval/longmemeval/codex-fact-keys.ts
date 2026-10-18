@@ -14,6 +14,7 @@ import { assignFactKeys, factKeyedEmbeddingInput } from '../../core/fact-keys.ts
 import { embedBatch } from '../../core/embedding.ts';
 import { digest, sha256 } from '../../core/persistence/digest.ts';
 import { isGatewayThinkClient } from './gateway-client.ts';
+import { pageBodyBytes } from '../../core/page-body/page-shape.ts';
 
 /** All proposals and vectors are prepared before one fenced scratch publication. */
 export async function applyPrivateFactKeys(engine: BrainEngine, pages: ReadonlyArray<{ slug: string }>, arm: FactKeyArm, spend: FactKeySpend): Promise<FactKeyArmResult> {
@@ -31,8 +32,8 @@ export async function applyPrivateFactKeys(engine: BrainEngine, pages: ReadonlyA
   for (const page of pages) {
     const projection = await readProjectionSnapshot(engine, page.slug, 'default', { requireLiveSource: true });
     if (!projection || projection.snapshot.page.deleted_at || projection.pageKind !== 'markdown') throw new Error('private_fact_keys_projection_incomplete');
-    const body = [projection.snapshot.page.compiled_truth, projection.snapshot.page.timeline].filter(Boolean).join('\n\n');
-    if (body.trim() && !projection.chunks.length) throw new Error('private_fact_keys_projection_incomplete');
+    const body = projection.chunks.map(chunk => chunk.chunk_text).join('\n\n');
+    if (pageBodyBytes(projection.snapshot.page) > 0 && !projection.chunks.length) throw new Error('private_fact_keys_projection_incomplete');
     totalChunks += projection.chunks.length;
     if (totalChunks > 256 || Buffer.byteLength(body) > 160000) throw new CodexProposalError('invalid_input');
     prepared.push({ projection, body, items: [] as string[], inputs: new Map<number, string>(), chunks: [] as ChunkInput[] });
@@ -63,7 +64,7 @@ export async function applyPrivateFactKeys(engine: BrainEngine, pages: ReadonlyA
           const { projection } = plan, sourceId = projection.snapshot.page.source_id;
           const [source] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [sourceId]);
           if (!source || source.archived || source.incarnation !== projection.snapshot.sourceIncarnation ||
-              !await installPageEmbeddings(tx, projection, plan.chunks)) throw new Error('private_fact_keys_projection_conflict');
+              !(await installPageEmbeddings(tx, projection, plan.chunks)).complete) throw new Error('private_fact_keys_projection_conflict');
           // Exact fact-key input proof replaces the generic tier proof in the SAME
           // transaction. Ordinary projection rebuilds cannot preserve this vector
           // by mistaking it for an embedding of plain text or a title wrapper.

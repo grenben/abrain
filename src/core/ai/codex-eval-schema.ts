@@ -1,4 +1,4 @@
-/** Host-owned benchmark identities and accepted result receipts, migration v237. */
+/** Host-owned benchmark identities and accepted result receipts, migration v272. */
 export const CODEX_EVAL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS codex_eval_runs (
   run_id TEXT PRIMARY KEY REFERENCES codex_subscription_runs(run_id),

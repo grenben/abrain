@@ -84,6 +84,12 @@ export function assertInlineBody(page: BodyShape & { slug?: string; source_id?: 
   if (isSegmentedPage(page)) throw pageBodySegmentedError(page, site);
 }
 
+/** Whole truth text for a caller whose contract explicitly excludes segmented pages. */
+export function inlineTruthBody(page: BodyShape & { slug?: string; source_id?: string; compiled_truth: string }, site: string): string {
+  assertInlineBody(page, site);
+  return page.compiled_truth;
+}
+
 /**
  * UTF-8 bytes of the page body: `body_bytes` for a segmented page (its body is
  * never loaded), else the bytes of `compiled_truth` + `timeline`.
