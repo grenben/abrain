@@ -62,7 +62,7 @@ describe('Codex proposal production transport with fake executable', () => {
       apply_patch_tool_type: null, experimental_supported_tools: [], supports_search_tool: false });
     expect(seen.args.some((arg: string) => arg.startsWith('model_catalog_json='))).toBe(true);
     expect(seen.args).toContain('project_root_markers=[".gbrain-codex-root"]');
-    for (const flag of ['--output-schema', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--strict-config', 'read-only', 'forced_login_method="chatgpt"', 'web_search="disabled"', 'features.shell_tool=false', 'features.hooks=true', 'suppress_unstable_features_warning=true']) expect(seen.args).toContain(flag);
+    for (const flag of ['--output-schema', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--strict-config', 'read-only', 'forced_login_method="chatgpt"', 'web_search="disabled"', 'features.shell_tool=false', 'features.goals=false', 'tools.experimental_request_user_input.enabled=false', 'features.hooks=true', 'suppress_unstable_features_warning=true']) expect(seen.args).toContain(flag);
     expect(seen.args).not.toContain('features.codex_hooks=true');
     expect(seen.args).not.toContain('features.memory_tool=false');
     expect(seen.args.at(-1)).toBe('-'); expect(seen.args).not.toContain('synthetic only');

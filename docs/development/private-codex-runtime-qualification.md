@@ -113,6 +113,19 @@ probe did not contact a model or use brain data. It establishes this specific
 tool-plan and goal-refusal behavior, not complete pre-execution isolation;
 configuration inheritance and other action paths still need adversarial checks.
 
+The exact local 0.162.0 binary was then probed against a credential-free,
+401-only loopback provider with the current proposal argv plus
+`features.goals=false` and `tools.experimental_request_user_input.enabled=false`.
+Six captured requests advertised **zero tools**. Those two settings are now
+part of the proposal argv, and the fake transport checks their presence.
+A second six-request probe used a synthetic `/etc/codex/managed_config.toml`
+visible only in a disposable mount namespace. It re-enabled `request_user_input`,
+`get_goal`, `create_goal`, and `update_goal` despite the session settings.
+The host's actual `/etc/codex` configuration files are absent, but this
+demonstrates that the same binary hash on another host is insufficient for
+qualification. Managed-configuration absence or isolation must be a checked
+host condition before the production registry can admit the runtime.
+
 ## Disposable live transport probe — 2026-10-18
 
 The signed-in local 0.162.0 binary was invoked from a private scratch directory

@@ -15,7 +15,8 @@ export function codexProposalArgv(input: {
     'features.multi_agent=false', 'features.multi_agent_v2=false',
     'features.apps=false', 'features.plugins=false', 'features.remote_plugin=false',
     'features.view_image=false', 'features.image_generation=false',
-    'features.code_mode=false', 'features.memories=false',
+    'features.code_mode=false', 'features.memories=false', 'features.goals=false',
+    'tools.experimental_request_user_input.enabled=false',
     'features.skip_host_skill_discovery=true', 'features.hooks=true',
     `hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command=${JSON.stringify(input.denyHook)}}]}]`,
   ];
