@@ -78,9 +78,11 @@ or symlink replacement of the configured pathname between verification and
 spawn cannot select different bytes. The fake-executable transport test replaces
 the pathname after opening and verifies that the original script runs. The
 original inode could still be edited in place by an actor with write access to
-it; runtime qualification and host file permissions must account for that
-separately. This descriptor pin closes the pathname race; it does **not**
-qualify the real Codex runtime or change the empty production allowlist.
+it. Production-hash admission now requires that the opened inode be root-owned
+and neither group- nor other-writable, checked on the same descriptor after
+hashing. The local 0.162.0 ELF is owned by `devadmin`, so it fails this
+condition despite matching the official release digest. Installing a protected
+runtime is a separate host operation; no production hash is allowlisted.
 
 ## Per-call conservative model catalog
 
@@ -169,11 +171,15 @@ synthetic settlement result does not establish macOS behavior.
 
 `scripts/codex-runtime-boundary-probe.ts` runs the exact configured ELF by its
 open file descriptor inside the production Linux PID-namespace wrapper. It
-checks the host admission boundary and executable hash, obtains the offline
-version, and uses disposable loopback mock providers to inspect the tool plan
-and force unadvertised `exec_command` and `apply_patch` calls. It uses an empty
-temporary HOME/CODEX_HOME, synthetic schema and prompt, and no brain data or
-subscription credential. Run it with Bun 1.4.3 on each candidate host:
+checks the host boundary, executable hash and inode protection, obtains the
+offline version, and uses disposable loopback mock providers to inspect the
+tool plan and force unadvertised `exec_command` and `apply_patch` calls. It
+places hostile config and `AGENTS.md` text in an ancestor directory, then
+checks whether that instruction marker reached a provider request. A forced
+tool call tries to leave a scratch-file marker, which the probe checks before
+cleaning up. It uses an empty temporary HOME/CODEX_HOME, synthetic schema and
+prompt, and no brain data or subscription credential. Run it with Bun 1.4.3
+on each candidate host:
 
 ```sh
 bun scripts/codex-runtime-boundary-probe.ts /absolute/path/to/codex gpt-6.1-sol
@@ -182,12 +188,14 @@ bun scripts/codex-runtime-boundary-probe.ts /absolute/path/to/codex gpt-6.1-sol
 On the 2026-10-18 Linux development host, the exact 0.162.0 ELF above passed
 the host check. Its six refusal requests advertised zero tools. When the mock
 provider forced each native call, Codex returned `unsupported call` as a
-function output; neither command nor patch executed. The script emits a JSON
-record with the digest, version, request counts, tool counts, forced-call
-outputs, and booleans for these checks. This is a reproducible bounded probe,
-not an all-path qualification: it cannot establish that every configuration,
-instruction, hosted action, image path, or descendant-crash case is safe. The
-production hash registry remains empty.
+function output; neither scratch-file marker was created. The hostile ancestor
+instruction marker did not reach any provider request. The installed ELF fails
+`runtimeFileProtected` because it is owned by `devadmin`, so the complete probe
+exits 1. The JSON record preserves the digest, version, request/tool counts,
+forced-call outputs, and each result. Even a future green run is only a bounded
+probe: it cannot establish that every configuration, instruction, hosted action,
+image path, or descendant-crash case is safe. The production hash registry
+remains empty.
 
 ## Disposable live transport probe — 2026-10-18
 

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { __assertCodexHostBoundaryForTests, __registerCodexFixtureForTests, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
+import { __assertCodexHostBoundaryForTests, __registerCodexFixtureForTests, assertTrustedCodexExecutable, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { access, chmod, mkdir, mkdtemp, open, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -153,6 +153,13 @@ sleep 3
     await chmod(join(hostRoot, 'usr'), 0o755); await chmod(binDir, 0o755);
     const trustedUid = (await stat(hostRoot)).uid;
     const callerUid = trustedUid + 1;
+    const trustedFile = await stat(unshare);
+    expect(() => assertTrustedCodexExecutable(trustedFile, trustedUid)).not.toThrow();
+    expect(() => assertTrustedCodexExecutable(trustedFile, callerUid)).toThrow();
+    await chmod(unshare, 0o777);
+    const mutableFile = await stat(unshare);
+    expect(() => assertTrustedCodexExecutable(mutableFile, trustedUid)).toThrow();
+    await chmod(unshare, 0o755);
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).resolves.toBeUndefined();
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid + 2, callerUid)).rejects.toThrow();
     await mkdir(join(etc, 'codex'));

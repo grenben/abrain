@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CodexProposalError } from './codex-contract.ts';
@@ -40,6 +40,13 @@ export async function assertProductionCodexHostBoundary(): Promise<void> {
   await assertLinuxHostBoundary('/', 0, process.getuid());
 }
 
+/** A same-user writable inode can change after hashing even while its fd stays open. */
+export function assertTrustedCodexExecutable(info: Pick<Stats, 'uid' | 'mode' | 'size' | 'isFile'>, trustedUid = 0): void {
+  if (!info.isFile() || !info.size || !(info.mode & 0o111) || info.uid !== trustedUid || (info.mode & 0o022)) {
+    throw new Error('mutable Codex executable');
+  }
+}
+
 /** Synthetic filesystem seam; it never registers a production runtime hash. */
 export async function __assertCodexHostBoundaryForTests(root: string, trustedUid: number, callerUid: number): Promise<void> {
   await assertLinuxHostBoundary(root, trustedUid, callerUid);
@@ -70,7 +77,10 @@ export async function openQualifiedCodexRuntime(bin: string): Promise<OpenCodexR
     const sha256 = hash.digest('hex');
     const production = QUALIFIED_SHA256.has(sha256);
     if (!production && fixtures.get(bin) !== sha256) throw new Error('unqualified executable');
-    if (production) await assertProductionCodexHostBoundary();
+    if (production) {
+      assertTrustedCodexExecutable(after);
+      await assertProductionCodexHostBoundary();
+    }
     return { file, production };
   } catch {
     await file?.close().catch(() => {});
