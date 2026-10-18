@@ -9,7 +9,7 @@
  * never a throw).
  *
  * Isolation: every test builds a fresh tmp GBRAIN_HOME parent and runs the
- * probe inside `withEnv({ GBRAIN_HOME: parent })` — no direct process.env
+ * probe with isolated GBrain and harness config homes — no direct process.env
  * mutation, no PGLite engine (checks accept `engine: null`; the one
  * engine-shaped check gets a stub with just `getConfig`).
  */
@@ -149,7 +149,8 @@ function makeWorkspace(opts: { dirty?: boolean; clean?: boolean; ahead?: boolean
 }
 
 function run(parent: string, engine: BrainEngine | null = null): Promise<Check[]> {
-  return withEnv({ GBRAIN_HOME: parent }, () => bootstrapDoctorChecks(engine));
+  return withEnv({ GBRAIN_HOME: parent, HOME: parent, CODEX_HOME: join(parent, 'codex-home'),
+    CLAUDE_CONFIG_DIR: join(parent, 'claude-config') }, () => bootstrapDoctorChecks(engine));
 }
 
 function byName(checks: Check[], name: string): Check | undefined {
