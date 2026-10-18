@@ -3,8 +3,8 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-The isolated integration checkout is restamped onto upstream 0.60.303.0 as
-source version 0.60.304.0. Its private migrations are registered at v261–v288.
+The isolated integration checkout is restamped onto upstream 0.60.304.0 as
+source version 0.60.305.0. Its private migrations are registered at v261–v288.
 This checkout passed all 84 repository verification checks; the installed
 0.60.96.0 package and its database have not been changed.
 

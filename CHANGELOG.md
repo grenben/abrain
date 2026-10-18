@@ -10,7 +10,7 @@ credits are retained; no result has been reassigned to another provider. Origina
 identifiers and attribution are available in the pre-removal Git revision
 `6040075c6cb95be5881cc2e1b76ef7d71f4e5d29` (retained on 2026-09-23).
 
-## [0.60.304.0] - 2026-10-18
+## [0.60.305.0] - 2026-10-19
 
 **Private Codex proposals are retained and checked by the brain host before publication.**
 This development release adds source-bound subscription runs, durable proposal and
@@ -19,9 +19,46 @@ skill, cycle, evaluation, and contextual indexing workflows. A native proposal
 cannot publish after its grant, source binding, or job ownership expires. The
 new tables and guards are supplied by migrations v261–v288 for both engines.
 
-This source integration checkpoint also includes upstream 0.60.303.0, including its published schema migrations v258–v260. Production activation still requires
+This source integration checkpoint also includes upstream 0.60.304.0, including its published schema migrations v258–v260. Production activation still requires
 runtime qualification, a configured private account lane, and validation against
 the target host database. The installed brain is not migrated by this release.
+
+## [0.60.304.0] - 2026-10-18
+
+**A re-extraction that comes back empty or partial no longer deletes what the earlier run found, and a page write's Git backup no longer gets stuck when another machine pushed first.** On a managed brain, a model that honestly answered `[]` for an edited page retired every atom that page had produced (#7013). The same thing happened when a batch was published only partly, to Life Chronicle events, and to conversation facts. Separately, a Git effect whose push met a moved remote failed `git_push_unavailable` on every attempt and parked after five, leaving the page commits on that one machine (#7010).
+
+### What changed
+
+| Situation | Before | Now |
+|---|---|---|
+| A managed atom re-extraction returns `[]`, fails, or read only part of the page | every prior atom of the page was retired (`retired_by: managed-reextract`) | nothing retires; the page's scan state still advances, so the same text is not paid for again |
+| A managed atom batch publishes only some of its new atoms (one conflicts) | the batch's retirements of the old atoms still committed | a retirement waits until every replacement page of its run has committed; until then the old atom stays live |
+| `gbrain repair stale-atoms` after a zero-yield extraction | listed the kept atoms as `origin_changed` | an atom is `origin_changed` only when the current text's extraction produced a live atom |
+| A Life Chronicle re-judge returns no events, drops or caps proposals, or reads a truncated body | the page's earlier events were retired | they stay live; a complete, clean replacement and a page that stops being chronicle-shaped still retire them |
+| A conversation-fact re-extraction finds nothing, finds the page not extractable, runs with `--since` or `--segment-limit`, has rows held by the write gate, or fails partway (unmanaged) | every prior extractor fact of the page was deleted or expired first | prior facts stay; the outcome row still advances, a `--since` window adds its facts beside them, and only a complete non-empty run replaces them; the unmanaged path buffers and publishes once at the end |
+| A Git effect's push is rejected because the remote moved | `git_push_unavailable` forever, parked after five attempts | the push runs `gbrain git commit-push --push-only --keep-checkout`, which merges the remote in memory and pushes without moving the checkout (`gbrain sources refresh` stays the only importer) |
+| Both machines changed the same page file | indistinguishable from a network failure | the effect holds `integrate_conflict` with the user's choice as its fix (`--keep-checkout --resolve <path>=<ours\|theirs>`) |
+| Git effects already parked on a push | needed `--pat-file` or one `retry-effects --request-id` per write | `gbrain sources writer retry-effects <source> --parked-pushes [--dry-run]` retries them all; it also covers `push_unconfirmed` and `integrate_conflict` |
+| Atoms a zero-yield managed re-extraction already retired | gone from search, and the purge removed them after 72 hours | doctor `atom_retirements_restorable` counts them per source; `gbrain repair atoms-restore` previews exactly the latest retired generation of each still-live origin that nothing replaced, and `--apply --expect <hash>` restores them with a receipt per atom; the purge keeps those tombstones for 30 days so there is time to decide |
+| Finding stuck Git backups | per-request lines in doctor `parked_effects` only | doctor `parked_effects` and `gbrain sync status` (`git_push_holds`) show, per source, how many are retrying or parked, any conflict, and the one fix; `sync status`'s `next` falls back to it |
+
+### What you need to do
+
+Nothing for new runs. Nothing is restored on upgrade. If doctor warns `atom_retirements_restorable`, preview with `gbrain repair atoms-restore --source <id>` and apply with the printed hash once you agree. If doctor shows `git_push_holds`, run the fix it names; a conflict asks you which version wins.
+
+**Say to your agent:** *"Check whether my brain lost atoms to an empty re-extraction and show me what restoring them would bring back."*
+
+**Say to your agent:** *"My brain's Git backups stopped pushing. Find out why and get them moving again."*
+
+Long Chronicle pages (over 12,000 characters) and segmented pages no longer retire stale events on re-extraction, because the judge never reads their whole body. Their earlier events stay visible instead of being lost.
+
+### For contributors
+
+- New pathological cases `test/pathological/h1`…`h4` (atoms, Git effects, Chronicle, conversation facts), each on PGLite and Postgres.
+- Three existing tests encoded the lossy behavior and now assert the new invariant: `test/chronicle-auto-phase.test.ts` ("a genuine [] keeps the previous generation live"), `test/chronicle-date-quality.test.ts` ("keeps the old generation live when every new proposal is dropped") and `test/repair-stale-atoms.test.ts` (a zero-yield completion lists nothing; a completion that produced atoms still lists both old atoms).
+- `gbrain git commit-push --push-only --keep-checkout` is the one form a managed worktree accepts.
+
+Reported by @davidfragnoli-lang (#7013) and @dovstern (#7010).
 
 ## [0.60.303.0] - 2026-10-18
 
