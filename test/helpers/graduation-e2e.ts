@@ -223,7 +223,7 @@ export function leakNeedle(password: string): string {
   return password.length >= 12 && !/^(postgres|test|password)/i.test(password) ? password : `:${encodeURIComponent(password)}@`;
 }
 
-/** Assert no output byte names the target password (stdout, stderr, files under the fixture except the 0600 manifest and config). */
+/** Assert no output byte names the target password (stdout, stderr, fixture files except the 0600 manifest/config and Bun's runtime cache). */
 export function passwordLeaks(password: string, results: GbrainResult[], fixtureDir: string): string[] {
   const leaks: string[] = [];
   const needle = leakNeedle(password);
@@ -237,7 +237,13 @@ export function passwordLeaks(password: string, results: GbrainResult[], fixture
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
       const info = lstatSync(path);
-      if (info.isDirectory()) { if (!name.endsWith('.pglite') && !name.includes('.graduated-') && name !== '.git') walk(path); continue; }
+      if (info.isDirectory()) {
+        // Bun's transpiler cache is runtime-owned, not a GBrain output. The
+        // zero-mutation graduation cases exclude this same cache subtree.
+        if (name === 'cache' && path.endsWith(join('.bun', 'install', 'cache'))) continue;
+        if (!name.endsWith('.pglite') && !name.includes('.graduated-') && name !== '.git') walk(path);
+        continue;
+      }
       if (!info.isFile() || info.size > 4 * 1024 * 1024 || allowed.has(name)) continue;
       if (readFileSync(path).includes(needle)) leaks.push(path);
     }

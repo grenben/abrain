@@ -19,6 +19,7 @@ import {
 import { operationsByName, operations } from '../../src/core/operations.ts';
 import type { OperationContext } from '../../src/core/operations.ts';
 import { importFromContent } from '../../src/core/import-file.ts';
+import { startPersistenceConsumer } from '../../src/core/persistence/service.ts';
 import { LEGACY_EMBEDDING_CONFIG } from '../helpers/legacy-embedding-config.ts';
 import { configureGateway } from '../../src/core/ai/gateway.ts';
 import { isolatedPersistencePostgres } from '../helpers/persistence-postgres.ts';
@@ -101,7 +102,11 @@ function makeCtx(
 async function callOp(name: string, params: Record<string, unknown> = {}) {
   const op = operationsByName[name];
   if (!op) throw new Error(`Unknown operation: ${name}`);
-  return op.handler(makeCtx(), params);
+  const ctx = makeCtx();
+  // CLI and serve start a consumer before dispatching operations. This direct
+  // handler harness needs the same owner so admitted writes can settle.
+  startPersistenceConsumer(ctx.engine, ctx.config);
+  return op.handler(ctx, params);
 }
 
 // ─────────────────────────────────────────────────────────────────
