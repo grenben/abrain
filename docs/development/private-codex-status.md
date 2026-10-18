@@ -730,3 +730,25 @@ then replayed the batch without extra calls. It also rejects malformed input
 before enqueue and changed benchmark data before optimizer admission. Existing
 single-skill queue recovery regressions passed on PGLite. Migration, installation
 and activation on the installed brain remain unperformed.
+
+## Public queued batch replay correction
+
+The public trusted batch producer now re-preflights current skill and benchmark
+content before returning a previously bound job. A changed input under the same
+request UUID fails with `subscription_identity_conflict`; the regression checks
+that it creates no second job and invokes no fake Codex process. Related contract
+expectations now reflect supported private batch flags and assert a scoped
+listing contains the requested page when other authorized fixture pages exist.
+Cancellation testing invokes GBrain's registered handler directly so it does
+not deliver a synthetic process-wide SIGINT to Bun.
+
+| Check | Result |
+| --- | --- |
+| PostgreSQL changed-input replay regression | Not run in this integration checkout; no PostgreSQL server is available |
+| Four corrected PGLite Codex contract cases with fake executable | 4 passed, 29 assertions |
+| Focused PGLite optimizer job contract | 16 passed, 58 assertions; PostgreSQL-only cases skip on PGLite |
+| `bun run typecheck` | Passed |
+| `git diff --check` | Passed |
+
+This does not close the full dispatch/runtime audit. Installed GBrain remains
+unchanged, unqualified and inactive.

@@ -59,6 +59,11 @@ benchmark, source incarnation, tool scope, auxiliary budget or allowance is
 refused. New skill discovery also changes the manifest; use a new reviewed
 request for different work.
 
+The standalone public queue producer rebuilds the current selected-skill hashes
+before returning an existing job. Reusing a request UUID after a benchmark or
+skill input changes is rejected at submission; it does not return the stale job
+receipt or defer that conflict until the worker starts.
+
 A batch is not a transactional publication of all skill files. A committed
 member remains committed if a later member fails. Retained optimizer results
 and exact output bytes reconcile partial file publication; completed members
