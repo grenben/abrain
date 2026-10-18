@@ -60,6 +60,7 @@
   "test/e2e/code-intel-mcp-ops-pglite.test.ts": 3380,
   "test/e2e/code-intel-n13-postgres.test.ts": 1710,
   "test/e2e/code-intel-walk-resolved-ids-postgres.test.ts": 3450,
+  "test/e2e/codex-actions.test.ts": 1331830,
   "test/e2e/codex-plugin-install-real.serial.test.ts": 390,
   "test/e2e/company-brain-receipts.test.ts": 1192,
   "test/e2e/compile-context-pglite.test.ts": 1207,

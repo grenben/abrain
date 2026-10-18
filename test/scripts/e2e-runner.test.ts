@@ -314,7 +314,7 @@ test('long E2E files get their measured outer caps while overrides and per-test 
       const result = spawnSync('bash', ['scripts/run-e2e.sh', file], { cwd: root, encoding: 'utf8', env: { ...base, GBRAIN_E2E_FILE_TIMEOUT: override } });
       expect(result.status, result.stdout + result.stderr).toBe(0);
     }
-    expect(readFileSync(outerCaps, 'utf8').trim().split('\n')).toEqual(['180', '1200', '720', '720', '720', '720', '720', '720', '77', '77']);
+    expect(readFileSync(outerCaps, 'utf8').trim().split('\n')).toEqual(['180', '1800', '720', '720', '720', '720', '720', '720', '77', '77']);
     expect(readFileSync(bunArgs, 'utf8').trim().split('\n').map(line => line.match(/--timeout=(\d+)/)?.[1])).toEqual(['60000', '180000', '300000', '60000', '60000', '60000', '60000', '60000', '60000', '180000']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
