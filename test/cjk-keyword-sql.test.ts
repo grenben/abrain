@@ -121,7 +121,7 @@ describe('buildCJKKeywordSql (#3986)', () => {
     expect(built!.sql).toContain('cc.symbol_type = $');
     expect(built!.sql).toContain('> $');
     expect(built!.sql).toContain('< $');
-    expect(built!.params).toEqual(expect.arrayContaining(['2026-01-01', '2026-02-01', 'typescript', 'function']));
+    expect(built!.params).toEqual(expect.arrayContaining(['2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z', 'typescript', 'function']));
   });
 
   test('multi-term query gets contiguous-raw-query bonus; single-term does not', () => {
