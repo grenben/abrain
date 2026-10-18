@@ -122,6 +122,8 @@
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_check2": "c CHECK (((NOT completed) OR (result IS NOT NULL)))",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_input_check": "c CHECK (((jsonb_typeof(input) = 'object'::text) AND (octet_length((input)::text) <= 2097152)))",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_input_hash_check": "c CHECK ((input_hash ~ '^[a-f0-9]{64}$'::text))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_job_binding": "c CHECK (((request_id IS NULL) = (job_id IS NULL)))",
+      "codex_skillopt_bootstraps.codex_skillopt_bootstraps_job_id_fkey": "f FOREIGN KEY (job_id) REFERENCES minion_jobs(id) ON DELETE RESTRICT",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_pkey": "p PRIMARY KEY (run_id)",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_protocol_check": "c CHECK ((protocol = 1))",
       "codex_skillopt_bootstraps.codex_skillopt_bootstraps_result_check": "c CHECK (((jsonb_typeof(result) = 'object'::text) AND (octet_length((result)::text) <= 1048576)))",
@@ -1157,7 +1159,9 @@
       "codex_skillopt_batch_submissions_job_id_key": "CREATE UNIQUE INDEX codex_skillopt_batch_submissions_job_id_key ON public.codex_skillopt_batch_submissions USING btree (job_id)",
       "codex_skillopt_batch_submissions_pkey": "CREATE UNIQUE INDEX codex_skillopt_batch_submissions_pkey ON public.codex_skillopt_batch_submissions USING btree (request_id)",
       "codex_skillopt_batches_pkey": "CREATE UNIQUE INDEX codex_skillopt_batches_pkey ON public.codex_skillopt_batches USING btree (run_id)",
+      "codex_skillopt_bootstraps_job": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_job ON public.codex_skillopt_bootstraps USING btree (job_id) WHERE (job_id IS NOT NULL)",
       "codex_skillopt_bootstraps_pkey": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_pkey ON public.codex_skillopt_bootstraps USING btree (run_id)",
+      "codex_skillopt_bootstraps_request": "CREATE UNIQUE INDEX codex_skillopt_bootstraps_request ON public.codex_skillopt_bootstraps USING btree (request_id) WHERE (request_id IS NOT NULL)",
       "codex_skillopt_cycles_cooldown": "CREATE INDEX codex_skillopt_cycles_cooldown ON public.codex_skillopt_cycles USING btree (source_id, source_incarnation, settled_at DESC)",
       "codex_skillopt_cycles_pending_source": "CREATE UNIQUE INDEX codex_skillopt_cycles_pending_source ON public.codex_skillopt_cycles USING btree (source_id, source_incarnation) WHERE (state = 'pending'::text)",
       "codex_skillopt_cycles_pkey": "CREATE UNIQUE INDEX codex_skillopt_cycles_pkey ON public.codex_skillopt_cycles USING btree (run_id)",
@@ -1966,7 +1970,9 @@
           "7 result jsonb/jsonb NULL",
           "8 result_hash text/text NULL",
           "9 completed boolean/bool NOT NULL DEFAULT false",
-          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+          "10 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "11 request_id uuid/uuid NULL",
+          "12 job_id bigint/int8 NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },
