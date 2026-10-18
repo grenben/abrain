@@ -7,10 +7,10 @@ Latest source checkpoint: [scheduled optimizer cycles](private-codex-skillopt-cy
 connects maintenance to retained batch manifests, frozen source-scoped selection
 and receipt-backed completion/cooldowns. Foreground `skillopt --all` and trusted
 SDK batches also use retained manifests and child grants. Schema head is 269;
-queued PostgreSQL batch jobs now use a permanent request binding. Standalone
-batch submission API, fleet and remote
-producers, broader query/graph tools, full dispatch coverage and production
-runtime qualification remain incomplete.
+queued PostgreSQL batch jobs use a permanent request binding. The public
+queued batch API is exported from `gbrain/core/skillopt` and covered through
+the package import path. Fleet and remote producers, broader query/graph tools,
+full dispatch coverage and production runtime qualification remain incomplete.
 
 ## Installation and source evidence (2026-10-09)
 

@@ -76,10 +76,15 @@ prevent an old owner from releasing its replacement's lease.
 
 ## Scope and verification
 
-Foreground local CLI, queued PostgreSQL CLI batches, direct trusted SDK batches and
-[scheduled cycle selection](private-codex-skillopt-cycles.md) are implemented. Queued
-standalone batch submission API, fleet optimization and shared catalog batch
-publication remain separate integration work. The queue worker receives its
+Foreground local CLI, queued PostgreSQL CLI batches, direct trusted SDK batches,
+the public trusted package submission API, and
+[scheduled cycle selection](private-codex-skillopt-cycles.md) are implemented.
+Fleet optimization and shared catalog batch publication remain separate
+integration work. The package API is exported from `gbrain/core/skillopt` as
+`submitCodexSkillOptBatch`; callers provide a trusted local `operationContext`,
+explicit Codex read scope, resolved model metadata, and a bounded allowance. The
+API does not create a grant from USD authorization or remote caller input. The
+queue worker receives its
 own durable protocol submission, frozen per-skill hashes, request identity and
 job fence, then runs the existing retained batch coordinator. Every skill is
 validated before enqueueing and against its retained hash before execution.

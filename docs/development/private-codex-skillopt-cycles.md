@@ -73,8 +73,9 @@ using synthetic fixtures and a qualified fake Codex executable. See the
 
 These tests verify source. Runtime qualification, live subscription checks,
 production migrations, installation and activation remain separate gates.
-Queued standalone batches, fleet and shared catalog batch producers remain
-incomplete. Account-lane coordination currently spans one database.
+Queued batch submission is available through the public trusted package API;
+fleet and shared catalog batch producers remain incomplete. Account-lane
+coordination currently spans one database.
 
 **Say to your agent:** *“Inspect the scheduled optimizer's source, read scope,
 allowance and pending cycles without running inference.”*

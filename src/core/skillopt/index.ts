@@ -14,3 +14,12 @@ export type { SkillOptOpts, BenchmarkTask } from './types.ts';
 export { scoreSkillOnTasks } from './validate-gate.ts';
 export type { ScoreOnTasksOpts } from './validate-gate.ts';
 export { loadHeldOut } from './held-out.ts';
+export { resolveSkillOptModels } from './models-plan.ts';
+export type { SkillOptModels, SkillOptModelFlags } from './models-plan.ts';
+export { submitCodexSkillOptBatch } from './codex-batch-job.ts';
+export type {
+  CodexSkillOptBatchAllowance,
+  CodexSkillOptBatchInput,
+  CodexSkillOptBatchJobReceipt,
+  CodexSkillOptBatchScope,
+} from './codex-batch-job.ts';

@@ -56,7 +56,9 @@ root and direct rollout children. Monetary cost and remaining quota remain null.
 Foreground native batches use this tree through a durable manifest binding each
 skill's identity, source, scope and recovery state. Child optimizers require that
 persisted membership and a live batch owner scope; a child grant alone is
-insufficient. Scheduled cycle and queued batch producers remain incomplete.
+insufficient. Scheduled cycle selection and PostgreSQL queued batch submission
+now use this tree through the durable host protocol. Fleet and shared catalog
+batch producers remain incomplete.
 
 Trusted queue submissions can bind a distinct job allowance to a parent; real
 worker handlers charge the shared total while retaining separate action ledgers.

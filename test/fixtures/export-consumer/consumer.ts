@@ -33,11 +33,12 @@ import { STALE_TIME_BUDGET_MS as e21 } from 'gbrain/extract';
 import { INGESTION_CONTENT_TYPES as e22 } from 'gbrain/ingestion';
 import { IngestionTestHarness as e23 } from 'gbrain/ingestion/test-harness';
 import { GuardrailLoadError as e24 } from 'gbrain/core/guardrails';
-import { loadHeldOut as e25 } from 'gbrain/core/skillopt';
+import { loadHeldOut as e25, submitCodexSkillOptBatch as e29, resolveSkillOptModels as e30 } from 'gbrain/core/skillopt';
 import { LiveServeLockError as e26 } from 'gbrain/pglite-lock';
 import { assembleEvidenceForHits as e27 } from 'gbrain/search/evidence-delivery';
 import { VERSION as e28 } from 'gbrain/version';
 import type { BrainEngine } from 'gbrain/engine';
+import type { CodexSkillOptBatchAllowance, CodexSkillOptBatchInput, CodexSkillOptBatchJobReceipt, CodexSkillOptBatchScope } from 'gbrain/core/skillopt';
 import type { PageInput, SearchResult } from 'gbrain/types';
 import { PGLiteEngine } from 'gbrain/pglite-engine';
 
@@ -72,6 +73,14 @@ export const RUNTIME_IMPORTS: readonly unknown[] = [
   e27,
   e28,
 ];
+
+export type CodexBatchConsumerContract = {
+  engine: BrainEngine;
+  input: CodexSkillOptBatchInput;
+  scope: CodexSkillOptBatchScope;
+  allowance: CodexSkillOptBatchAllowance;
+  receipt: CodexSkillOptBatchJobReceipt;
+};
 
 export function makeEngine(): BrainEngine {
   return new PGLiteEngine();

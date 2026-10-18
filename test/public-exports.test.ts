@@ -61,7 +61,7 @@ const EXPECTED_EXPORTS: ExpectedExport[] = [
   { subpath: 'gbrain/core/guardrails', canary: ['registerGuardrailProvider', 'runGuardrails', 'loadGuardrailProvidersFromEnv'] },
   // 2026-08 fix wave (audit skillopt-cats-11): the surface gbrain-evals
   // cat30–33 consume, replacing physical node_modules deep imports.
-  { subpath: 'gbrain/core/skillopt', canary: ['runSkillOpt', 'scoreSkillOnTasks', 'loadHeldOut'] },
+  { subpath: 'gbrain/core/skillopt', canary: ['runSkillOpt', 'scoreSkillOnTasks', 'loadHeldOut', 'submitCodexSkillOptBatch', 'resolveSkillOptModels'] },
   { subpath: 'gbrain/pglite-lock', canary: ['peekLock'] },
   { subpath: 'gbrain/version', canary: ['VERSION'] },
 ];

@@ -559,8 +559,10 @@
       ],
       "./core/skillopt": [
         "loadHeldOut",
+        "resolveSkillOptModels",
         "runSkillOpt",
-        "scoreSkillOnTasks"
+        "scoreSkillOnTasks",
+        "submitCodexSkillOptBatch"
       ],
       "./embedding": [
         "EMBEDDING_COST_PER_1K_TOKENS",

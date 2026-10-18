@@ -268,7 +268,7 @@ async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[]
           mode: parsed.mode, dryRun: parsed.dryRun, noMutate: parsed.noMutate, allowMutateBundled: parsed.allowMutateBundled,
           ...(parsed.heldOutPath ? { heldOutPath: parsed.heldOutPath } : {}), bootstrapReviewed: parsed.bootstrapReviewed,
           maxCostUsd: parsed.maxCostUsd, maxCostSource: parsed.maxCostSource, maxRuntimeMin: parsed.maxRuntimeMin, force: parsed.force,
-        }, scope, scope.backgroundAllowance)
+        }, batchSubmissionScope(scope), scope.backgroundAllowance)
           : scope.backgroundAllowance ? await (await import('../core/skillopt/codex-job.ts')).submitCodexSkillOpt(engine, jobInput, scope, scope.backgroundAllowance)
           : await queue.add('skillopt', buildSkillOptJobData(jobInput), {
           queue: 'default',
@@ -367,7 +367,7 @@ async function runAllSkillOpt(
         mode: parsed.mode, dryRun: false, noMutate: parsed.noMutate, allowMutateBundled: parsed.allowMutateBundled,
         ...(parsed.heldOutPath ? { heldOutPath: parsed.heldOutPath } : {}), bootstrapReviewed: parsed.bootstrapReviewed,
         maxCostUsd: parsed.maxCostUsd, maxCostSource: parsed.maxCostSource, maxRuntimeMin: parsed.maxRuntimeMin, force: parsed.force,
-      }, scope, scope.backgroundAllowance);
+      }, batchSubmissionScope(scope), scope.backgroundAllowance);
       process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; batch job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
       process.stdout.write(`job_id=${job.id}\n`);
       if (args.includes('--follow')) {
@@ -397,6 +397,16 @@ async function runAllSkillOpt(
     });
     process.exit(reportBatchAllResult(result, parsed));
   } catch (err) { handleErrorAndExit(err, parsed.json, 2); }
+}
+
+function batchSubmissionScope(scope: LocalOptimizerScope) {
+  if (!scope.operationContext || !scope.codex) throw new SubscriptionAdmissionError('subscription_required');
+  return {
+    sourceId: scope.operationContext.sourceId,
+    allowedTools: scope.codex.allowedTools,
+    allowedSlugPrefixes: scope.codex.allowedSlugPrefixes,
+    ...(scope.codex.readRegistry ? { readRegistry: scope.codex.readRegistry } : {}),
+  };
 }
 
 type RunSkillOptOutcome = NonNullable<RunReceipt['outcome']>;

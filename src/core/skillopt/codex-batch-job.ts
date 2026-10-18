@@ -1,13 +1,14 @@
 import { resolve, join } from 'node:path';
 import type { BrainEngine } from '../engine.ts';
 import type { EvalAllowance } from '../../eval/longmemeval/codex-allowance-flags.ts';
-import type { LocalOptimizerScope } from './codex-local-grant.ts';
 import type { SkillOptJobInput } from './job.ts';
 import { buildSkillOptJobData, skillOptJobOptions } from './job.ts';
 import { collectSkillsWithBenchmarks } from './batch.ts';
 import { prepareCodexSkillOpt } from './codex-run.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { loadConfig, loadConfigWithEngine } from '../config.ts';
+import { resolveSourceWithTier } from '../source-resolver.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { isWriteRequestId } from '../persistence/types.ts';
 import { digest } from '../persistence/digest.ts';
@@ -18,37 +19,60 @@ import { CODEX_OPTIMIZER_JOB_PROTOCOL, CODEX_SKILLOPT_BATCH_JOB_PROTOCOL, valida
 const conflict = (): never => { throw new SubscriptionAdmissionError('subscription_identity_conflict'); };
 const payloadHash = (data: Record<string, unknown>) => { const { __param_hash, ...value } = data; return digest(value); };
 interface Binding { request_id: string; protocol: number; request_hash: string; data_hash: string; job_id: number }
-export type SkillOptBatchJobInput = Omit<SkillOptJobInput, 'skillName' | 'benchmarkPath'>;
+export type CodexSkillOptBatchInput = Omit<SkillOptJobInput, 'skillName' | 'benchmarkPath' | 'sharedSkill'>;
+export type CodexSkillOptBatchScope = {
+  sourceId: string;
+  allowedTools: string[];
+  allowedSlugPrefixes: string[];
+  readRegistry?: 'codex-discovery-v1';
+};
+export type CodexSkillOptBatchAllowance = EvalAllowance;
+export type SkillOptBatchJobInput = CodexSkillOptBatchInput;
+export interface CodexSkillOptBatchJobReceipt {
+  id: number;
+  name: 'skillopt';
+  status: 'waiting' | 'active' | 'completed' | 'failed' | 'delayed' | 'dead' | 'cancelled' | 'waiting-children' | 'paused';
+}
 
-function commonData(input: SkillOptBatchJobInput, skillsDir: string, names: string[], entries: Array<{ skill: string; inputHash: string }>, scope: LocalOptimizerScope, requestId: string) {
+function commonData(input: SkillOptBatchJobInput, skillsDir: string, names: string[], entries: Array<{ skill: string; inputHash: string }>, scope: CodexSkillOptBatchScope, requestId: string) {
   const placeholder: SkillOptJobInput = { ...input, skillName: 'batch-placeholder', benchmarkPath: join(skillsDir, '.codex-batch-placeholder'), models: input.models, modelFlags: input.modelFlags };
   const data = buildSkillOptJobData(placeholder);
   Object.assign(data, { optimizer_protocol: CODEX_OPTIMIZER_JOB_PROTOCOL, optimizer_batch_protocol: CODEX_SKILLOPT_BATCH_JOB_PROTOCOL,
     optimizer_request_id: requestId, optimizer_input_hash: digest(entries), optimizer_batch_entries: entries, optimizer_batch_selection: names,
-    source_id: scope.operationContext!.sourceId, ...(scope.codex!.readRegistry !== undefined ? { read_registry: scope.codex!.readRegistry } : {}),
-    allowed_tools: scope.codex!.allowedTools, allowed_slug_prefixes: scope.codex!.allowedSlugPrefixes });
+    source_id: scope.sourceId, ...(scope.readRegistry !== undefined ? { read_registry: scope.readRegistry } : {}),
+    allowed_tools: scope.allowedTools, allowed_slug_prefixes: scope.allowedSlugPrefixes });
   validateCodexOptimizerJob(data);
   return data;
 }
-function requestHash(input: SkillOptBatchJobInput, scope: LocalOptimizerScope, grant: EvalAllowance): string {
-  return digest({ protocol: CODEX_SKILLOPT_BATCH_JOB_PROTOCOL, input, sourceId: scope.operationContext?.sourceId, codex: scope.codex,
+function requestHash(input: SkillOptBatchJobInput, scope: CodexSkillOptBatchScope, grant: EvalAllowance): string {
+  return digest({ protocol: CODEX_SKILLOPT_BATCH_JOB_PROTOCOL, input, sourceId: scope.sourceId,
+    readRegistry: scope.readRegistry ?? null, allowedTools: scope.allowedTools, allowedSlugPrefixes: scope.allowedSlugPrefixes,
     grant: { requestId: grant.requestId.toLowerCase(), maxAttempts: grant.maxAttempts, maxTurns: grant.maxTurns, deadline: grant.deadline.toISOString(), auxiliaryUsd: grant.auxiliaryUsd ?? null } });
 }
 
 /** Preflight every selected skill before queue admission; the worker must match these immutable hashes. */
-export async function submitCodexSkillOptBatch(engine: BrainEngine, original: SkillOptBatchJobInput, scope: LocalOptimizerScope, allowance: EvalAllowance) {
-  if (!readPrivateCodexConfig() || codexSubscriptionContext() || scope.operationContext?.engine !== engine || scope.operationContext.remote !== false || !scope.codex)
+export async function submitCodexSkillOptBatch(engine: BrainEngine, original: CodexSkillOptBatchInput, scope: CodexSkillOptBatchScope, allowance: CodexSkillOptBatchAllowance): Promise<CodexSkillOptBatchJobReceipt> {
+  if (!readPrivateCodexConfig() || codexSubscriptionContext())
     throw new SubscriptionAdmissionError('subscription_required');
-  if (!isWriteRequestId(allowance.requestId) || original.dryRun || original.sharedSkill) throw new SubscriptionAdmissionError('subscription_invalid');
+  if (!isWriteRequestId(allowance.requestId) || original.dryRun || Object.hasOwn(original, 'sharedSkill')) throw new SubscriptionAdmissionError('subscription_invalid');
   const grant = structuredClone(allowance); grant.requestId = grant.requestId.toLowerCase();
   const input = { ...structuredClone(original), skillsDir: resolve(original.skillsDir) };
-  const originalScope = { ...scope.operationContext }, codex = structuredClone(scope.codex);
-  const reqHash = requestHash(input, { ...scope, operationContext: originalScope, codex }, grant);
+  const config = await loadConfigWithEngine(engine, loadConfig() ?? { engine: engine.kind });
+  if (!config) throw new SubscriptionAdmissionError('subscription_required');
+  const source = await resolveSourceWithTier(engine, scope.sourceId);
+  const originalScope = { engine, config, remote: false as const, sourceId: source.source_id, dryRun: false,
+    logger: { info: console.log, warn: console.warn, error: console.error } };
+  const codex = structuredClone({ ...(scope.readRegistry ? { readRegistry: scope.readRegistry } : {}),
+    allowedTools: scope.allowedTools, allowedSlugPrefixes: scope.allowedSlugPrefixes });
+  const trustedScope = { operationContext: originalScope, codex };
+  const canonicalScope = { sourceId: source.source_id, ...codex };
+  const reqHash = requestHash(input, canonicalScope, grant);
   const [prior] = await engine.executeRaw<Binding>('SELECT * FROM codex_skillopt_batch_submissions WHERE request_id=$1::uuid', [grant.requestId]);
   if (prior) {
-    const [job] = await engine.executeRaw<Record<string, unknown>>('SELECT * FROM minion_jobs WHERE id=$1', [prior.job_id]);
-    if (prior.protocol !== 1 || prior.request_hash !== reqHash || !job || payloadHash((job.data ?? {}) as Record<string, unknown>) !== prior.data_hash) conflict();
-    return new MinionQueue(engine).getJob(Number(prior.job_id)).then(j => j ?? conflict());
+    const job = await new MinionQueue(engine).getJob(Number(prior.job_id));
+    if (prior.protocol !== 1 || prior.request_hash !== reqHash || !job || payloadHash(job.data ?? {}) !== prior.data_hash) conflict();
+    if (!job) return conflict();
+    return { id: Number(job.id), name: 'skillopt', status: job.status };
   }
   const names = collectSkillsWithBenchmarks(input.skillsDir).sort();
   if (names.length > 20) throw new SubscriptionAdmissionError('subscription_invalid');
@@ -63,9 +87,9 @@ export async function submitCodexSkillOptBatch(engine: BrainEngine, original: Sk
     sourceIncarnation = prepared.source.incarnation; boundPolicy = prepared.policy;
     entries.push({ skill: skillName, inputHash: digest(prepared.input) });
   }
-  const data = commonData(input, input.skillsDir, names, entries, { ...scope, operationContext: originalScope, codex }, grant.requestId);
+  const data = commonData(input, input.skillsDir, names, entries, canonicalScope, grant.requestId);
   const dataHash = payloadHash(data);
-  return engine.transaction(async tx => {
+  const queued = await engine.transaction(async tx => {
     await declareDurablePersistence(tx); await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
     const [saved] = await tx.executeRaw<Binding>('SELECT * FROM codex_skillopt_batch_submissions WHERE request_id=$1::uuid FOR UPDATE', [grant.requestId]);
     if (saved) {
@@ -76,8 +100,8 @@ export async function submitCodexSkillOptBatch(engine: BrainEngine, original: Sk
     const policy = readPrivateCodexConfig();
     if (!policy || boundPolicy && (policy.model !== boundPolicy.model || policy.bin !== boundPolicy.bin)) conflict();
     if (sourceIncarnation) {
-      const [source] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [originalScope.sourceId]);
-      if (!source || source.archived || source.incarnation !== sourceIncarnation) conflict();
+      const [currentSource] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [originalScope.sourceId]);
+      if (!currentSource || currentSource.archived || currentSource.incarnation !== sourceIncarnation) conflict();
     }
     const job = await new MinionQueue(tx).add('skillopt', data, { queue: 'default', idempotency_key: `codex-skillopt-batch:${grant.requestId}`,
       max_attempts: 1, max_stalled: 5, remove_on_complete: false, remove_on_fail: false, lock_duration_ms: 900000,
@@ -88,6 +112,7 @@ export async function submitCodexSkillOptBatch(engine: BrainEngine, original: Sk
       [grant.requestId, reqHash, dataHash, job.id]);
     return job;
   });
+  return { id: Number(queued.id), name: 'skillopt', status: queued.status };
 }
 
 /** Rebuild the worker batch only from its permanent host submission and current job lease. */
