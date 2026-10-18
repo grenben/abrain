@@ -8,6 +8,7 @@
 import type { SearchOpts } from '../types.ts';
 import { clampSearchLimit } from '../engine.ts';
 import { searchLimitCap } from './eval-pool-depth.ts';
+import { utcSearchDateBound } from './date-bounds.ts';
 import { getFtsLanguage } from '../fts-language.ts';
 import { chunkGenerationFilter, requiresSafeChunks } from './safe-chunks.ts';
 import { normalizeAlias } from './alias-normalize.ts';
@@ -80,11 +81,11 @@ export function buildSearchTitlesStatement(query: string, opts: SearchOpts | und
   // Date filters read COALESCE(effective_date, …), the keyword arm's
   // effective-date-first convention.
   if (opts?.afterDate) {
-    params.push(opts.afterDate);
+    params.push(utcSearchDateBound(opts.afterDate));
     filters += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.afterDateInclusive ? '>=' : '>'} $${params.length}::text::timestamptz`;
   }
   if (opts?.beforeDate) {
-    params.push(opts.beforeDate);
+    params.push(utcSearchDateBound(opts.beforeDate));
     filters += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.beforeDateInclusive ? '<=' : '<'} $${params.length}::text::timestamptz`;
   }
   if (opts?.sourceIds && opts.sourceIds.length > 0) {

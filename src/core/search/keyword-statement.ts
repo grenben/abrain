@@ -22,6 +22,7 @@
 import type { SearchOpts } from '../types.ts';
 import { escapeLikePattern, hasCJK, cjkMatchTerms } from '../cjk.ts';
 import { getFtsLanguage } from '../fts-language.ts';
+import { utcSearchDateBound } from './date-bounds.ts';
 import { resolveBoostMap, resolveHardExcludes } from './source-boost.ts';
 import { buildHardExcludeClause, buildSourceFactorCase, buildVisibilityClause } from './sql-ranking.ts';
 
@@ -71,8 +72,8 @@ export function buildKeywordMatch(query: string, opts: SearchOpts | undefined): 
   if (opts?.types?.length) filters += add(opts.types, n => `p.type = ANY(${n}::text[])`);
   if (opts?.exclude_slugs?.length) filters += add(opts.exclude_slugs, n => `p.slug != ALL(${n}::text[])`);
   const dated = `COALESCE(p.effective_date, p.updated_at, p.created_at)`;
-  if (opts?.afterDate) filters += add(opts.afterDate, n => `${dated} ${opts.afterDateInclusive ? '>=' : '>'} ${n}::text::timestamptz`);
-  if (opts?.beforeDate) filters += add(opts.beforeDate, n => `${dated} ${opts.beforeDateInclusive ? '<=' : '<'} ${n}::text::timestamptz`);
+  if (opts?.afterDate) filters += add(utcSearchDateBound(opts.afterDate), n => `${dated} ${opts.afterDateInclusive ? '>=' : '>'} ${n}::text::timestamptz`);
+  if (opts?.beforeDate) filters += add(utcSearchDateBound(opts.beforeDate), n => `${dated} ${opts.beforeDateInclusive ? '<=' : '<'} ${n}::text::timestamptz`);
   if (opts?.sourceIds?.length) filters += add(opts.sourceIds, n => `p.source_id = ANY(${n}::text[])`);
   else if (opts?.sourceId) filters += add(opts.sourceId, n => `p.source_id = ${n}`);
   const hardExclude = buildHardExcludeClause('p.slug', resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes));

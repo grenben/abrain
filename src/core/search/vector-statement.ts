@@ -64,6 +64,7 @@ import { buildVectorCastFragment, normalizeEngineColumn } from './embedding-colu
 import { resolveBoostMap, resolveHardExcludes } from './source-boost.ts';
 import { buildBestPerPagePoolCte, buildHardExcludeClause, buildSourceFactorCase, buildVisibilityClause } from './sql-ranking.ts';
 import { chunkGenerationProbe } from './safe-chunks.ts';
+import { utcSearchDateBound } from './date-bounds.ts';
 
 export const VECTOR_EXTENSION_VERSION_SQL = `SELECT extversion FROM pg_extension WHERE extname = 'vector'`;
 
@@ -306,7 +307,7 @@ export function buildVectorSearchStatement(input: VectorSearchStatementInput): V
   // planner estimates a since+until pair on the COALESCE at 0.5% and drops
   // the HNSW index exactly as it did for the freshness guard (#5824).
   const dateBound = (op: string, value: string) => {
-    const bound = `${bind(value)}::text::timestamptz`;
+    const bound = `${bind(utcSearchDateBound(value))}::text::timestamptz`;
     return `AND (p.effective_date ${op} ${bound} OR (p.effective_date IS NULL AND (p.updated_at ${op} ${bound} OR (p.updated_at IS NULL AND p.created_at ${op} ${bound}))))`;
   };
   if (opts?.afterDate) filters.push(dateBound(opts.afterDateInclusive ? '>=' : '>', opts.afterDate));

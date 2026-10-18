@@ -15,6 +15,7 @@ import { composablePostgresTransaction, transactionMemo } from './page-state/tra
 import type { PageReadScope } from './types.ts';
 import type { PageReadPolicy } from './types.ts';
 import { readRelationalFanout, readChainHop, readAliases, readBacklinkCounts, readAdjacencyBoosts, readContentFlags, readExtractionStates, readEffectiveDates, readSalienceScores } from './search/read-enrichment.ts';
+import { utcSearchDateBound } from './search/date-bounds.ts';
 import postgres from '#postgres'
 import { reservedTransactions, type ReservedTransactions } from './postgres-engine/reserved-transactions.ts';
 import { traceSqlOptions } from './sql-trace.ts';
@@ -1056,12 +1057,12 @@ export class PostgresEngine implements BrainEngine {
     // v0.29.1: since/until filter by effective date, with import-time fallback.
     let afterDateClause = '';
     if (opts?.afterDate) {
-      params.push(opts.afterDate);
+      params.push(utcSearchDateBound(opts.afterDate));
       afterDateClause = `AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.afterDateInclusive ? '>=' : '>'} $${params.length}::text::timestamptz`;
     }
     let beforeDateClause = '';
     if (opts?.beforeDate) {
-      params.push(opts.beforeDate);
+      params.push(utcSearchDateBound(opts.beforeDate));
       beforeDateClause = `AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.beforeDateInclusive ? '<=' : '<'} $${params.length}::text::timestamptz`;
     }
     // v0.34.1 (#861 — P0 leak seal): source-isolation filter. When the
@@ -1275,12 +1276,12 @@ export class PostgresEngine implements BrainEngine {
     // v0.29.1: since/until filter by effective date, with import-time fallback.
     let afterDateClause = '';
     if (opts?.afterDate) {
-      params.push(opts.afterDate);
+      params.push(utcSearchDateBound(opts.afterDate));
       afterDateClause = `AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.afterDateInclusive ? '>=' : '>'} $${params.length}::text::timestamptz`;
     }
     let beforeDateClause = '';
     if (opts?.beforeDate) {
-      params.push(opts.beforeDate);
+      params.push(utcSearchDateBound(opts.beforeDate));
       beforeDateClause = `AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.beforeDateInclusive ? '<=' : '<'} $${params.length}::text::timestamptz`;
     }
     // v0.34.1 (#861 — P0 leak seal): source-isolation. Anchor primitive

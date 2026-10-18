@@ -19,6 +19,7 @@ import { snapshotSchemaInputs } from './snapshot-schema-inputs.ts';
 import type { PageReadScope } from './types.ts';
 import type { PageReadPolicy } from './types.ts';
 import { readRelationalFanout, readChainHop, readAliases, readBacklinkCounts, readAdjacencyBoosts, readContentFlags, readExtractionStates, readEffectiveDates, readSalienceScores } from './search/read-enrichment.ts';
+import { utcSearchDateBound } from './search/date-bounds.ts';
 import { PGlite } from '@electric-sql/pglite';
 import type { Transaction } from '@electric-sql/pglite';
 // Engine-live path: static top-level imports (scratch probe, #2674) — the
@@ -1462,11 +1463,11 @@ export class PGLiteEngine implements BrainEngine {
     // matches user intent (a meeting was on its event_date, not when it
     // got reimported). Same param shape as Postgres engine.
     if (opts?.afterDate) {
-      params.push(opts.afterDate);
+      params.push(utcSearchDateBound(opts.afterDate));
       extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.afterDateInclusive ? '>=' : '>'} $${params.length}::text::timestamptz`;
     }
     if (opts?.beforeDate) {
-      params.push(opts.beforeDate);
+      params.push(utcSearchDateBound(opts.beforeDate));
       extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.beforeDateInclusive ? '<=' : '<'} $${params.length}::text::timestamptz`;
     }
     // v0.34.1 (#861 — P0 leak seal): source-isolation. Array wins over scalar.
@@ -1654,11 +1655,11 @@ export class PGLiteEngine implements BrainEngine {
     }
     // v0.29.1 since/until parity (codex pass-1 #10).
     if (opts?.afterDate) {
-      params.push(opts.afterDate);
+      params.push(utcSearchDateBound(opts.afterDate));
       extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.afterDateInclusive ? '>=' : '>'} $${params.length}::text::timestamptz`;
     }
     if (opts?.beforeDate) {
-      params.push(opts.beforeDate);
+      params.push(utcSearchDateBound(opts.beforeDate));
       extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.beforeDateInclusive ? '<=' : '<'} $${params.length}::text::timestamptz`;
     }
     // v0.34.1 (#861 — P0 leak seal): source-isolation for the chunk-grain
