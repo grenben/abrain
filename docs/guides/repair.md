@@ -938,7 +938,9 @@ gbrain repair ghost-pages --source default        # preview: each ghost, its rec
 gbrain repair ghost-pages --source default --apply --expect <hash> --yes
 ```
 
-The preview writes nothing and prints the apply command with its hash. The
+The preview changes no page or file, but saves its approved set in the
+database's `op_checkpoints` table and prints the apply command with its hash.
+It therefore needs a writable database even when no apply is requested. The
 apply needs the user's consent: without `--yes` a terminal asks, and a
 non-interactive run exits 3 (`ask_user`) with the consent payload and changes
 nothing. It soft-deletes exactly the previewed set through `delete_page`, bound
