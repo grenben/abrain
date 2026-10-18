@@ -13,6 +13,7 @@ import { declareDurablePersistence } from '../persistence/protocol.ts';
 import { splitEvalAllowance, type EvalAllowance } from '../../eval/longmemeval/codex-allowance-flags.ts';
 import { splitSharedOptimizerFlags } from './codex-shared-cli.ts';
 import { usageError } from '../../cli/cli-error.ts';
+import { assertOptimizerCycle } from './codex-cycle-context.ts';
 
 const pending = new AsyncLocalStorage<Readonly<EvalAllowance> | undefined>();
 export type LocalOptimizerScope = Pick<SkillOptOpts, 'operationContext' | 'codex' | 'sharedSkill'> & { backgroundAllowance?: Readonly<EvalAllowance> };
@@ -89,6 +90,7 @@ export async function ensureLocalOptimizerGrant(tx: BrainEngine, runId: string, 
   // SDK callers already have a grant. Serialize purpose checks under its root
   // lock too, so batch and standalone claims cannot both adopt the same run.
   await tx.executeRaw('SELECT gbrain_codex_subscription_lock_path($1)', [runId]);
+  await assertOptimizerCycle(tx, runId, kind);
   if (kind !== 'batch' && (await tx.executeRaw('SELECT run_id FROM codex_skillopt_batches WHERE run_id=$1', [runId])).length)
     throw new SubscriptionAdmissionError('subscription_identity_conflict');
   if (!grant) return;

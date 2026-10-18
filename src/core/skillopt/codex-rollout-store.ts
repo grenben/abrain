@@ -1,4 +1,5 @@
 import { assertOptimizerBatchMember } from './codex-batch-context.ts';
+import { assertOptimizerCycle } from './codex-cycle-context.ts';
 import type { CodexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import type { BrainEngine } from '../engine.ts';
@@ -20,6 +21,8 @@ export async function bindRollout(host: CodexSubscriptionContext, invocationId: 
   await host.checkAuthority?.();
   return host.engine.transaction(async tx => {
     await fenceRolloutParent(tx, host);
+    await tx.executeRaw('SELECT gbrain_codex_subscription_lock_path($1)', [host.runId]);
+    await assertOptimizerCycle(tx, host.runId, 'rollout');
     const [grant] = await tx.executeRaw<{ account_lane: string; parent_run_id: string | null; max_attempts: number; max_turns: number; deadline: Date | string }>(
       'SELECT account_lane,parent_run_id,max_attempts,max_turns,deadline FROM codex_subscription_runs WHERE run_id=$1 FOR UPDATE', [host.runId]);
     if (!grant || grant.account_lane !== CODEX_JOB_ACCOUNT_LANE) rolloutConflict();

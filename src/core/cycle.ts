@@ -2897,6 +2897,7 @@ export async function runCycle(
             engine,
             dryRun,
             once: opts.onceForPhase === 'skillopt',
+            sourceId: opts.sourceId, deadlineAtMs: opts.deadlineAtMs,
             ...(cycleSignal ? { signal: cycleSignal } : {}),
           }), 'skillopt',
         );

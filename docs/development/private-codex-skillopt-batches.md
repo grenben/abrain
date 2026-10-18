@@ -76,8 +76,9 @@ prevent an old owner from releasing its replacement's lease.
 
 ## Scope and verification
 
-Foreground local CLI and direct trusted SDK batches are implemented. Queued
-batch execution, scheduled cycle selection, fleet optimization and shared
+Foreground local CLI, direct trusted SDK batches and
+[scheduled cycle selection](private-codex-skillopt-cycles.md) are implemented. Queued
+standalone batch execution, fleet optimization and shared
 catalog batch publication remain separate integration work. Those producers
 are not silently routed through this file-based batch protocol. Each account
 lane coordinates one database; separate databases still need shared account

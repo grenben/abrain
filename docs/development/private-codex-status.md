@@ -3,10 +3,11 @@
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 
-Latest source checkpoint: [durable optimizer batches](private-codex-skillopt-batches.md)
-connects foreground `skillopt --all` and trusted SDK batches to retained manifests,
-canonical child grants, sequential optimizer recovery and honest subscription
-reports. Schema head is 267. Scheduled cycles, queued batches, fleet and remote
+Latest source checkpoint: [scheduled optimizer cycles](private-codex-skillopt-cycles.md)
+connects maintenance to retained batch manifests, frozen source-scoped selection
+and receipt-backed completion/cooldowns. Foreground `skillopt --all` and trusted
+SDK batches also use retained manifests and child grants. Schema head is 268.
+Queued standalone batches, fleet and remote
 producers, broader query/graph tools, full dispatch coverage and production
 runtime qualification remain incomplete.
 
@@ -633,3 +634,84 @@ Final repository gates:
 The failed verify checks were rerun individually after correction; the complete
 battery was not redundantly rerun. Final inference and lease checks cover the
 root-lock change, and the no-call CLI contract covers the reporting extraction.
+
+## Scheduled optimizer cycle checkpoint
+
+Implemented the private `runPhaseSkillopt` branch through the existing retained
+batch coordinator. The real cycle dispatcher threads explicit source and job
+deadline. New trusted configuration binds the source, directory, permitted reads
+and per-skill limits. Migration 268 retains the frozen selection, source
+incarnation and completion receipt hash. Only verified batch completion earns
+the source-scoped success cooldown. Preflight failures have a separate 24-hour
+error cooldown; partial or ambiguous batches stay pending and block new roots.
+
+This reuses the pre-existing batch, optimizer, rollout, ledger and publication
+implementation. New code is in `skillopt/codex-cycle{,-config,-context,-store,-schema}.ts`,
+with small changes to the cycle dispatcher, batch selection check and root
+purpose guards. Failed or unavailable configuration is reported explicitly.
+Cycles retain null subscription cost/quota and inherit independent paid auxiliary
+admission. Feature flags and the legacy API path retain their existing behavior.
+
+| Plane | Before | After |
+| --- | --- | --- |
+| Installed executable/services | Older installed artifact; worker planes incomplete | Unchanged; not deployed or activated |
+| Scheduled source path | Legacy optimizer wrapper lacked native scope/admission | Native retained selection, bounded batch and receipt-backed completion |
+| Verification | No native scheduled-cycle contract | Real dispatcher/queued handler and fake-executable contracts on both engines |
+| Runtime | No qualified production Codex runtime | Still unqualified; no live calls or auth changes |
+
+The new shared fixture contains 12 distinct cycle cases: real dispatch and
+cooldown, default-off/dry-run, USD-only/conflicting authority, unreadable flag,
+preflight error cooldown, concurrent preflight failure, partial file publication,
+lost completion acknowledgement, lost selection acknowledgement/direct rollout
+adoption, exhaustion/incarnation mismatch, real queued maintenance failure stamp,
+and cancellation/deadline. Both engines execute these across the initial and
+focused runs. A first fixture attempted to rewrite a referenced source incarnation
+and correctly hit a storage FK; it was corrected to represent a retained earlier
+incarnation without rewriting unrelated source guards. An initial TypeScript
+nullability error was also corrected.
+
+All commands below run in the development checkout. The wrappers create fresh
+homes, disable discovery, remove credentials and use only the qualified fake
+Codex executable. PostgreSQL wrappers provision disposable local databases and
+stop their servers afterward. No installed database is used.
+
+| Command | Result |
+| --- | --- |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/ai/codex-actions.serial.test.ts -t 'scheduled native Codex optimizer cycle' --timeout=240000` | Initial 8 passed; 1 fixture FK failure, subsequently corrected |
+| `python3 /tmp/maxbrain-test-postgres-cycle.py` | Same initial 8 passed and fixture FK failure |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/ai/codex-actions.serial.test.ts -t 'exhausted runs stay pending' --timeout=240000` | Corrected fixture: 1 passed, 7 assertions |
+| `python3 /tmp/maxbrain-test-postgres-cycle-repair.py` | Corrected fixture: 1 passed, 7 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/ai/codex-actions.serial.test.ts -t 'lost selection acknowledgement\|durable Codex optimizer rollouts\|actual CLI runs two skills' --timeout=240000` | 21 passed, 110 assertions |
+| `python3 /tmp/maxbrain-test-postgres-cycle-regress.py` | Same 21 passed, 110 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/ai/codex-actions.serial.test.ts -t 'unavailable feature configuration' --timeout=240000` | 1 passed, 3 assertions |
+| `python3 /tmp/maxbrain-test-postgres-cycle-config.py` | Same 1 passed, 3 assertions |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/skillopt/cycle-phase-caps.serial.test.ts --timeout=180000` | Legacy mocked cycle behavior: 15 passed, 78 assertions; separate process |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/skillopt/models-four-paths.serial.test.ts --timeout=180000` | Existing routing: 8 passed, 31 assertions; separate process |
+| `python3 /tmp/maxbrain-test-postgres-calibration-schema.py` | 12 passed, 31 assertions; PgBouncer skipped; all four catalog snapshots refreshed and rechecked |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp GBRAIN_SKIP_ADMIN_BUILD=1 bun run verify` | 75 passed, 0 failed; admin build skipped |
+
+Final review also fenced the interval between selection and batch creation:
+once a concurrent preflight failure settles the selection, a caller that already
+prepared files cannot adopt it. Missing retained selection cannot report successful
+completion. Focused final tests and build gates are recorded below.
+
+| Final command | Result |
+| --- | --- |
+| `python3 /tmp/maxbrain-stream-check.py env TMPDIR=/var/tmp bun test test/ai/codex-actions.serial.test.ts -t 'real cycle dispatcher completes\|invalid benchmarks earn\|concurrent preflight failure\|lost selection acknowledgement' --timeout=240000` | 4 passed, 33 assertions |
+| `python3 /tmp/maxbrain-test-postgres-cycle-fence.py` | Same 4 passed, 33 assertions |
+| `python3 /tmp/maxbrain-stream-check.py bun run typecheck` | Passed on final source and fixtures |
+| `python3 /tmp/maxbrain-stream-check.py bun run check:function-size` | Passed; no ceiling raised |
+| `python3 /tmp/maxbrain-stream-check.py bun run check:module-size` | Passed |
+| `python3 /tmp/maxbrain-stream-check.py bun run build` | Final source compiled: 3,745 modules |
+| `python3 /tmp/maxbrain-stream-check.py bun run check:regen-all` | All 12 generated artifacts fresh |
+| `git diff --check` | Passed |
+
+The complete verify battery preceded the last configuration/fencing refinements;
+focused final checks cover those changes instead of repeating unrelated suites.
+
+Installed capabilities remain unchanged. Before upgrade, remaining dispatch and
+runtime qualification gaps must be closed, an artifact built from the verified
+revision, and deployment/production migration/service restart authorized.
+The new migration is registered for both supported engines but has only been
+applied to disposable tests. The feature remains off by default. Full container
+CI, admin UI, PgBouncer and live subscription acceptance remain unverified.

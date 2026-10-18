@@ -25,6 +25,7 @@ export async function runCodexSkillOptBatch(original: BatchAllOpts): Promise<Bat
   opts.skillsDir = realpathSync(opts.skillsDir);
   if (!statSync(opts.skillsDir).isDirectory()) invalid();
   const names = collectSkillsWithBenchmarks(opts.skillsDir).filter(s => !filter || filter(s));
+  if (opts.codexExpectedSkills && digest(names) !== digest(opts.codexExpectedSkills)) invalid();
   if (names.length > 20) invalid();
   const local = localOptimizerAllowance();
   const [saved] = await engine.executeRaw<{ max_attempts: number; max_turns: number; deadline: Date | string }>('SELECT max_attempts,max_turns,deadline FROM codex_subscription_runs WHERE run_id=$1', [host.runId]);

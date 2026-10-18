@@ -30,6 +30,8 @@ export interface BatchAllOpts {
   bootstrapReviewed?: boolean;
   heldOutPath?: string;
   codexPerSkill?: { maxAttempts: number; maxTurns: number };
+  /** Host-retained scheduled selection; missing members fail before publication. */
+  codexExpectedSkills?: string[];
   maxRuntimeMin?: number;
   engine: BrainEngine;
   skillsDir: string;

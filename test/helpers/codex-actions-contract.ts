@@ -24,6 +24,7 @@ import { disposePersistenceConsumer } from '../../src/core/persistence/service.t
 import { codexActionWritesContract } from './codex-action-writes-contract.ts';
 import { codexSkilloptRolloutContract } from './codex-skillopt-rollout-contract.ts';
 import { codexSkilloptBatchContract } from './codex-skillopt-batch-contract.ts';
+import { codexSkilloptCycleContract } from './codex-skillopt-cycle-contract.ts';
 import { codexSkilloptRunContract } from './codex-skillopt-run-contract.ts';
 import { codexSkilloptJobContract } from './codex-skillopt-job-contract.ts';
 import { codexSharedOptimizerContract } from './codex-shared-optimizer-contract.ts';
@@ -58,7 +59,7 @@ import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const a=process.argv.slice(2),arg=n=>a[a.indexOf(n)+1],schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8')),prompt=readFileSync(0,'utf8');
 const count=readFileSync(${JSON.stringify(capture)},'utf8').split('\\n').filter(Boolean).length;
 const values=JSON.parse(readFileSync(${JSON.stringify(control)},'utf8'));let value=values[Math.min(count,values.length-1)];
-if(value.autoOptimizer){const data=JSON.parse(JSON.parse(prompt).messages[0].content);if(schema.properties.response){const request=JSON.parse(data[0].content[0].text),improved=request.candidate_skill.includes('Always cite evidence.');value={response:{kind:'final',answer:(value.heldOutFail&&request.task.includes('held-out')?!improved:improved)?'Use evidence.':'Prefer brevity.'}};}else if(schema.properties.newBody){value={evidence_hash:schema.properties.evidence_hash.enum[0],newBody:data.skillBodyText.replace('Prefer brevity.','Always cite evidence.')}}else{value={evidence_hash:schema.properties.evidence_hash.enum[0],edits:value.noEdits?[]:[{op:'replace',target:'Prefer brevity.',replacement:value.badCandidate?String.fromCharCode(96).repeat(3)+'\\nAlways cite evidence.':'Always cite evidence.',reason:'Ground the answer.'}]};}}
+if(value.autoOptimizer){const data=JSON.parse(JSON.parse(prompt).messages[0].content);if(schema.properties.response){const request=JSON.parse(data[0].content[0].text),improved=request.candidate_skill.includes('Always cite evidence.');value={response:{kind:'final',answer:(value.heldOutFail&&request.task.includes('held-out')?!improved:improved)?'Use evidence.':'Prefer brevity.'}};}else if(schema.properties.newBody){value={evidence_hash:schema.properties.evidence_hash.enum[0],newBody:data.skillBodyText.replace('Prefer brevity.','Always cite evidence.')}}else{value={evidence_hash:schema.properties.evidence_hash.enum[0],edits:(value.noEdits||value.cycleOptimizer&&!data.skillBodyText.includes('Prefer brevity.'))?[]:[{op:'replace',target:'Prefer brevity.',replacement:value.badCandidate?String.fromCharCode(96).repeat(3)+'\\nAlways cite evidence.':'Always cite evidence.',reason:'Ground the answer.'}]};}}
 appendFileSync(${JSON.stringify(capture)},JSON.stringify({schema,prompt,argv:a})+'\\n');
 const text=JSON.stringify(value);writeFileSync(arg('--output-last-message'),text);
 for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:30,cached_input_tokens:2,output_tokens:15}}])console.log(JSON.stringify(e));
@@ -75,6 +76,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     await disposePersistenceConsumer(engine);
     await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1');
     await engine.executeRaw('DELETE FROM codex_skillopt_batch_members');
+    await engine.executeRaw('DELETE FROM codex_skillopt_cycles');
     await engine.executeRaw('DELETE FROM codex_skillopt_batches');
     await engine.executeRaw('DELETE FROM codex_skillopt_runs');
     await engine.executeRaw('DELETE FROM codex_shared_skill_optimizations');
@@ -267,6 +269,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   codexActionWritesContract({ engine: () => engine, root, claim, run, replies, calls, get, final });
   codexSkilloptRolloutContract({ engine: () => engine, replies, calls, get, final });
   codexSkilloptBatchContract({ engine: () => engine, root, replies, calls });
+  codexSkilloptCycleContract({ engine: () => engine, root, replies, calls });
   codexSkilloptRunContract({ engine: () => engine, root, replies, calls });
   codexSkilloptJobContract({ engine: () => engine, root, replies, calls });
   codexSharedOptimizerContract({ engine: () => engine, root, replies, calls });
