@@ -98,8 +98,9 @@ The [runtime qualification investigation](private-codex-runtime-qualification.md
 records local build metadata and why documented hook coverage is insufficient
 for pre-execution denial. A reproducible, credential-free Linux probe now checks
 the host boundary, pinned ELF, inode protection, PID-namespace launch,
-zero-tool request plan, hostile ancestor instructions, and rejection of forced
-shell and patch calls on each candidate host. The local 0.162.0 binary passes
+zero-tool request plan, synthetic PNG transport, hostile ancestor instructions,
+and rejection of seven forced local calls, including a shell call with a
+non-denying hook. The local 0.162.0 binary passes
 the synthetic action checks but fails production inode protection because it
 is user-owned; all-path qualification is unfinished and the production registry
 remains empty.

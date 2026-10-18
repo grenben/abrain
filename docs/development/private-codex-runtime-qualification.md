@@ -173,8 +173,12 @@ synthetic settlement result does not establish macOS behavior.
 open file descriptor inside the production Linux PID-namespace wrapper. It
 checks the host boundary, executable hash and inode protection, obtains the
 offline version, and uses disposable loopback mock providers to inspect the
-tool plan and force unadvertised `exec_command` and `apply_patch` calls. It
-places hostile config and `AGENTS.md` text in an ancestor directory, then
+tool plan and force unadvertised shell, patch, code-mode, image-read, goal,
+and MCP-resource calls. One shell case replaces the deny hook with a script
+that exits successfully without denying anything. It also sends a one-pixel
+synthetic PNG through the configured `--image` path and checks that an
+`input_image` item reaches the mock provider. It places hostile config and
+`AGENTS.md` text in an ancestor directory, then
 checks whether that instruction marker reached a provider request. A forced
 tool call tries to leave a scratch-file marker, which the probe checks before
 cleaning up. It uses an empty temporary HOME/CODEX_HOME, synthetic schema and
@@ -187,9 +191,11 @@ bun scripts/codex-runtime-boundary-probe.ts /absolute/path/to/codex gpt-6.1-sol
 
 On the 2026-10-18 Linux development host, the exact 0.162.0 ELF above passed
 the host check. Its six refusal requests advertised zero tools. When the mock
-provider forced each native call, Codex returned `unsupported call` as a
-function output; neither scratch-file marker was created. The hostile ancestor
-instruction marker did not reach any provider request. The installed ELF fails
+provider forced each of the seven local test calls, including one with a
+non-denying hook, Codex returned `unsupported call` as a function output;
+neither scratch-file marker was created. The synthetic image was present in
+the mock provider request while zero tools were advertised. The hostile
+ancestor instruction marker did not reach any provider request. The installed ELF fails
 `runtimeFileProtected` because it is owned by `devadmin`, so the complete probe
 exits 1. The JSON record preserves the digest, version, request/tool counts,
 forced-call outputs, and each result. Even a future green run is only a bounded
