@@ -84,6 +84,7 @@ export const UNRESOLVED_CONFIG_READS: readonly UnresolvedConfigRead[] = [
   { file: 'src/commands/models.ts', expr: 'overrideKey', why: 'per-task model override key from the model-tier table (models.* prefix)' },
   { file: 'src/commands/skillpack/harness.ts', expr: 'key', why: P },
   { file: 'src/core/advisor/collect-setup-smells.ts', expr: 'key', why: P },
+  { file: 'src/core/ai/private-policy.ts', expr: 'key', why: 'explicit private model pins from resolver options, tier config, and models.default' },
   { file: 'src/core/config-db-merge.ts', expr: 'key', why: 'listConfigKeys walk filtered to the cycle. and provider_chat_options. prefixes' },
   { file: 'src/core/config.ts', expr: 'key', why: P },
   { file: 'src/core/connectors/sync.ts', expr: 'key', why: P },
