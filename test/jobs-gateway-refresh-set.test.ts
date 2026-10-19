@@ -51,6 +51,12 @@ describe('#3387 — GATEWAY_REFRESH_JOB_NAMES ⇔ registerBuiltinJob call sites'
     expect(JOBS_SRC).not.toMatch(/worker\.register\(\s*'chronicle_extract'/);
   });
 
+  test('global maintenance refreshes routing before its generative cycle phases', () => {
+    expect(setNames).toContain('autopilot-global-maintenance');
+    expect(registered).toContain('autopilot-global-maintenance');
+    expect(JOBS_SRC).not.toMatch(/worker\.register\(\s*'autopilot-global-maintenance'/);
+  });
+
   test('every set entry has a registerBuiltinJob call site (no dead entries)', () => {
     const missing = setNames.filter((n) => !registered.includes(n));
     expect(missing).toEqual([]);

@@ -106,7 +106,7 @@ export const GATEWAY_REFRESH_JOB_NAMES = new Set([
   'enrich',
   'facts-absorb',
   'contextual_reindex_per_chunk',
-  'autopilot-cycle',
+  'autopilot-cycle', 'autopilot-global-maintenance',
   'synthesize',
   'patterns',
   'consolidate',
@@ -440,7 +440,7 @@ export async function registerBuiltinHandlers(
   }
 
   registerBuiltinJob(worker, engine, 'autopilot-cycle', makeAutopilotCycleHandler(engine));
-  worker.register('autopilot-global-maintenance', makeAutopilotGlobalMaintenanceHandler(engine));
+  registerBuiltinJob(worker, engine, 'autopilot-global-maintenance', makeAutopilotGlobalMaintenanceHandler(engine));
 
   // Shell handler is always registered. Runtime guard lives inside the handler
   // so claimed jobs emit a clear rejection log on workers started without
