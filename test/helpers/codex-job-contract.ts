@@ -20,15 +20,16 @@ import { scheduledCodexSubmit } from '../../src/core/minions/subscription-schedu
 import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
 import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { BudgetMeter } from '../../src/core/cycle/budget-meter.ts';
-import { runEnrichCore } from '../../src/commands/enrich.ts';
+import { parseArgs as parseEnrichArgs, runEnrich, runEnrichCore } from '../../src/commands/enrich.ts';
 import { createEphemeralBrain } from '../../src/core/ephemeral-brain.ts';
 import { withSubscriptionScratch } from '../../src/core/ai/subscription-target.ts';
 import { submitPageMutation } from '../../src/core/persistence/page-mutations.ts';
 import type { OperationContext } from '../../src/core/operations.ts';
+import { withEnrichSubscription } from '../../src/commands/enrich-subscription.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
 const root = mkdtempSync(join(tmpdir(), 'codex-jobs-'));
-const bin = join(root, 'fixture.mjs'), capture = join(root, 'calls');
+const bin = join(root, 'fixture.mjs'), capture = join(root, 'calls'), replyPath = join(root, 'reply');
 const saved = Object.fromEntries(['HOME', 'GBRAIN_HOME', 'CODEX_HOME'].map(k => [k, process.env[k]]));
 const originalFetch = globalThis.fetch;
 let engine: BrainEngine, queue: MinionQueue, unregister: () => void;
@@ -58,20 +59,21 @@ beforeAll(async () => {
 import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1];
 readFileSync(0,'utf8');appendFileSync(${JSON.stringify(capture)},'call\\n');
-const text=JSON.stringify({text:'fixture'});writeFileSync(arg('--output-last-message'),text);
+const text=JSON.stringify({text:readFileSync(${JSON.stringify(replyPath)},'utf8')});writeFileSync(arg('--output-last-message'),text);
 for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:10,cached_input_tokens:2,output_tokens:3}}])console.log(JSON.stringify(e));
 `;
-  writeFileSync(bin, script, { mode: 0o700 });
+  writeFileSync(bin, script, { mode: 0o700 }); writeFileSync(replyPath, 'fixture');
   unregister = __registerCodexFixtureForTests(bin, createHash('sha256').update(script).digest('hex'));
   ({ engine, cleanup } = await createEngine());
   await engine.initSchema(); queue = new MinionQueue(engine);
 });
 beforeEach(async () => {
+  await engine.executeRaw('DELETE FROM codex_proposal_cache');
   await engine.executeRaw('DELETE FROM codex_subscription_attempts');
   await engine.executeRaw('DELETE FROM codex_subscription_runs');
   await engine.executeRaw('DELETE FROM minion_jobs');
   await engine.executeRaw('DELETE FROM mcp_spend_reservations');
-  config(); writeFileSync(capture, ''); resetGateway(); configureGateway({ env: {} });
+  config(); writeFileSync(capture, ''); writeFileSync(replyPath, 'fixture'); resetGateway(); configureGateway({ env: {} });
 });
 afterAll(async () => {
   await engine?.disconnect(); await cleanup?.(); unregister?.(); resetGateway(); globalThis.fetch = originalFetch;
@@ -109,6 +111,71 @@ test('private enrichment core refuses a foreign model and disposable output targ
         .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
     });
   } finally { await scratch.disconnect(); }
+  expect(count()).toBe(0);
+});
+test('inline enrichment owns a durable allowance and binds retry identity', async () => {
+  const flags = { maxAttempts: '2', maxTurns: '2', deadline: grant().deadline.toISOString(), requestId: randomUUID() };
+  const identity = { sourceIds: ['default'], params: { sourceId: 'default', model: 'codex-cli:gpt-test', limit: 1 } };
+  await expect(withEnrichSubscription(engine, {}, identity, async () => call()))
+    .rejects.toMatchObject({ code: 'subscription_required' });
+  const result = await withEnrichSubscription(engine, flags, identity, async model => {
+    expect(model).toBe('codex-cli:gpt-test');
+    return call();
+  });
+  expect(result.text).toBe('fixture');
+  expect(count()).toBe(1);
+  await expect(withEnrichSubscription(engine, flags, { ...identity, params: { ...identity.params, limit: 2 } }, async () => call()))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(count()).toBe(1);
+  const [run] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+    "SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-enrich:%'");
+  expect(run).toMatchObject({ attempts: 1, accepted_turns: 1 });
+});
+test('private enrichment validates citations before accepting and publishing a page', async () => {
+  const slug = 'people/enrich-example';
+  await engine.putPage(slug, { type: 'person' as never, title: 'Enrich Example', compiled_truth: 'Stub page.', timeline: '', frontmatter: {} });
+  await engine.executeRaw(`INSERT INTO facts(source_id,entity_slug,fact,source,valid_from)
+    VALUES('default',$1,'Enrich Example led the synthetic launch in 2026.','test',now())`, [slug]);
+  const flags = { maxAttempts: '2', maxTurns: '2', deadline: grant().deadline.toISOString(), requestId: randomUUID() };
+  const identity = { sourceIds: ['default'], params: { sourceId: 'default', model: 'codex-cli:gpt-test', limit: 1, minContextChars: 20 } };
+  writeFileSync(replyPath, '## Overview\nEnrich Example led the synthetic launch in 2026.');
+  await expect(withEnrichSubscription(engine, flags, identity, () => runEnrichCore(engine, {
+    sourceId: 'default', model: 'codex-cli:gpt-test', limit: 1, minContextChars: 20,
+  }))).rejects.toMatchObject({ reason: 'invalid_output' });
+  expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.page.compiled_truth).toBe('Stub page.');
+  writeFileSync(replyPath, `## Overview\nEnrich Example led the synthetic launch in 2026. [Source: ${slug}]`);
+  const result = await withEnrichSubscription(engine, flags, identity, () => runEnrichCore(engine, {
+    sourceId: 'default', model: 'codex-cli:gpt-test', limit: 1, minContextChars: 20,
+  }));
+  expect(result.pages_enriched).toBe(1);
+  expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.page.compiled_truth).toContain(`[Source: ${slug}]`);
+  const [run] = await engine.executeRaw<{ accepted_turns: number }>(
+    "SELECT accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-enrich:%'");
+  expect(Number(run?.accepted_turns)).toBe(1);
+});
+test('direct enrich CLI carries its explicit allowance into page publication', async () => {
+  const slug = 'people/enrich-cli-example';
+  await engine.putPage(slug, { type: 'person' as never, title: 'Enrich CLI Example', compiled_truth: 'Stub page.', timeline: '', frontmatter: {} });
+  await engine.executeRaw(`INSERT INTO facts(source_id,entity_slug,fact,source,valid_from)
+    VALUES('default',$1,'Enrich CLI Example led a synthetic project.','test',now())`, [slug]);
+  writeFileSync(replyPath, `## Overview\nEnrich CLI Example led a synthetic project. [Source: ${slug}]`);
+  const flags = ['--source', 'default', '--model', 'codex-cli:gpt-test', '--limit', '1', '--min-context', '20',
+    '--max-usd', '0.01', '--yes', '--json', '--codex-max-attempts', '1', '--codex-max-turns', '1',
+    '--codex-deadline', grant().deadline.toISOString(), '--codex-request-id', randomUUID()];
+  const log = spyOn(console, 'log').mockImplementation(() => {});
+  try { await runEnrich(engine, flags); } finally { log.mockRestore(); }
+  expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.page.compiled_truth).toContain(`[Source: ${slug}]`);
+  expect(count()).toBe(1);
+});
+test('direct enrich CLI refuses missing or duplicated subscription flags before work', async () => {
+  await expect(runEnrich(engine, ['--source', 'default', '--yes']))
+    .rejects.toMatchObject({ code: 'subscription_required' });
+  const backgroundEngine = Object.assign(Object.create(engine) as BrainEngine, { kind: 'postgres' as const });
+  await expect(runEnrich(backgroundEngine, ['--background', '--source', 'default', '--yes',
+    '--codex-max-attempts', '1', '--codex-max-turns', '1', '--codex-deadline', grant().deadline.toISOString()]))
+    .rejects.toThrow('Private Codex --background enrichment is not supported yet.');
+  expect(parseEnrichArgs(['--codex-max-attempts', '2', '--codex-max-attempts', '3']).error)
+    .toContain('requires one space-separated value');
   expect(count()).toBe(0);
 });
 test('a real worker carries the grant through gateway dispatch and fenced completion', async () => {

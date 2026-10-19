@@ -64,6 +64,11 @@ import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError } from
 import { codexSubscriptionContext } from '../core/ai/subscription-context.ts';
 import { assertSubscriptionTarget } from '../core/ai/subscription-target.ts';
 import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
+import { withEnrichSubscription, type EnrichAllowanceFlags } from './enrich-subscription.ts';
+import { cachedCodexProposal, withCodexProposalCache } from '../core/ai/codex-proposal-cache.ts';
+import { CodexProposalError } from '../core/ai/providers/codex-contract.ts';
+import { digest } from '../core/persistence/digest.ts';
+import { usageError } from '../cli/cli-error.ts';
 import { parseWorkers, resolveWorkersWithClamp } from '../core/sync-concurrency.ts';
 import { withRefreshingLock, LockUnavailableError } from '../core/db-lock.ts';
 import {
@@ -121,6 +126,9 @@ export type SynthesizeFn = (input: {
   user: string;
   model: string;
   abortSignal?: AbortSignal;
+  /** Private proposal validation and replay bind citations to retrieved evidence. */
+  allowedSources?: string[];
+  bindingHash?: string;
 }) => Promise<string>;
 
 /** Strict per-source core opts. Multi-source iteration is the caller's job. */
@@ -234,7 +242,25 @@ function completedKey(sourceId: string, slug: string): string {
 // Default synthesis via the gateway.
 // ---------------------------------------------------------------------------
 
-const defaultSynthesize: SynthesizeFn = async ({ system, user, model, abortSignal }) => {
+const defaultSynthesize: SynthesizeFn = async ({ system, user, model, abortSignal, allowedSources, bindingHash }) => {
+  if (readPrivateCodexConfig()) {
+    if (!allowedSources || !bindingHash) throw new CodexProposalError('invalid_input');
+    const allowed = new Set(allowedSources);
+    const proposal = await withCodexProposalCache({ namespace: 'enrich-page-v1', bindingHash }, () => cachedCodexProposal({
+      model, system, messages: [{ role: 'user', content: user }], maxTokens: 2048, abortSignal,
+      responseSchema: { name: 'enrich-page-v1', schema: { type: 'object', properties: { text: { type: 'string' } },
+        required: ['text'], additionalProperties: false }, validateCodexProposal: raw => {
+        const text = (JSON.parse(raw) as { text: string }).text;
+        if (text.trim() === 'SKIP') return;
+        const parsed = parseSynthesis(text);
+        const citations = [...parsed.body.matchAll(/\[Source:\s*([^\]]+)\]/g)].map(match => match[1]!.trim());
+        if (parsed.skip || !parsed.body || citations.length === 0 || citations.some(source => !allowed.has(source))) {
+          throw new CodexProposalError('invalid_output');
+        }
+      } },
+    }));
+    return (JSON.parse(proposal.text) as { text: string }).text;
+  }
   const res = await chat({
     model,
     system,
@@ -424,7 +450,11 @@ async function enrichOneLocked(ctx: EnrichOneCtx, candidate: EnrichCandidate): P
   // cap. That is the documented best-effort posture (overshoot ~1 call/worker
   // under --workers > 1; pin --workers 1 for a hard ceiling). A true in-flight
   // cancel would require a shared runSlidingPool API change (used by embed/eval).
-  const raw = await ctx.synthesizeFn({ system, user, model: ctx.model, abortSignal: ctx.signal });
+  const scope = codexSubscriptionContext();
+  const raw = await ctx.synthesizeFn({ system, user, model: ctx.model, abortSignal: ctx.signal,
+    allowedSources: evidence.map(item => item.source_slug),
+    bindingHash: scope ? digest({ protocol: 'enrich-page-v1', runId: scope.runId, sourceId, slug,
+      revision: snapshot.revision, model: ctx.model, evidence }) : undefined });
   const parsed = parseSynthesis(raw);
   if (parsed.skip || !parsed.body.trim()) {
     ctx.result.pages_skipped_insufficient++;
@@ -609,7 +639,8 @@ export async function runEnrichCore(
       workers: privatePolicy ? 1 : workers,
       signal,
       failureLabel: (c) => c.slug,
-      onError: err => privatePolicy && (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError) ? 'abort' : 'continue',
+      onError: err => privatePolicy && (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError ||
+        err instanceof CodexProposalError) ? 'abort' : 'continue',
       onItem: async (c) => {
         await enrichOne(oneCtx, c);
         // Periodic checkpoint flush so a crash mid-run doesn't lose progress.
@@ -625,14 +656,16 @@ export async function runEnrichCore(
       // runEnrichCore's catch, else resume re-charges them (and SKIP pages stay
       // thin). `done` is in scope here; it isn't in the outer catch.
       if ((err instanceof BudgetExhausted || isMustAbortError(err) ||
-        privatePolicy && (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError)) && !dryRun) {
+        privatePolicy && (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError ||
+          err instanceof CodexProposalError)) && !dryRun) {
         await recordCompleted(engine, cpKey, [...done]);
       }
       throw err;
     }
 
     const admissionFailure = privatePolicy && pool.failures.find(f =>
-      f.error instanceof SubscriptionAdmissionError || f.error instanceof PrivateRoutingError);
+      f.error instanceof SubscriptionAdmissionError || f.error instanceof PrivateRoutingError ||
+      f.error instanceof CodexProposalError);
     if (admissionFailure) {
       await recordCompleted(engine, cpKey, [...done]);
       throw admissionFailure.error;
@@ -741,6 +774,10 @@ interface ParsedArgs {
   force?: boolean;
   yes?: boolean;
   json?: boolean;
+  codexMaxAttempts?: string;
+  codexMaxTurns?: string;
+  codexDeadline?: string;
+  codexRequestId?: string;
   help?: boolean;
   error?: string;
 }
@@ -778,6 +815,17 @@ export function parseArgs(args: string[]): ParsedArgs {
     if (a === '--json') { out.json = true; continue; }
     if (a === '--source' || a === '--source-id') { out.sourceId = args[++i]; continue; }
     if (a === '--model') { out.model = args[++i]; continue; }
+    const allowanceField = ({ '--codex-max-attempts': 'codexMaxAttempts', '--codex-max-turns': 'codexMaxTurns',
+      '--codex-deadline': 'codexDeadline', '--codex-request-id': 'codexRequestId' } as const)[a as '--codex-max-attempts'];
+    if (allowanceField) {
+      const value = args[++i];
+      if (out[allowanceField] !== undefined || !value || value.startsWith('--')) {
+        out.error = `${a} requires one space-separated value`;
+        return out;
+      }
+      out[allowanceField] = value;
+      continue;
+    }
     if (a === '--order') {
       const v = args[++i] as EnrichOrder;
       if (!ENRICH_ORDERS.includes(v)) {
@@ -856,10 +904,15 @@ Options:
   --workers <K>          Parallel page workers. Default 1. PGLite clamps to 1.
   --model <provider:id>  Chat model. Default: configured chat model.
                          For cheap bulk: --model anthropic:claude-haiku-4-5.
+  --codex-max-attempts <N>  Private Codex subscription attempt limit.
+  --codex-max-turns <N>     Private Codex accepted-turn limit.
+  --codex-deadline <UTC>   Absolute private Codex deadline, within 24 hours.
+  --codex-request-id <UUID> Reuse this ID to retry the same private request.
   --max-usd <FLOAT>      Cost cap (USD). Default ${DEFAULT_MAX_COST_USD}.
                          BEST-EFFORT under --workers > 1: can overshoot by up to
                          ~one in-flight call per worker. Pin --workers 1 for an
-                         exact ceiling.
+                         exact ceiling. In private Codex mode this independently
+                         caps paid embedding/rerank work, not subscription turns.
   --min-context <N>      Min retrieved-context chars to attempt synthesis.
                          Below it the page is skipped (insufficient context),
                          never fabricated. Default ${MIN_CONTEXT_CHARS}.
@@ -993,12 +1046,32 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
     console.error(HELP);
     process.exit(1);
   }
+  const privatePolicy = readPrivateCodexConfig();
+  const grantFlags: EnrichAllowanceFlags = { maxAttempts: parsed.codexMaxAttempts, maxTurns: parsed.codexMaxTurns,
+    deadline: parsed.codexDeadline, requestId: parsed.codexRequestId };
+  if ((!privatePolicy || parsed.dryRun) && Object.values(grantFlags).some(value => value !== undefined)) {
+    throw usageError('Codex allowance flags require private, non-dry-run enrichment.', 'Remove the flags or enable strict private Codex.');
+  }
+  if (privatePolicy && background && !parsed.dryRun) {
+    throw usageError('Private Codex --background enrichment is not supported yet.',
+      'Run enrichment inline with an explicit Codex allowance.');
+  }
+  if (privatePolicy && !parsed.dryRun && !background && !codexSubscriptionContext() &&
+      (!grantFlags.maxAttempts || !grantFlags.maxTurns || !grantFlags.deadline)) {
+    throw new SubscriptionAdmissionError('subscription_required');
+  }
+  if (privatePolicy && !parsed.dryRun && parsed.maxCostUsd === Infinity) {
+    throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
+  }
+  if (privatePolicy && !parsed.dryRun) {
+    await resolvePrivateModel(engine, { cliFlag: parsed.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, privatePolicy);
+  }
 
   // Chat gateway is required for non-dry-run inline work (the worker needs it
   // for background jobs). Recover a cold singleton before reporting an
   // availability error (#2590).
-  if (!background && !parsed.dryRun && !isAvailable('chat')) configureGatewayIfUninitialized();
-  if (!background && !parsed.dryRun && !isAvailable('chat')) {
+  if (!background && !parsed.dryRun && !privatePolicy && !isAvailable('chat')) configureGatewayIfUninitialized();
+  if (!background && !parsed.dryRun && !privatePolicy && !isAvailable('chat')) {
     console.error(
       'Chat gateway unavailable. Set a provider key (OPENAI_API_KEY or ANTHROPIC_API_KEY — ' +
       'chat routes to whichever is present), or configure a model explicitly ' +
@@ -1033,8 +1106,12 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
       command: 'enrich', effects: ['paid'], actor: 'agent',
       what: `Enrich up to ${limit} page(s) per source across ${sourceIds.length} source(s)${background ? ' as background jobs' : ''}`,
       why: 'Fills thin person and company pages with model-written summaries from the brain\'s own evidence.',
-      risk: `Spends about $${estUsd.toFixed(2)} with the chat model provider; pages gain model-written text (each write is attributed and can be reviewed).${background ? ' Without --max-usd, a model with no known price runs unmetered under the derived or default cap.' : ''}`,
-      user_message: `Enrich up to ${limit} thin page(s) per source across ${sourceIds.length} source(s) for about $${estUsd.toFixed(2)}?`,
+      risk: privatePolicy
+        ? `Codex uses an explicit subscription allowance with unknown monetary cost. Paid embedding/rerank work is separately capped at about $${estUsd.toFixed(2)}; pages gain attributed model-written text.`
+        : `Spends about $${estUsd.toFixed(2)} with the chat model provider; pages gain model-written text (each write is attributed and can be reviewed).${background ? ' Without --max-usd, a model with no known price runs unmetered under the derived or default cap.' : ''}`,
+      user_message: privatePolicy
+        ? `Enrich up to ${limit} thin page(s) per source across ${sourceIds.length} source(s) under the Codex allowance, with about $${estUsd.toFixed(2)} of paid retrieval?`
+        : `Enrich up to ${limit} thin page(s) per source across ${sourceIds.length} source(s) for about $${estUsd.toFixed(2)}?`,
       argv: ['gbrain', 'enrich', ...base, ...(background && parsed.maxCostUsd === undefined ? ['--max-usd', derivedCapUsd(estUsd).toFixed(2)] : [])],
       preview_argv: ['gbrain', 'enrich', ...base.filter(a => a !== '--json' && a !== '--background' && a !== '--follow'), '--dry-run'],
       est_usd: estUsd,
@@ -1081,40 +1158,44 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
   let totalSpent = 0;
   let anyBudgetExhausted = false;
   const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
-  progress.start('enrich', sourceIds.length);
 
-  try {
-    for (const sourceId of sourceIds) {
-      const r = await runEnrichCore(engine, {
-        sourceId,
-        types: parsed.types,
-        order: parsed.order,
-        limit: parsed.limit,
-        workers: parsed.workers,
-        model: parsed.model,
-        // uncapped (off / tokenmax) → Infinity sentinel; runEnrichCore maps it
-        // to "no BudgetTracker ceiling".
-        maxCostUsd,
-        minContextChars: parsed.minContextChars,
-        thinThreshold: parsed.thinThreshold,
-        reenrichAfterMs: parsed.reenrichAfterMs,
-        dryRun: parsed.dryRun,
-        force: parsed.force,
-      });
-      addInto(aggregate, r);
-      if (r.spent_usd) totalSpent += r.spent_usd;
-      if (r.budget_exhausted) anyBudgetExhausted = true;
-      progress.tick(1, `${sourceId}: ${r.pages_enriched} enriched`);
+  await withEnrichSubscription(engine, grantFlags, { sourceIds, params: buildJobParams(args),
+    auxiliaryMaxUsd: maxCostUsd }, async model => {
+    progress.start('enrich', sourceIds.length);
+    try {
+      for (const sourceId of sourceIds) {
+        const r = await runEnrichCore(engine, {
+          sourceId,
+          types: parsed.types,
+          order: parsed.order,
+          limit: parsed.limit,
+          workers: parsed.workers,
+          model,
+          // uncapped (off / tokenmax) → Infinity sentinel; runEnrichCore maps it
+          // to "no BudgetTracker ceiling".
+          maxCostUsd,
+          minContextChars: parsed.minContextChars,
+          thinThreshold: parsed.thinThreshold,
+          reenrichAfterMs: parsed.reenrichAfterMs,
+          dryRun: parsed.dryRun,
+          force: parsed.force,
+        });
+        addInto(aggregate, r);
+        if (r.spent_usd) totalSpent += r.spent_usd;
+        if (r.budget_exhausted) anyBudgetExhausted = true;
+        progress.tick(1, `${sourceId}: ${r.pages_enriched} enriched`);
+      }
+    } finally {
+      progress.finish();
     }
-  } finally {
-    progress.finish();
-  }
+  }, !!parsed.dryRun);
 
   if (parsed.json) {
     console.log(JSON.stringify({
       schema_version: 1,
       ...aggregate,
       spent_usd: totalSpent,
+      ...(privatePolicy ? { billing: 'subscription', subscription_cost_usd: null } : {}),
       budget_exhausted: anyBudgetExhausted,
       sources: sourceIds.length,
       dry_run: !!parsed.dryRun,
@@ -1131,7 +1212,8 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
       `\nDone: enriched ${aggregate.pages_enriched} page(s) ` +
       `(${aggregate.pages_skipped_insufficient} skipped insufficient, ` +
       `${aggregate.pages_skipped_lock} lock-busy, ${aggregate.pages_failed} failed) ` +
-      `across ${sourceIds.length} source(s). Spent ~$${totalSpent.toFixed(4)}.`,
+      `across ${sourceIds.length} source(s). ${privatePolicy ? 'Priced API spend' : 'Spent'} ~$${totalSpent.toFixed(4)}.` +
+      (privatePolicy ? ' Codex subscription cost is not priced here.' : ''),
     );
     if (anyBudgetExhausted) {
       console.log(
