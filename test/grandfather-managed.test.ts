@@ -85,6 +85,50 @@ test('managed grandfathering publishes metadata without changing vectors or spen
 test.skipIf(!process.env.DATABASE_URL)('Postgres managed grandfathering preserves canonical bytes, projection and derived state',
   () => preservesManagedPage(process.env.DATABASE_URL), 120_000);
 
+async function stampsAlreadyPublishedFile(databaseUrl?: string) {
+  return fixture(async ({ engine, slug, root }) => {
+    const before = (await engine.readPageSnapshot(slug, { sourceId: 'default' }))!;
+    const path = join(root, `${slug}.md`);
+    const stamped = serializePageToMarkdown({ ...before.page,
+      frontmatter: { ...before.page.frontmatter, validate: false } }, before.tags);
+    writeFileSync(path, stamped);
+    expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.page.frontmatter.validate).toBeUndefined();
+    expect(await grandfatherCanonicalPage(engine, { id: before.page.id, source_id: 'default', slug,
+      source_incarnation: before.sourceIncarnation }, () => {})).toMatchObject({ status: 'touched' });
+    expect(readFileSync(path, 'utf8')).toBe(stamped);
+    expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.page.frontmatter.validate).toBe(false);
+    expect(await engine.executeRaw(`SELECT outcome->'write_through'->>'skipped' AS skipped FROM persistence_requests
+      WHERE intent->>'kind'='managed_grandfather' ORDER BY created_at DESC LIMIT 1`))
+      .toEqual([{ skipped: 'grandfather_file_already_stamped' }]);
+  }, { databaseUrl });
+}
+
+test('managed grandfathering stamps the database when the file already carries exactly its validate flag',
+  () => stampsAlreadyPublishedFile(), 120_000);
+test.skipIf(!process.env.DATABASE_URL)('Postgres grandfathering accepts an already published validate stamp without rewriting its file',
+  () => stampsAlreadyPublishedFile(process.env.DATABASE_URL), 120_000);
+
+async function stampsWithScannerMetadataDrift(databaseUrl?: string) {
+  return fixture(async ({ engine, slug, root }) => {
+    const before = (await engine.readPageSnapshot(slug, { sourceId: 'default' }))!;
+    const path = join(root, `${slug}.md`);
+    const scanMarked = serializePageToMarkdown({ ...before.page,
+      frontmatter: { ...before.page.frontmatter, validate: false, atoms_scan_hash: 'stale-scan-state' } }, before.tags);
+    writeFileSync(path, scanMarked);
+    expect(await grandfatherCanonicalPage(engine, { id: before.page.id, source_id: 'default', slug,
+      source_incarnation: before.sourceIncarnation }, () => {})).toMatchObject({ status: 'touched' });
+    expect(readFileSync(path, 'utf8')).toBe(scanMarked);
+    expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.page.frontmatter.validate).toBe(false);
+    expect(await engine.executeRaw(`SELECT outcome->'write_through'->>'skipped' AS skipped FROM persistence_requests
+      WHERE intent->>'kind'='managed_grandfather' ORDER BY created_at DESC LIMIT 1`))
+      .toEqual([{ skipped: 'grandfather_scan_metadata_drift' }]);
+  }, { databaseUrl });
+}
+test('managed grandfathering leaves a scanner-metadata-only file drift untouched',
+  () => stampsWithScannerMetadataDrift(), 120_000);
+test.skipIf(!process.env.DATABASE_URL)('Postgres grandfathering preserves a scanner-metadata-only file drift',
+  () => stampsWithScannerMetadataDrift(process.env.DATABASE_URL), 120_000);
+
 test('a concurrent explicit validation choice is not overwritten by grandfathering', () => fixture(async ({ engine, ctx, slug, root }) => {
   const before = (await engine.readPageSnapshot(slug, { sourceId: 'default' }))!;
   await expect(grandfatherCanonicalPage(engine, { id: before.page.id, source_id: 'default', slug, source_incarnation: before.sourceIncarnation }, async () => {
@@ -101,6 +145,18 @@ test('human file edits abort managed grandfathering without replacing either ver
   await expect(grandfatherCanonicalPage(engine, { id: before.page.id, source_id: 'default', slug, source_incarnation: before.sourceIncarnation }, () => {
     writeFileSync(path, changed);
   })).rejects.toMatchObject({ code: 'source_changed' });
+  expect(readFileSync(path, 'utf8')).toBe(changed);
+  expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.revision).toBe(before.revision);
+}), 120_000);
+
+test('an existing validate stamp does not hide a concurrent human body edit', () => fixture(async ({ engine, slug, root }) => {
+  const before = (await engine.readPageSnapshot(slug, { sourceId: 'default' }))!;
+  const path = join(root, `${slug}.md`);
+  const changed = serializePageToMarkdown({ ...before.page,
+    frontmatter: { ...before.page.frontmatter, validate: false } }, before.tags) + '\nUnpublished human edit.\n';
+  await expect(grandfatherCanonicalPage(engine, { id: before.page.id, source_id: 'default', slug,
+    source_incarnation: before.sourceIncarnation }, () => { writeFileSync(path, changed); }))
+    .rejects.toMatchObject({ code: 'source_changed' });
   expect(readFileSync(path, 'utf8')).toBe(changed);
   expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.revision).toBe(before.revision);
 }), 120_000);

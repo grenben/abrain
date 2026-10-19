@@ -114,12 +114,18 @@ export async function prepareGrandfatherMutation(engine: BrainEngine, row: Write
   }
   const frontmatter = { ...snapshot.page.frontmatter, validate: false };
   const hash = contentHash({ ...snapshot.page, frontmatter, tags: snapshot.tags });
-  const file = await prepareFileTarget(engine, row, snapshot, serializePageToMarkdown({ ...snapshot.page, frontmatter }, snapshot.tags));
+  let fallbackReason: 'grandfather_file_already_stamped' | 'grandfather_scan_metadata_drift' | undefined;
+  const file = await prepareFileTarget(engine, row, snapshot, serializePageToMarkdown({ ...snapshot.page, frontmatter }, snapshot.tags), undefined,
+    { grandfatherMetadata: { onMatch: reason => {
+      fallbackReason = reason === 'already_stamped' ? 'grandfather_file_already_stamped' : 'grandfather_scan_metadata_drift';
+    } } });
   if (file && !['.md', '.mdx'].includes(extname(file.path).toLowerCase())) {
     throw opError('invalid_params', 'Non-Markdown artifacts cannot be grandfathered by rewriting their bytes.',
       `${row.slug} in ${row.source_id} is backed by a non-Markdown file, so grandfathering skips it rather than rewrite its bytes; no action is needed.`);
   }
-  return { observedRevision: snapshot.revision, file, ...databaseOnlyPublication(row, file), deferEmbedding: true, apply: async tx => {
+  return { observedRevision: snapshot.revision, file,
+    ...(fallbackReason ? { databaseOnlyReason: fallbackReason } : databaseOnlyPublication(row, file)),
+    deferEmbedding: true, apply: async tx => {
     await tx.createVersion(row.slug, { sourceId: row.source_id });
     // A mechanical validate:false stamp authors nothing: the page keeps its trust tier (#5575).
     const updated = await withTrustKeep(tx, ['pages'], () => tx.executeRaw(`UPDATE pages SET frontmatter=jsonb_set(COALESCE(frontmatter,'{}'::jsonb),'{validate}','false'::jsonb),content_hash=$4

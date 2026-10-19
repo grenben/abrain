@@ -81,6 +81,7 @@ import { pageFencesNormalized } from '../fence-repair/report.ts';
 import { parseFenceRepairReceipt } from '../fence-repair/receipt.ts';
 import { fenceRepairCommit } from './effect-model.ts';
 import { withoutSafetyAssessments } from './reconcile-safety.ts';
+import { RECONCILE_SCAN_KEYS } from './reconcile-merge.ts';
 import { preparePagePurge, purgePageInTransaction, type PreparedPagePurge } from './page-purge.ts';
 import { withTrustKeep } from './context.ts';
 import { isFenceEditWrite, pageGateTrust, pageWriteTrust, recordAgentPageLowering, stampPageTrustMarker, storedPageTier } from '../trust/page-write.ts';
@@ -179,14 +180,19 @@ export function readCanonicalAsImported(bytes: string, sourcePath: string): { co
  * on an unmanaged brain passes `inferFrontmatter: false`).
  */
 export async function fileMatchesSnapshot(engine: BrainEngine, slug: string, bytes: string, snapshot: PageSnapshot,
-  sourcePath: string | (() => Promise<string>), activePack?: ParseOpts['activePack']): Promise<boolean> {
-  const expected = digest(canonical({ ...snapshot.page, frontmatter: withoutSafetyAssessments(snapshot.page.frontmatter ?? {}) }, snapshot.tags));
+  sourcePath: string | (() => Promise<string>), activePack?: ParseOpts['activePack'], ignoreScanKeys = false): Promise<boolean> {
+  const comparisonFrontmatter = (frontmatter: Record<string, unknown>) => {
+    const result = withoutSafetyAssessments(frontmatter);
+    if (ignoreScanKeys) for (const key of RECONCILE_SCAN_KEYS) delete result[key];
+    return result;
+  };
+  const expected = digest(canonical({ ...snapshot.page, frontmatter: comparisonFrontmatter(snapshot.page.frontmatter ?? {}) }, snapshot.tags));
   const matches = async (content: string, inferred: boolean) => {
     const parsed = parseMarkdown(content, slug, { activePack });
     const type = importedFileType(parsed, snapshot.page, inferred);
     // Withdrawal overlays intentionally precede physical mirroring. The ledger
     // is applied by the import preparation and cannot be undone by this check.
-    const actual = canonical({ ...parsed, frontmatter: withoutSafetyAssessments(parsed.frontmatter), type, ...await overlayCanonicalBodies(engine.executeRaw.bind(engine),
+    const actual = canonical({ ...parsed, frontmatter: comparisonFrontmatter(parsed.frontmatter), type, ...await overlayCanonicalBodies(engine.executeRaw.bind(engine),
       parsed.compiled_truth, parsed.timeline ?? '', snapshot.withdrawals, { sourceId: snapshot.page.source_id, marker: snapshot.globalPurges }) }, parsed.tags);
     return digest(actual) === expected;
   };
@@ -220,7 +226,7 @@ function snapshotLedger(snapshot: PageSnapshot): BodyLedger {
  * that applies cannot be overlaid streamed, so it refuses (`page_body_segmented`) instead of reading as drift.
  */
 async function segmentedFileMatches(engine: BrainEngine, slug: string, bytes: ByteSource, snapshot: PageSnapshot,
-  sourcePath: () => Promise<string>, activePack?: ParseOpts['activePack'], between?: () => Promise<void>): Promise<boolean> {
+  sourcePath: () => Promise<string>, activePack?: ParseOpts['activePack'], between?: () => Promise<void>, ignoreScanKeys = false): Promise<boolean> {
   const ledger = snapshotLedger(snapshot);
   let stored: RegionDigests | undefined;
   const matches = async (reading: FileReading, inferred: boolean) => {
@@ -237,8 +243,13 @@ async function segmentedFileMatches(engine: BrainEngine, slug: string, bytes: By
     const parsed = { ...file.parsed, compiled_truth: fileDigests.truth, timeline: fileDigests.timeline };
     const type = importedFileType(parsed, snapshot.page, inferred);
     stored ??= await storedBodyDigests(engine, Number(snapshot.page.id), ledger, between);
-    return digest(canonical({ ...parsed, frontmatter: withoutSafetyAssessments(parsed.frontmatter), type }, parsed.tags))
-      === digest(canonical({ ...withoutBody(snapshot.page), frontmatter: withoutSafetyAssessments(snapshot.page.frontmatter ?? {}), compiled_truth: stored.truth, timeline: stored.timeline }, snapshot.tags));
+    const comparisonFrontmatter = (frontmatter: Record<string, unknown>) => {
+      const result = withoutSafetyAssessments(frontmatter);
+      if (ignoreScanKeys) for (const key of RECONCILE_SCAN_KEYS) delete result[key];
+      return result;
+    };
+    return digest(canonical({ ...parsed, frontmatter: comparisonFrontmatter(parsed.frontmatter), type }, parsed.tags))
+      === digest(canonical({ ...withoutBody(snapshot.page), frontmatter: comparisonFrontmatter(snapshot.page.frontmatter ?? {}), compiled_truth: stored.truth, timeline: stored.timeline }, snapshot.tags));
   };
   const raw = await matches({ prefix: new Uint8Array(0), skip: 0 }, false);
   if (raw === true) return true;
@@ -254,6 +265,8 @@ export async function prepareFileTarget(engine: BrainEngine, row: Pick<WriteRequ
     excludeTombstone?: { patterns: string[]; onExcluded: (path: string) => void };
     /** #6517: a delete whose file another live page of the source records owns no file; the census target and claimants are reported. */
     sharedOrigin?: { onShared: (shared: SharedOrigin) => void };
+    /** v0.13.1 only: the file differs solely by its validate stamp or reconcilable scanner state. */
+    grandfatherMetadata?: { onMatch: (reason: 'already_stamped' | 'scan_metadata_drift') => void };
     /** Runs between the pieces of a segmented page's file comparison (an effect's claim renewal). */
     between?: () => Promise<void> } = {}): Promise<PreparedMutation['file']> {
   if (!row.worktree_id) return undefined;
@@ -337,9 +350,12 @@ async function compareFileTarget(engine: BrainEngine, row: Pick<WriteRequest, 's
   // Unknown local edits require explicit import/recovery, even for force writes.
   if (before && snapshot) {
     const importPath = async () => scannerSourcePath(root, path, mode ?? await scannerSlugRootMode(engine, row.source_id, root));
+    const fileMatches = (expected: PageSnapshot, ignoreScanKeys = false) => bodyUnread(expected.page)
+      ? segmentedFileMatches(engine, row.slug, before, expected, importPath, options.activePack, options.between, ignoreScanKeys)
+      : before.length <= PUSH_SCAN_MAX_FILE_BYTES && fileMatchesSnapshot(engine, row.slug,
+        (before instanceof FileBytes ? Buffer.from(before.subarray()) : before).toString('utf8'), expected, importPath, options.activePack, ignoreScanKeys);
     // An inline page's file over the push-scan cap cannot hold its body (at most 24 MiB): drift, never read whole.
-    const matches = bodyUnread(snapshot.page) ? await segmentedFileMatches(engine, row.slug, before, snapshot, importPath, options.activePack, options.between)
-      : before.length <= PUSH_SCAN_MAX_FILE_BYTES && await fileMatchesSnapshot(engine, row.slug, (before instanceof FileBytes ? Buffer.from(before.subarray()) : before).toString('utf8'), snapshot, importPath, options.activePack);
+    const matches = await fileMatches(snapshot);
     // #6986: a declared db_only page or a never-filed derive-phase page (atoms/, ...) is canonical in the database, so the
     // file at its path is a cache. A cache that holds a state the database already had (the live page or a recent
     // version), left behind by a writer that skipped it, is refreshed by this write under the bytes compared; a cache
@@ -347,6 +363,18 @@ async function compareFileTarget(engine: BrainEngine, row: Pick<WriteRequest, 's
     const staleCache = !matches && before instanceof Buffer && publishesDatabaseOnly(root, row.slug, snapshot)
       && await replaceableFile(engine, row.source_id, row.slug, path).then(check => check.ok && check.expectedFileBytes === before.toString('utf8'));
     if (!matches && !staleCache) {
+      if (options.grandfatherMetadata && !Object.hasOwn(snapshot.page.frontmatter ?? {}, 'validate')) {
+        const stamped: PageSnapshot = { ...snapshot, page: { ...snapshot.page,
+          frontmatter: { ...snapshot.page.frontmatter, validate: false } } };
+        if (await fileMatches(stamped)) {
+          options.grandfatherMetadata.onMatch('already_stamped');
+          return undefined;
+        }
+        if (await fileMatches(stamped, true)) {
+          options.grandfatherMetadata.onMatch('scan_metadata_drift');
+          return undefined;
+        }
+      }
       const held = await heldFileRefusal(engine, row, root, path, 'drift', options.remote === true);
       if (held) throw held;
       // #6394: a page that never recorded its file reconciles against the file at its slug path only when adopted explicitly.
