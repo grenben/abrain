@@ -4,6 +4,7 @@ import { traceSqlOptions } from './sql-trace.ts';
 import { GBrainError, type EngineConfig } from './types.ts';
 import { SCHEMA_SQL } from './schema-embedded.generated.ts';
 import { applyPostgresForwardReferenceBootstrap } from './engine-sql/bootstrap.ts';
+import { acquireInitSchemaAdvisoryLock } from './postgres-engine/init-schema-lock.ts';
 import type { BrainEngine } from './engine.ts';
 import { verifySchema } from './schema-verify.ts';
 import { isConnectTimeoutError, isRetryableConnError } from './retry-matcher.ts';
@@ -571,21 +572,21 @@ export async function disconnect(): Promise<void> {
 }
 
 export async function initSchema(): Promise<void> {
-  const conn = getConnection();
-  // Advisory lock prevents concurrent initSchema() calls from deadlocking
-  // Lock-census (PR6 D5): INTENTIONALLY brain-global (session lock, fixed key 42) — schema replay mutates the whole database, not one source.
-  await conn`SELECT pg_advisory_lock(42)`;
+  const conn = await getConnection().reserve();
   try {
-    // #4477: run the same forward-reference bootstrap as
-    // PostgresEngine.initSchema BEFORE replaying the schema blob. Without
-    // it, an older brain whose tables predate the blob's forward-referenced
-    // columns (e.g. pages.deleted_at ← pages_deleted_at_purge_idx) wedges
-    // on the blob's CREATE INDEX. Idempotent single-probe no-op on fresh
-    // installs and modern brains.
-    await applyPostgresForwardReferenceBootstrap(conn);
-    await conn.unsafe(SCHEMA_SQL);
+    // This brain-global, session-scoped lock must be acquired, used and
+    // released on the same backend. A pooled query can leak key 42 and wedge
+    // later CLI init/import calls even after this function returns.
+    await acquireInitSchemaAdvisoryLock((sql) => conn.unsafe(sql));
+    try {
+      // #4477: patch forward references before replaying the schema blob.
+      await applyPostgresForwardReferenceBootstrap(conn);
+      await conn.unsafe(SCHEMA_SQL);
+    } finally {
+      await conn`SELECT pg_advisory_unlock(42)`;
+    }
   } finally {
-    await conn`SELECT pg_advisory_unlock(42)`;
+    conn.release();
   }
 }
 

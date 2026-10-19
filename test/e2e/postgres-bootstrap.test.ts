@@ -23,6 +23,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import postgres from '#postgres';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
 import { LATEST_VERSION } from '../../src/core/migrate.ts';
 import { readFactsEmbeddingDim } from '../../src/core/embedding-dim-check.ts';
@@ -35,11 +36,13 @@ const skip = !DATABASE_URL;
 describe.skipIf(skip)('PostgresEngine forward-reference bootstrap (E2E)', () => {
   let engine: PostgresEngine;
   let close: (() => Promise<void>) | undefined;
+  let isolatedUrl: string;
 
   beforeAll(async () => {
     const fixture = await isolatedPersistencePostgres(DATABASE_URL!, 'module');
     engine = fixture.engine;
     close = fixture.close;
+    isolatedUrl = fixture.databaseUrl;
   }, 30_000);
 
   afterAll(async () => {
@@ -405,6 +408,19 @@ describe.skipIf(skip)('PostgresEngine forward-reference bootstrap (E2E)', () => 
       WHERE tablename = 'pages' AND indexname = 'pages_deleted_at_purge_idx'
     `;
     expect(idx).toHaveLength(1);
+  }, 60_000);
+
+  test('standalone db.initSchema releases its session lock for another connection', async () => {
+    const db = await import('../../src/core/db.ts');
+    for (let i = 0; i < 3; i++) await db.initSchema();
+    const observer = postgres(isolatedUrl, { max: 1, prepare: false });
+    try {
+      const [row] = await observer.unsafe<{ acquired: boolean }[]>('SELECT pg_try_advisory_lock(42) AS acquired');
+      expect(row.acquired).toBe(true);
+      if (row.acquired) await observer.unsafe('SELECT pg_advisory_unlock(42)');
+    } finally {
+      await observer.end();
+    }
   }, 60_000);
 
   // Migration v120 — schema-lint hardening (#1647 / #171). Postgres-only
