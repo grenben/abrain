@@ -381,3 +381,48 @@ test('a page edit after an accepted turn still blocks private eval publication',
   expect(Number(allowance?.attempts)).toBe(1);
   expect(Number(allowance?.accepted_turns)).toBe(1);
 });
+
+test('private eval CLI admits paid query embedding only with its bound auxiliary cap', async () => {
+  const configFile = join(root, '.gbrain', 'config.json'), original = readFileSync(configFile, 'utf8');
+  const config = JSON.parse(original) as Record<string, unknown>;
+  delete config.embedding_disabled;
+  writeFileSync(configFile, JSON.stringify(config));
+  configureGateway({ embedding_model: 'openai:text-embedding-3-small', embedding_dimensions: 1536,
+    env: { OPENAI_API_KEY: 'sk-fake' } });
+  let embedCalls = 0;
+  __setEmbedTransportForTests((async () => {
+    embedCalls++;
+    return { embeddings: [Array.from({ length: 1536 }, (_, i) => i === 0 ? 1 : 0)], usage: { tokens: 3 } };
+  }) as never);
+  const args = (requestId: string, maxUsd?: string) => ['run', '--query', input.query, '--judge', input.model,
+    '--top-k', '2', '--budget-usd', '100', '--yes', '--no-cache', '--codex-max-attempts', '2',
+    '--codex-max-turns', '2', '--codex-deadline', new Date(Date.now() + 600_000).toISOString(),
+    '--codex-request-id', requestId, ...(maxUsd ? ['--max-usd', maxUsd] : [])];
+  try {
+    const before = calls().length;
+    const beforeReports = (await loadTrend(engine, 30)).length;
+    const deniedId = randomUUID();
+    await expect(runEvalSuspectedContradictions(engine, args(deniedId)))
+      .rejects.toMatchObject({ code: 'subscription_auxiliary_budget_required' });
+    expect(embedCalls).toBe(0);
+    expect(calls()).toHaveLength(before);
+    expect((await loadTrend(engine, 30)).length).toBe(beforeReports);
+    const [denied] = await engine.executeRaw<{ attempts: number }>(
+      'SELECT attempts FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${deniedId}:%`]);
+    expect(Number(denied?.attempts)).toBe(0);
+
+    const requestId = randomUUID();
+    await runEvalSuspectedContradictions(engine, args(requestId, '10'));
+    expect(embedCalls).toBeGreaterThan(0);
+    expect(calls()).toHaveLength(before + 1);
+    const [allowance] = await engine.executeRaw<{ run_id: string }>(
+      'SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${requestId}:%`]);
+    const holds = await engine.executeRaw<{ status: string }>(
+      'SELECT status FROM mcp_spend_reservations WHERE budget_key=$1', [`group:${allowance!.run_id}`]);
+    expect(holds).toContainEqual({ status: 'settled' });
+  } finally {
+    __setEmbedTransportForTests(null);
+    configureGateway({ env: {} });
+    writeFileSync(configFile, original);
+  }
+});

@@ -43,6 +43,7 @@ import {
 import { maybePromptForCostBeforeProbe } from '../core/eval-contradictions/cost-prompt.ts';
 import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
 import { subscriptionTargetTransaction } from '../core/ai/subscription-target.ts';
+import { assertSubscriptionAuxiliaryHealthy } from '../core/ai/subscription-auxiliary.ts';
 import { withEvalContradictionSubscription, type EvalContradictionAllowance } from './eval-contradictions-subscription.ts';
 import type {
   ContradictionFinding,
@@ -398,6 +399,8 @@ async function runRun(engine: BrainEngine, f: ParsedFlags): Promise<void> {
       maxPairChars: f.maxPairChars,
       noCache: f.noCache,
     });
+
+    assertSubscriptionAuxiliaryHealthy();
 
     // Persist to runs table (M5).
     if (readPrivateCodexConfig()) {

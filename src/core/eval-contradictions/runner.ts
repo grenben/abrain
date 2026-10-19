@@ -38,6 +38,7 @@ import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy
 import { assertSubscriptionTarget } from '../ai/subscription-target.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { assertSubscriptionAuxiliaryHealthy } from '../ai/subscription-auxiliary.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { resolveTierDefault } from '../model-config.ts';
 import { BudgetTracker, BudgetExhausted } from '../budget/budget-tracker.ts';
@@ -354,6 +355,7 @@ async function _runContradictionProbeInner(opts: RunnerOpts): Promise<RunnerResu
 
     // Search.
     const results = await searchFn(opts.engine, query, { limit: topK });
+    assertSubscriptionAuxiliaryHealthy();
 
     // Pairs.
     const cross = generateCrossSlugPairs(results);

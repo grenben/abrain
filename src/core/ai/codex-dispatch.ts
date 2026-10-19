@@ -5,6 +5,7 @@ import { assertCodexRuntimeQualified } from './providers/codex-qualification.ts'
 import { codexSubscriptionContext, withAdmittedCodexAttempt } from './subscription-context.ts';
 import { reserveSubscriptionAttempt, settleSubscriptionAttempt, SubscriptionAdmissionError, acceptSubscriptionTurn, type SubscriptionAttempt } from './subscription-admission.ts';
 import { invokeAI, isAIInvocationPolicyError } from './invocation-guard.ts';
+import { assertSubscriptionAuxiliaryHealthy } from './subscription-auxiliary.ts';
 
 /** Production admission seam shared by bounded proposals and the host action loop. */
 export async function dispatchCodexProposal(original: CodexProposalInput): Promise<CodexProposalResult & { attempt: SubscriptionAttempt }> {
@@ -13,6 +14,7 @@ export async function dispatchCodexProposal(original: CodexProposalInput): Promi
   const signals = [original.signal, context.signal].filter((s): s is AbortSignal => s !== undefined);
   const { input } = await prepareCodexInput({ ...original, signal: signals.length ? AbortSignal.any(signals) : undefined });
   await context.checkAuthority?.();
+  assertSubscriptionAuxiliaryHealthy();
   await assertCodexRuntimeQualified(input.bin);
   const requestHash = createHash('sha256').update(JSON.stringify({protocol:'codex-proposal-v1',bin:input.bin,model:input.model,prompt:input.prompt,schema:input.schema,timeoutMs:input.timeoutMs,maxOutputBytes:input.maxOutputBytes,
     images:input.images?.map(image=>({mime:image.mime,sha256:createHash('sha256').update(image.bytes).digest('hex')}))})).digest('hex');
@@ -41,5 +43,6 @@ export async function acceptCodexProposal(result: { attempt: SubscriptionAttempt
   const context = codexSubscriptionContext();
   if (!context || context.runId !== result.attempt.runId) throw new SubscriptionAdmissionError('subscription_required');
   await context.checkAuthority?.();
+  assertSubscriptionAuxiliaryHealthy();
   await acceptSubscriptionTurn(context.engine,result.attempt);
 }
