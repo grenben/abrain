@@ -38,6 +38,7 @@ import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy
 import { assertSubscriptionTarget } from '../ai/subscription-target.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { assertPrivateEvalCorpusPin } from './private-run-scope.ts';
 import { assertSubscriptionAuxiliaryHealthy } from '../ai/subscription-auxiliary.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { resolveTierDefault } from '../model-config.ts';
@@ -262,6 +263,7 @@ export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerRes
       'SELECT deadline > now() AS current FROM codex_subscription_runs WHERE run_id=$1', [context.runId]);
     if (!allowance) throw new SubscriptionAdmissionError('subscription_required');
     if (!allowance.current) throw new SubscriptionAdmissionError('subscription_exhausted');
+    assertPrivateEvalCorpusPin(opts.engine);
   }
   // T6: wrap the entire body in withBudgetTracker so every gateway-layer
   // chat/embed/rerank call (judge, embed-on-query) auto-records via the

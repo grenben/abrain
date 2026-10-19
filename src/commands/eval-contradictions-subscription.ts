@@ -12,6 +12,7 @@ import { isWriteRequestId } from '../core/persistence/types.ts';
 import { intFlagValue, numberFlagValue } from '../cli/flag-values.ts';
 import { usageError } from '../cli/cli-error.ts';
 import { CODEX_EVAL_INPUT_TABLES } from '../core/schema-migrations/v290-codex-eval-input-clock.ts';
+import { withPrivateEvalCorpusPin } from '../core/eval-contradictions/private-run-scope.ts';
 
 export interface EvalContradictionAllowance {
   maxAttempts?: string;
@@ -101,10 +102,10 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
       'SELECT deadline > now() AS current FROM codex_subscription_runs WHERE run_id=$1', [enclosing.runId]);
     if (!allowance) throw new SubscriptionAdmissionError('subscription_required');
     if (!allowance.current) throw new SubscriptionAdmissionError('subscription_exhausted');
-    // Scratch brains use the factory-owned cross-database fence. The owner-brain
-    // CLI route can additionally bind its live retrieval inputs without taking
-    // ownership of the host's durable allowance or changing its run ID.
-    if (scratch) return run();
+    // The contradiction CLI writes an audit report for one corpus; it has no
+    // scratch-target publication protocol. A factory-owned benchmark scope is
+    // valid for its own harness, but must not silently bypass this eval pin.
+    if (scratch) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     const bound = await corpusSnapshot(engine);
     const assertBound = async (db: BrainEngine) => {
       const current = readPrivateCodexConfig();
@@ -127,11 +128,11 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
         await assertBound(tx);
       },
     };
-    return withCodexSubscription(nested, async () => {
+    return withCodexSubscription(nested, () => withPrivateEvalCorpusPin(engine, nested.runId, async () => {
       const result = await run();
       await nested.checkAuthority();
       return result;
-    });
+    }));
   }
   const grant = parseAllowance(flags);
   const claim = { identity, ...await corpusSnapshot(engine), model: policy.model, bin: policy.bin,
@@ -169,9 +170,9 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     JSON.stringify({ billing: 'subscription', max_attempts: grant.maxAttempts, max_turns: grant.maxTurns,
       deadline: grant.deadline.toISOString(), auxiliary_cap_usd: grant.maxUsd ?? null }) + '\n');
   return withCodexSubscription({ engine, runId, checkAuthority, checkAuthorityInTransaction },
-    () => withSubscriptionAuxiliaryBudget(engine, `group:${runId}`, grant.maxUsd, async () => {
+    () => withPrivateEvalCorpusPin(engine, runId, () => withSubscriptionAuxiliaryBudget(engine, `group:${runId}`, grant.maxUsd, async () => {
       const result = await run();
       await checkAuthority();
       return result;
-    }));
+    })));
 }

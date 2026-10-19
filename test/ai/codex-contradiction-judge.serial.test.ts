@@ -9,6 +9,9 @@ import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { subscriptionTargetTransaction } from '../../src/core/ai/subscription-target.ts';
+import { withSubscriptionScratch } from '../../src/core/ai/subscription-target.ts';
+import { createEphemeralBrain } from '../../src/core/ephemeral-brain.ts';
+import { disposePersistenceConsumer } from '../../src/core/persistence/service.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { judgeContradiction, type JudgeInput } from '../../src/core/eval-contradictions/judge.ts';
@@ -171,6 +174,32 @@ test('a private probe requires subscription admission before search or cache acc
       .rejects.toMatchObject({ code: 'subscription_required' });
   });
   expect(calls()).toHaveLength(before);
+});
+
+test('a host allowance alone cannot bypass the private probe corpus pin', async () => {
+  const before = calls().length;
+  await run(async id => {
+    await expect(runContradictionProbe({ engine, queries: [input.query], judgeModel: input.model }))
+      .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+    expect(Number((await accounting(id)).attempts)).toBe(0);
+  });
+  expect(calls()).toHaveLength(before);
+});
+
+test('a disposable scratch brain cannot enter the contradiction CLI without a publication pin', async () => {
+  const scratch = await createEphemeralBrain();
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  let started = false;
+  try {
+    await run(async id => withSubscriptionScratch(scratch, async () => {
+      await expect(withEvalContradictionSubscription(scratch, {}, identity, async () => { started = true; }))
+        .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect(Number((await accounting(id)).attempts)).toBe(0);
+    }));
+  } finally { await scratch.disconnect(); }
+  expect(started).toBe(false);
 });
 
 test('an admitted private probe cannot substitute a judge or search function', async () => {
@@ -505,6 +534,9 @@ test('a projection change after an accepted turn still blocks private eval publi
 });
 
 test('private eval CLI admits paid query embedding only with its bound auxiliary cap', async () => {
+  // Earlier page fixtures queue projection effects; a live rebuild must not
+  // turn this stable-corpus success test into a correctly refused mixed run.
+  await disposePersistenceConsumer(engine);
   const configFile = join(root, '.gbrain', 'config.json'), original = readFileSync(configFile, 'utf8');
   const config = JSON.parse(original) as Record<string, unknown>;
   delete config.embedding_disabled;
