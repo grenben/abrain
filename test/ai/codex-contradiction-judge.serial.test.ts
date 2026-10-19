@@ -435,6 +435,8 @@ test('a page edit invalidates private eval before another turn or report publica
 });
 
 test('a page edit after an accepted turn still blocks private eval publication', async () => {
+  // Earlier fixtures may leave background projection writes; isolate this explicit edit.
+  await disposePersistenceConsumer(engine);
   const requestId = randomUUID();
   const flags = { maxAttempts: '2', maxTurns: '2', deadline: new Date(Date.now() + 600_000).toISOString(), requestId };
   const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
@@ -509,6 +511,7 @@ test.each([
 });
 
 test('a projection change after an accepted turn still blocks private eval publication', async () => {
+  await disposePersistenceConsumer(engine);
   const requestId = randomUUID();
   const flags = { maxAttempts: '2', maxTurns: '2', deadline: new Date(Date.now() + 600_000).toISOString(), requestId };
   const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
