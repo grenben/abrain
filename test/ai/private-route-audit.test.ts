@@ -30,3 +30,11 @@ test('eval contradiction probe and dream edge closure have distinct callers and 
     after: 'codex-cli:gpt-test',
   }]);
 });
+
+test('route inventory names the generating callers and leaves unimplemented reports unresolved', async () => {
+  const roles = (await auditPrivateRoutes()).roles;
+  expect(roles.find(r => r.role === 'enrichment')?.implementation).toBe('src/commands/enrich.ts');
+  expect(roles.find(r => r.role === 'nightly-probes')?.implementation).toBe('src/commands/autopilot-probes.ts');
+  expect(roles.find(r => r.role === 'generated-reports')?.implementation).toBeNull();
+  expect(roles.find(r => r.role === 'longmemeval-reader')?.implementation).toBe('src/eval/longmemeval/reader.ts');
+});

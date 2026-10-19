@@ -1,6 +1,7 @@
 import type { ConfigReader } from '../config-snapshot.ts';
 import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError, privatePinConflicts } from './private-policy.ts';
 import { PRIVATE_GENERATION_ROLES } from './private-roles.ts';
+import { posix } from 'node:path';
 
 /** No SDKs, subprocesses, discovery, connection bootstrap or config mutation. */
 export async function auditPrivateRoutes(engine?: ConfigReader) {
@@ -16,7 +17,7 @@ export async function auditPrivateRoutes(engine?: ConfigReader) {
     }
     roles.push({role,mode:role==='iterative-minions'?'host_structured_action':'bounded_proposal',
       policy_model:resolution?.model ?? null,selection_source:resolution?.source ?? null,
-      conflict:conflict ?? null,implementation:implementation?`src/core/${implementation}`:null,actual_dispatch:'unverified' as const,
+      conflict:conflict ?? null,implementation:implementation?posix.normalize(`src/core/${implementation}`):null,actual_dispatch:'unverified' as const,
       // A transport test does not prove semantic validation/publication at the feature's caller.
       feature_acceptance:'unverified' as const});
   }
