@@ -7,7 +7,7 @@ import { JOB_UPGRADE_HELP, runJobUpgrade } from '../private-codex/jobs.ts';
 /** Engine-free: an audit must never bootstrap a database, discover models or invoke a provider. */
 export async function run(args: string[], ctx: CliDispatchContext): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
-    await writeStdoutFinal('Usage: gbrain private-codex audit --json\nNo-call file/environment audit. Database, worker and queued-job planes remain uninspected.\n' + PIN_HELP + JOB_UPGRADE_HELP);
+    await writeStdoutFinal('Usage: gbrain private-codex audit --json\nThe no-call audit alone does not inspect database, worker or queued-job planes.\n' + PIN_HELP + JOB_UPGRADE_HELP);
     return;
   }
   if (args[0] === 'pins') return runPins(args.slice(1), ctx);

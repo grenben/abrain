@@ -18,7 +18,12 @@ Inventory reads every nonterminal job in one read-only database snapshot (up to
 IDs, default/non-default queue status, whether a known job type may generate,
 explicit model-pin key names, opaque queue/payload hashes and the drain/park
 disposition. Unknown job and queue names are hidden, as are prompts, pin values
-and authority payloads. The snapshot is a point in
+and authority payloads. Active rows also report whether their claim token/lease
+is missing, expired or unexpired, without exposing the token. The same transaction
+enumerates supervisor lock rows (up to 10,000; more refuses), showing queue and
+holder-host hashes, holder PID, TTL status and last-refresh age. A fresh
+lease signal can outlive a dead process, while an idle standalone worker has no
+supervisor lock. The snapshot is a point in
 time: stop producers and workers, rerun it, then use the IDs for explicit
 parking previews. The output keeps `workers: uninspected` and
 `cutover_ready: false` until worker processes and their launch configuration

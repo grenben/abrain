@@ -15,7 +15,7 @@ gbrain private-codex jobs restore --id UUID --expect HASH --yes --json
 gbrain private-codex jobs resubmit-preview --file REVIEWED.json --json
 gbrain private-codex jobs resubmit --file REVIEWED.json --expect HASH --yes --json
 gbrain private-codex jobs receipts --json
-All commands connect the selected existing brain without startup migrations or inference.
+All commands except jobs workers connect the selected existing brain without startup migrations or inference. jobs workers is engine-free.
 Stop producers for cutover. Active work must drain; parking never cancels it. Resubmission requires new explicit content and allowances.
 `;
 function submissionFile(file: string) {

@@ -30,7 +30,7 @@ export function codexUpgradeJobsContract(factory: () => Promise<{ engine: BrainE
     ({engine,cleanup}=await factory()); await engine.initSchema(); queue=new MinionQueue(engine);
   });
   beforeEach(async () => {
-    config(); await engine.executeRaw('DELETE FROM codex_parked_jobs'); await engine.executeRaw('DELETE FROM codex_upgrade_receipts');
+    config(); await engine.executeRaw("DELETE FROM gbrain_cycle_locks WHERE id LIKE 'gbrain-supervisor:%'"); await engine.executeRaw('DELETE FROM codex_parked_jobs'); await engine.executeRaw('DELETE FROM codex_upgrade_receipts');
     await engine.executeRaw('DELETE FROM codex_subscription_attempts'); await engine.executeRaw('DELETE FROM codex_subscription_runs'); await engine.executeRaw('DELETE FROM minion_jobs');
   });
   afterAll(async () => {
@@ -80,6 +80,29 @@ export function codexUpgradeJobsContract(factory: () => Promise<{ engine: BrainE
     expect(inventory.jobs[0]).toMatchObject({name:'unclassified',queue:'non_default',generation:'unclassified'});
     expect(serialized).not.toContain('PRIVATECUSTOMERNAME');
     expect(serialized).not.toContain('PRIVATECUSTOMERQUEUE');
+  });
+  test('inventory reports active claim leases and supervisor lock signals without tokens or host names', async () => {
+    const id=await old();
+    await engine.executeRaw("UPDATE minion_jobs SET queue='PRIVATE_QUEUE',status='active',claim_generation=claim_generation+1,lock_token='PRIVATE_TOKEN',lock_until=now()+interval '5 minutes' WHERE id=$1",[id]);
+    await engine.executeRaw("INSERT INTO gbrain_cycle_locks(id,holder_pid,holder_host,ttl_expires_at,last_refreshed_at) VALUES('gbrain-supervisor:PRIVATE_QUEUE',4321,'PRIVATE_HOST',now()+interval '5 minutes',now())");
+    const inventory=await inventoryQueuedJobs(engine), serialized=JSON.stringify(inventory);
+    expect(inventory.jobs[0]).toMatchObject({id,queue:'non_default',claim_lease:'unexpired'});
+    expect(inventory.supervisor_locks).toMatchObject([{queue:'non_default',holder_pid:4321,ttl_signal:'unexpired'}]);
+    expect(inventory).toMatchObject({queue_snapshot_complete:true,supervisor_lock_snapshot_complete:true,workers:'uninspected',cutover_ready:false});
+    for (const secret of ['PRIVATE_QUEUE','PRIVATE_TOKEN','PRIVATE_HOST']) expect(serialized).not.toContain(secret);
+    await engine.executeRaw("UPDATE minion_jobs SET lock_until=now()-interval '1 minute' WHERE id=$1",[id]);
+    await engine.executeRaw("UPDATE gbrain_cycle_locks SET ttl_expires_at=now()-interval '1 minute' WHERE id='gbrain-supervisor:PRIVATE_QUEUE'");
+    const expired=await inventoryQueuedJobs(engine);
+    expect(expired.jobs[0]?.claim_lease).toBe('expired');
+    expect(expired.supervisor_locks[0]?.ttl_signal).toBe('expired');
+  });
+  test('supervisor lock inventory refuses a partial snapshot', async () => {
+    await engine.executeRaw("INSERT INTO gbrain_cycle_locks(id,holder_pid,holder_host,ttl_expires_at) VALUES('gbrain-supervisor:one',1,'host-a',now()+interval '1 minute'),('gbrain-supervisor:two',2,'host-b',now()+interval '1 minute')");
+    await expect(inventoryQueuedJobs(engine,10000,1)).rejects.toThrow('lock_inventory_too_large');
+  });
+  test('oversized supervisor metadata refuses instead of emitting a partial lock snapshot', async () => {
+    await engine.executeRaw("INSERT INTO gbrain_cycle_locks(id,holder_pid,holder_host,ttl_expires_at) VALUES($1,1,'host-a',now()+interval '1 minute')",['gbrain-supervisor:'+ 'Q'.repeat(5000)]);
+    await expect(inventoryQueuedJobs(engine)).rejects.toThrow('lock_snapshot_too_large');
   });
   test('preview is bounded, sanitized, read-only and reports active work must drain', async () => {
     const id=await old(); await engine.executeRaw("UPDATE minion_jobs SET status='active',claim_generation=claim_generation+1 WHERE id=$1",[id]);
