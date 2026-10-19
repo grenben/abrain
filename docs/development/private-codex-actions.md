@@ -97,6 +97,12 @@ settlement, final retention, stale claims, changed revisions/inputs and unresolv
 receipts. These are failures injected at production seams, not full OS process-kill
 or network-partition coverage.
 
+`test/ai/codex-actions-process-crash.slow.test.ts` separately kills a PGLite
+worker with SIGKILL after it commits a pending read action. A second process
+expires and reclaims the lease, then verifies the same ledger identity completes
+with no repeated inference. This covers one real process-kill boundary for the
+read protocol; write publication and PostgreSQL process-kill recovery remain open.
+
 ```sh
 bun test --timeout=60000 test/ai/codex-actions.serial.test.ts test/ai/codex-jobs.serial.test.ts test/child-readiness.test.ts
 # 80 passed, 344 assertions
