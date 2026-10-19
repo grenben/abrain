@@ -10,10 +10,13 @@ import { CODEX_READ_PROTOCOL, CODEX_WRITE_PROTOCOL } from '../../src/core/minion
 import { claimWorktree } from '../../src/core/persistence/ownership.ts';
 import { serializePageToMarkdown } from '../../src/core/markdown.ts';
 import * as store from '../../src/core/minions/codex-action-store.ts';
+import * as writes from '../../src/core/minions/codex-action-writes.ts';
 import { spyOn } from 'bun:test';
 
 const [mode, root, digest] = process.argv.slice(2);
-const writeMode = mode.endsWith('-write');
+const phase = mode.split('-')[0];
+const writeMode = mode.includes('-write');
+const beforeCommit = mode.endsWith('-before');
 const home = join(root, 'home');
 const config = JSON.parse(readFileSync(join(home, '.gbrain', 'config.json'), 'utf8'));
 const unregister = __registerCodexFixtureForTests(config.private_codex.bin, digest);
@@ -22,7 +25,7 @@ await engine.connect({ database_path: join(root, 'database') });
 const queue = new MinionQueue(engine);
 const handler = makeSubagentHandler({ engine, makeAnthropic: () => { throw new Error('forbidden Anthropic construction'); } });
 try {
-  if (mode === 'seed' || mode === 'seed-write') {
+  if (phase === 'seed') {
     await engine.initSchema();
     await engine.setConfig('recall.track_retrieval', 'false');
     const sourceId = writeMode ? 'action-kill' : 'default';
@@ -44,24 +47,31 @@ try {
       allowed_slug_prefixes: ['notes/*'], max_turns: 4, no_self_fix: true, ...(writeMode ? { require_writes: true } : {}) },
     { max_attempts: 1, max_stalled: 3, lock_duration_ms: 5000 },
     { allowProtectedSubmit: true, codexSubscription: { maxAttempts: 8, maxTurns: 8, deadline: new Date(Date.now() + 600000) } });
-  } else if (mode === 'crash' || mode === 'recover' || mode === 'crash-write' || mode === 'recover-write') {
+  } else if (phase === 'crash' || phase === 'recover') {
     let retainedId: string | undefined;
-    if (mode === 'recover' || mode === 'recover-write') {
+    if (phase === 'recover') {
       const [active] = await engine.executeRaw<{ status: string; lock_token: string }>('SELECT status,lock_token FROM minion_jobs');
       if (active?.status !== 'active' || active.lock_token !== 'killed-worker') throw new Error('Expected killed worker to own active job');
       const [before] = await engine.executeRaw<{ gbrain_tool_use_id: string; status: string }>(
         'SELECT gbrain_tool_use_id::text,status FROM subagent_tool_executions WHERE tool_name=$1', [writeMode ? 'brain_put_page' : 'brain_get_page']);
       if (!before || before.status !== 'pending') throw new Error('Expected durable pending action');
       retainedId = before.gbrain_tool_use_id;
+      if (writeMode) {
+        const requests = await engine.executeRaw('SELECT id FROM persistence_requests');
+        if (beforeCommit && (requests.length !== 0 || await engine.getPage('notes/new', { sourceId: 'action-kill' }))) {
+          throw new Error('Pre-commit kill already wrote a page');
+        }
+        if (!beforeCommit && requests.length !== 1) throw new Error('Post-commit kill lost its write receipt');
+      }
       // Advance only the expired lease after the OS kill; do not alter the action ledger.
       await engine.executeRaw("UPDATE minion_jobs SET lock_until=now()-interval '1 second' WHERE lock_token='killed-worker'");
       const stalled = await queue.handleStalled(0);
       if (stalled.requeued.length !== 1 || stalled.dead.length) throw new Error('Killed job was not requeued');
     }
-    const job = await queue.claim(mode.startsWith('crash') ? 'killed-worker' : 'recovery-worker', 5000, 'default', ['subagent']);
+    const job = await queue.claim(phase === 'crash' ? 'killed-worker' : 'recovery-worker', 5000, 'default', ['subagent']);
     if (!job) throw new Error('Private action job was not claimed');
     const ctx = buildJobContext(engine, queue, job, job.lock_token!, new AbortController().signal, new AbortController().signal);
-    if (mode === 'crash') {
+    if (phase === 'crash' && !writeMode) {
       const original = store.retainCodexAction;
       spyOn(store, 'retainCodexAction').mockImplementation(async (...args) => {
         await original(...args);
@@ -69,7 +79,15 @@ try {
         await new Promise<void>(() => { setInterval(() => {}, 1000); });
         throw new Error('unreachable');
       });
-    } else if (mode === 'crash-write') {
+    } else if (phase === 'crash' && beforeCommit) {
+      const original = writes.retainCodexWrite;
+      spyOn(writes, 'retainCodexWrite').mockImplementation(async (...args) => {
+        await original(...args);
+        console.log('ACTION_RETAINED');
+        await new Promise<void>(() => { setInterval(() => {}, 1000); });
+        throw new Error('unreachable');
+      });
+    } else if (phase === 'crash' && writeMode) {
       const original = store.settleCodexAction;
       spyOn(store, 'settleCodexAction').mockImplementation(async (...args) => {
         if (args[2].tool_name === 'brain_put_page') {
@@ -81,7 +99,7 @@ try {
       });
     }
     const result = await runWithJobSpend(engine, job, ctx, () => handler(ctx));
-    if (mode === 'recover' || mode === 'recover-write') {
+    if (phase === 'recover') {
       const completed = await queue.completeJob(job.id, job.lock_token!, { ...result });
       const [after] = await engine.executeRaw<{ gbrain_tool_use_id: string; status: string }>(
         'SELECT gbrain_tool_use_id::text,status FROM subagent_tool_executions WHERE tool_name=$1', [writeMode ? 'brain_put_page' : 'brain_get_page']);

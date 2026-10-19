@@ -69,8 +69,12 @@ canonical identity and request contents. Publication rechecks the observed targe
 revision while its page lock is held. The existing coordinator couples canonical
 file/database effects to its durable receipt and recovery record.
 
-On replay, GBrain reads the original receipt before another inference call. A
-committed write settles the pending action without republishing. A queued or
+On replay, GBrain reads the original receipt before another inference call. If a
+new worker inherits a retained write binding but no request was ever admitted,
+it may rebind only the dead worker's lock token under the live job/source fence;
+the stable request ID, action identity, inputs, source and subscription run stay
+fixed. Any existing receipt preserves its original immutable admission intent.
+A committed write settles the pending action without republishing. A queued or
 recovering write waits on the same request for a bounded interval. An unresolved
 outcome stops as `codex_action_needs_reconciliation`; its action stays pending.
 A confirmed terminal failure without unresolved publication becomes a failed
@@ -98,13 +102,12 @@ receipts. These are failures injected at production seams, not full OS process-k
 or network-partition coverage.
 
 `test/ai/codex-actions-process-crash.slow.test.ts` separately kills PGLite
-workers with SIGKILL after a pending read action and after a canonical page
-write commits but before its action ledger settles. A second process expires
-and reclaims each lease. The read retains one ledger identity with no repeated
-inference; the write retains one ledger identity and one committed file/database
-effect, with no second write admission. These are real process-kill boundaries
-for the read and post-commit write paths. Pre-commit write crashes and
-PostgreSQL process-kill recovery remain open.
+workers with SIGKILL after a pending read action, after write authority is
+retained but before admission, and after a canonical page write commits but
+before its action ledger settles. A second process expires and reclaims each
+lease. The read retains one ledger identity with no repeated inference; both
+write cases retain one ledger identity and one committed file/database effect,
+with no second write admission. PostgreSQL process-kill recovery remains open.
 
 ```sh
 bun test --timeout=60000 test/ai/codex-actions.serial.test.ts test/ai/codex-jobs.serial.test.ts test/child-readiness.test.ts

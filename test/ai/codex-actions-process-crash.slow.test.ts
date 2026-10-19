@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-async function verifyCrashRecovery(writeMode: boolean): Promise<void> {
+async function verifyCrashRecovery(scenario: 'read' | 'write-after' | 'write-before'): Promise<void> {
+  const writeMode = scenario !== 'read';
   const root = mkdtempSync(join(tmpdir(), 'gbrain-codex-action-kill-'));
   const home = join(root, 'home');
   const bin = join(root, 'fake-codex.mjs');
@@ -35,7 +36,8 @@ for (const event of [
   writeFileSync(join(home, '.gbrain', 'config.json'), JSON.stringify({ private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin } }));
   const env = { ...process.env, HOME: home, GBRAIN_HOME: home, CODEX_HOME: home, OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '' };
   const helper = join(import.meta.dir, '../helpers/codex-actions-process-crash.ts');
-  const launch = (mode: string) => Bun.spawn([process.execPath, helper, mode + (writeMode ? '-write' : ''), root, createHash('sha256').update(script).digest('hex')],
+  const suffix = scenario === 'read' ? '' : scenario === 'write-before' ? '-write-before' : '-write';
+  const launch = (mode: string) => Bun.spawn([process.execPath, helper, mode + suffix, root, createHash('sha256').update(script).digest('hex')],
     { env, stdout: 'pipe', stderr: 'pipe' });
   try {
     const seed = launch('seed');
@@ -68,5 +70,6 @@ for (const event of [
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
-test('SIGKILL after private read retention resumes the same action on a new worker', () => verifyCrashRecovery(false), 120_000);
-test('SIGKILL after committed private write reconciles one canonical effect on a new worker', () => verifyCrashRecovery(true), 180_000);
+test('SIGKILL after private read retention resumes the same action on a new worker', () => verifyCrashRecovery('read'), 120_000);
+test('SIGKILL before private write admission resumes one canonical effect on a new worker', () => verifyCrashRecovery('write-before'), 180_000);
+test('SIGKILL after committed private write reconciles one canonical effect on a new worker', () => verifyCrashRecovery('write-after'), 180_000);

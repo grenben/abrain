@@ -15,7 +15,7 @@ import type { WriteRequest } from '../persistence/model.ts';
 
 /** Freeze the host authority and normalized admission before any write is submitted. */
 export async function retainCodexWrite(engine: BrainEngine, ctx: MinionJobContext, data: CodexReadJob, row: CodexActionRow): Promise<RetainedCodexWrite> {
-  if (row.host_binding) return row.host_binding;
+  if (row.host_binding) return rebindUnadmittedWrite(engine, ctx, row);
   if (typeof row.input.slug !== 'string' || typeof row.input.content !== 'string' || Buffer.byteLength(row.input.content) > CODEX_ACTION_LIMITS.content) actionError('invalid_proposal');
   const snapshot = await engine.readPageSnapshot(row.input.slug!, { sourceId: data.source_id, includeDeleted: true });
   if (snapshot) {
@@ -47,6 +47,35 @@ export async function retainCodexWrite(engine: BrainEngine, ctx: MinionJobContex
     }
     await tx.executeRaw('UPDATE subagent_tool_executions SET host_binding=$3::text::jsonb WHERE job_id=$1 AND message_idx=$2 AND ordinal=0', [ctx.id, row.message_idx, JSON.stringify(retained)]);
     return retained;
+  });
+}
+
+/** A new claim may adopt retained authority only before the stable request exists.
+ * Once admission has a receipt, its original intent and worker fence stay immutable. */
+async function rebindUnadmittedWrite(engine: BrainEngine, ctx: MinionJobContext, row: CodexActionRow): Promise<RetainedCodexWrite> {
+  const scope = codexSubscriptionContext();
+  if (!scope?.publicationFence || scope.publicationFence.jobId !== ctx.id || !scope.runId) throw actionError('job_binding_required');
+  const fence = scope.publicationFence, runId = scope.runId;
+  return withActionFence(engine, ctx, async tx => {
+    const [current] = await tx.executeRaw<CodexActionRow>(
+      'SELECT * FROM subagent_tool_executions WHERE job_id=$1 AND message_idx=$2 AND ordinal=0 FOR UPDATE', [ctx.id, row.message_idx]);
+    if (!current || current.status !== 'pending' || current.tool_name !== 'brain_put_page' ||
+        current.gbrain_tool_use_id !== row.gbrain_tool_use_id || authorityDigest(current.input) !== authorityDigest(row.input)) throw actionError('identity_conflict');
+    const retained = current.host_binding;
+    if (!retained || retained.binding.jobId !== ctx.id || retained.binding.messageIdx !== row.message_idx ||
+        retained.binding.canonicalId !== row.gbrain_tool_use_id || retained.binding.runId !== runId ||
+        retained.binding.jobDigest !== fence.jobDigest ||
+        authorityDigest(retained.admission.intent.codex_action) !== authorityDigest(retained.binding)) throw actionError('identity_conflict');
+    if (retained.binding.lockToken === fence.lockToken) return retained;
+    // The old admission, if any, is already bound to the old worker's immutable
+    // intent. Never rewrite that intent or let this worker publish a second effect.
+    if (await getWriteRequest(tx, retained.admission.principal, retained.admission.requestId!)) return retained;
+    const binding = { ...retained.binding, lockToken: fence.lockToken };
+    const admission = { ...retained.admission, intent: { ...retained.admission.intent, codex_action: binding } };
+    const rebound = { binding, admission };
+    await tx.executeRaw('UPDATE subagent_tool_executions SET host_binding=$3::text::jsonb WHERE job_id=$1 AND message_idx=$2 AND ordinal=0',
+      [ctx.id, row.message_idx, JSON.stringify(rebound)]);
+    return rebound;
   });
 }
 
