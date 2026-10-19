@@ -102,6 +102,11 @@ export class CostTracker {
     this.embeddingUsd += (tokens / 1_000_000) * OPENAI_EMBEDDING_PRICE_PER_MTOK;
   }
 
+  /** Use the gateway's actual model-aware accounting when it is available. */
+  recordEmbeddingCostUsd(usd: number): void {
+    if (Number.isFinite(usd) && usd >= 0) this.embeddingUsd += usd;
+  }
+
   judge(): number { return this.judgeUsd; }
   embedding(): number { return this.embeddingUsd; }
   total(): number { return this.judgeUsd + this.embeddingUsd; }

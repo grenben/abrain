@@ -278,7 +278,7 @@ export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerRes
     label: 'eval.suspected-contradictions',
   });
   try {
-    return await withBudgetTracker(_runnerTracker, () => _runContradictionProbeInner(opts));
+    return await withBudgetTracker(_runnerTracker, () => _runContradictionProbeInner(opts, _runnerTracker));
   } catch (err) {
     // BudgetExhausted from the gateway path should bubble cleanly. With no
     // cap set, the tracker only records; it doesn't throw, so this path
@@ -290,7 +290,7 @@ export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerRes
   }
 }
 
-async function _runContradictionProbeInner(opts: RunnerOpts): Promise<RunnerResult> {
+async function _runContradictionProbeInner(opts: RunnerOpts, gatewayUsage: BudgetTracker): Promise<RunnerResult> {
   const startedAt = Date.now();
   // #3813: key-aware tier default, not a hardcoded Anthropic model — an
   // OPENAI_API_KEY-only install must not route the judge to an unservable
@@ -307,6 +307,14 @@ async function _runContradictionProbeInner(opts: RunnerOpts): Promise<RunnerResu
 
   const errs = new JudgeErrorCollector();
   const tracker = new CostTracker({ capUsd: budgetUsd });
+  let recordedEmbeddingUsd = 0;
+  const recordGatewayEmbeddings = () => {
+    const charged = gatewayUsage.snapshot().models
+      .filter(row => row.touchpoint === 'embedding')
+      .reduce((sum, row) => sum + (row.cost_usd ?? 0), 0);
+    tracker.recordEmbeddingCostUsd(Math.max(0, charged - recordedEmbeddingUsd));
+    recordedEmbeddingUsd = charged;
+  };
   const cache = new JudgeCache({ engine: opts.engine, modelId: judgeModel, disabled: !!opts.noCache });
 
   // Pre-flight: pair count = queries × min(topK*(topK-1)/2 + topK, 50).
@@ -356,6 +364,7 @@ async function _runContradictionProbeInner(opts: RunnerOpts): Promise<RunnerResu
     // Search.
     const results = await searchFn(opts.engine, query, { limit: topK });
     assertSubscriptionAuxiliaryHealthy();
+    recordGatewayEmbeddings();
 
     // Pairs.
     const cross = generateCrossSlugPairs(results);

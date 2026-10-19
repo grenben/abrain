@@ -392,7 +392,7 @@ test('private eval CLI admits paid query embedding only with its bound auxiliary
   let embedCalls = 0;
   __setEmbedTransportForTests((async () => {
     embedCalls++;
-    return { embeddings: [Array.from({ length: 1536 }, (_, i) => i === 0 ? 1 : 0)], usage: { tokens: 3 } };
+    return { embeddings: [Array.from({ length: 1536 }, (_, i) => i === 0 ? 1 : 0)], usage: { tokens: 100 } };
   }) as never);
   const args = (requestId: string, maxUsd?: string) => ['run', '--query', input.query, '--judge', input.model,
     '--top-k', '2', '--budget-usd', '100', '--yes', '--no-cache', '--codex-max-attempts', '2',
@@ -420,6 +420,7 @@ test('private eval CLI admits paid query embedding only with its bound auxiliary
     const holds = await engine.executeRaw<{ status: string }>(
       'SELECT status FROM mcp_spend_reservations WHERE budget_key=$1', [`group:${allowance!.run_id}`]);
     expect(holds).toContainEqual({ status: 'settled' });
+    expect((await loadTrend(engine, 30))[0]!.report_json.cost_usd.embedding).toBeGreaterThan(0);
   } finally {
     __setEmbedTransportForTests(null);
     configureGateway({ env: {} });
