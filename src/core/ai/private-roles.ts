@@ -25,7 +25,6 @@ export const PRIVATE_GENERATION_ROLES = [
   ['skillopt-judge',undefined,'reasoning','skillopt/score.ts'],
   ['skillopt-optimizer',undefined,'deep','skillopt/reflect.ts'],
   ['skillopt-bootstrap',undefined,'deep','skillopt/bootstrap-benchmark.ts'],
-  ['generated-reports',undefined,'reasoning',undefined],
   ['parser-fallback',undefined,'utility','conversation-parser/llm-codex-fallback.ts'],
   ['parser-polish',undefined,'utility','conversation-parser/llm-base.ts'],
   ['ocr',undefined,'utility','ai/gateway.ts'],
@@ -40,4 +39,11 @@ export const PRIVATE_GENERATION_ROLES = [
   ['edge-contradictions','models.dream.edge_contradictions','utility','cycle/edge-contradictions.ts'],
   ['fence-repair','models.fence_repair','deep','fence-repair/'],
   ['iterative-minions','models.subagent','subagent','minions/handlers/subagent.ts'],
+] as const;
+
+/** Agent-authored content saved by GBrain is outside its model dispatch boundary. */
+export const PRIVATE_NON_DISPATCH_SURFACES = [
+  { surface: 'report-authoring', author: 'calling_agent_or_operator',
+    save_entrypoint: 'src/commands/report.ts', model_call: 'outside_gbrain',
+    note: 'The report CLI saves supplied text. GBrain-owned model-judged drift reports are the drift role.' },
 ] as const;

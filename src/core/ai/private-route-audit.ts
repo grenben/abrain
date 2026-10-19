@@ -1,6 +1,6 @@
 import type { ConfigReader } from '../config-snapshot.ts';
 import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError, privatePinConflicts } from './private-policy.ts';
-import { PRIVATE_GENERATION_ROLES } from './private-roles.ts';
+import { PRIVATE_GENERATION_ROLES, PRIVATE_NON_DISPATCH_SURFACES } from './private-roles.ts';
 import { posix } from 'node:path';
 
 /** No SDKs, subprocesses, discovery, connection bootstrap or config mutation. */
@@ -28,5 +28,6 @@ export async function auditPrivateRoutes(engine?: ConfigReader) {
     budgets:{subscription:'explicit durable envelope required',account_concurrency:1,monetary_cost_usd:null,remaining_quota:null,
       scheduled_job_allowances:policy?.scheduled_jobs ?? {},
       auxiliary_usd:'independent API admission required'},
-    coverage:{complete:false,reason:'Feature semantics, worker/job pins and runtime isolation are not fully qualified.'},roles};
+    coverage:{complete:false,reason:'Feature semantics, worker/job pins and runtime isolation are not fully qualified.'},
+    roles,non_dispatch_surfaces:PRIVATE_NON_DISPATCH_SURFACES};
 }

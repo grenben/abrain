@@ -107,7 +107,7 @@ The old two-file prototype was not a gateway implementation. This branch adds:
 - Gateway chat, query expansion and OCR paths, observed through the invocation
   guard, retaining measured tokens and unknown monetary cost. Auxiliary embedding
   and reranking still use their own USD admission. No provider fallback is used.
-- An engine-free route audit plus a deliberately incomplete feature inventory.
+- An engine-free route audit plus a deliberately incomplete feature inventory. Agent-authored report text is outside GBrain's model dispatch: `gbrain report` saves supplied content, while the model-judged drift report is inventoried under `drift`. The audit lists report authoring as a non-dispatch surface rather than inventing a separate `generated-reports` model caller.
 - Small extractions from config, gateway, atoms and subagent code to remain within
   the existing module/function ceilings. No ceiling was increased.
 

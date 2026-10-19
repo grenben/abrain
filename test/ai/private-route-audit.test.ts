@@ -31,10 +31,14 @@ test('eval contradiction probe and dream edge closure have distinct callers and 
   }]);
 });
 
-test('route inventory names the generating callers and leaves unimplemented reports unresolved', async () => {
-  const roles = (await auditPrivateRoutes()).roles;
+test('route inventory separates agent-authored reports from GBrain model dispatch', async () => {
+  const audit = await auditPrivateRoutes(), roles = audit.roles;
   expect(roles.find(r => r.role === 'enrichment')?.implementation).toBe('src/commands/enrich.ts');
   expect(roles.find(r => r.role === 'nightly-probes')?.implementation).toBe('src/commands/autopilot-probes.ts');
-  expect(roles.find(r => r.role === 'generated-reports')?.implementation).toBeNull();
+  expect(roles.map(r => r.role)).not.toContain('generated-reports');
+  expect(audit.non_dispatch_surfaces).toContainEqual({ surface:'report-authoring',
+    author:'calling_agent_or_operator', save_entrypoint:'src/commands/report.ts',
+    model_call:'outside_gbrain', note:'The report CLI saves supplied text. GBrain-owned model-judged drift reports are the drift role.' });
+  expect(roles.find(r => r.role === 'drift')?.implementation).toBe('src/core/cycle/drift.ts');
   expect(roles.find(r => r.role === 'longmemeval-reader')?.implementation).toBe('src/eval/longmemeval/reader.ts');
 });
