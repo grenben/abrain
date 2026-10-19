@@ -12,7 +12,7 @@ import type { OperationContext } from '../src/core/operations.ts';
 import { resetGateway } from '../src/core/ai/gateway.ts';
 import {
   runPhaseEdgeContradictions, applyEdgeProposal, undoEdgeProposal, rejectEdgeProposal, parseEdgeJudgeOutput, type EdgeJudgeFn,
-  isCertifiedApplyModel, loadEdgeContradictionsConfig,
+  isCertifiedApplyModel, loadEdgeContradictionsConfig, privateEdgeJudgeSchema,
 } from '../src/core/cycle/edge-contradictions.ts';
 import { relationshipFilterSql } from '../src/core/link-validity.ts';
 
@@ -209,8 +209,21 @@ describe('edge_contradictions', () => {
     expect(isCertifiedApplyModel('claude-opus-5-5')).toBe(true);
     expect(isCertifiedApplyModel('gpt-5.4-mini')).toBe(false);
     expect((await loadEdgeContradictionsConfig(engine, 'anthropic:claude-haiku-4-5-20251001')).mode).toBe('apply');
+    expect((await loadEdgeContradictionsConfig(engine, 'codex-cli:gpt-6.1-sol')).mode).toBe('propose');
     expect((await loadEdgeContradictionsConfig(engine, 'openai:gpt-5.4-mini')).mode).toBe('propose');
     await engine.setConfig('dream.edge_contradictions.mode', 'propose');
     expect((await loadEdgeContradictionsConfig(engine, 'claude-sonnet-5-5')).mode).toBe('propose');
+    await engine.setConfig('dream.edge_contradictions.mode', 'apply');
+    expect((await loadEdgeContradictionsConfig(engine, 'codex-cli:gpt-6.1-sol')).mode).toBe('apply');
+  });
+
+  test('private schema rejects incomplete or repeated pair verdicts before turn acceptance', () => {
+    const spec = privateEdgeJudgeSchema(3);
+    const pair = (a: number, b: number) => ({ a, b, conflict: false, confidence: 0.8 });
+    const valid = { pairs: [pair(1, 2), pair(1, 3), pair(2, 3)] };
+    expect(() => spec.validateCodexProposal(JSON.stringify(valid))).not.toThrow();
+    expect(() => spec.validateCodexProposal(JSON.stringify({ pairs: valid.pairs.slice(0, 2) }))).toThrow();
+    expect(() => spec.validateCodexProposal(JSON.stringify({ pairs: [pair(1, 2), pair(2, 1), pair(2, 3)] }))).toThrow();
+    expect(() => spec.validateCodexProposal(JSON.stringify({ pairs: [pair(1, 2), pair(1, 3), { ...pair(2, 3), confidence: 2 }] }))).toThrow();
   });
 });

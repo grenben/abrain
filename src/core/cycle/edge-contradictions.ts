@@ -34,6 +34,9 @@ import { BudgetMeter, loadAllowUnpriced, loadPricingOverrides, parseBudgetUsd } 
 import { resolveModel } from '../model-config.ts';
 import { closeContradiction, parseMultirange, utcToday, dateKey, type Stint } from '../link-validity.ts';
 import { declaredSingleValueTypes, planSingleValueClosures } from '../link-single-value.ts';
+import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 
 export interface EdgeContradictionsResult {
   name: 'edge_contradictions';
@@ -107,8 +110,10 @@ export const DREAM_TIMELINE_SOURCE = 'gbrain-dream (inferred)';
 export async function loadEdgeContradictionsConfig(engine: BrainEngine, model: string): Promise<EdgeContradictionsConfig> {
   const raw = (await engine.getConfig('dream.edge_contradictions.mode'))?.trim().toLowerCase();
   const explicit = raw === 'propose' || raw === 'apply' || raw === 'off';
+  // Certification belongs to the tested provider route. A matching model name
+  // on the private CLI has not earned automatic canonical writes.
   const mode: EdgeContradictionsMode = explicit ? raw as EdgeContradictionsMode
-    : isCertifiedApplyModel(model) ? 'apply' : 'propose';
+    : model.startsWith('codex-cli:') ? 'propose' : isCertifiedApplyModel(model) ? 'apply' : 'propose';
   const subjects = Number.parseInt((await engine.getConfig('dream.edge_contradictions.max_subjects')) ?? '', 10);
   return {
     mode,
@@ -166,6 +171,33 @@ export function parseEdgeJudgeOutput(text: string, maxIndex: number): JudgePair[
   return out;
 }
 
+export const CODEX_EDGE_JUDGE_VERSION = 'codex-edge-contradictions-v1';
+
+/** A complete, unique verdict for every pair is required before a Codex turn is accepted. */
+export function privateEdgeJudgeSchema(relationshipCount: number) {
+  if (!Number.isInteger(relationshipCount) || relationshipCount < 2 || relationshipCount > MAX_RELATIONSHIPS_PER_SUBJECT)
+    throw new CodexProposalError('invalid_input');
+  const pairCount = relationshipCount * (relationshipCount - 1) / 2;
+  return {
+    name: CODEX_EDGE_JUDGE_VERSION,
+    schema: { type: 'object', additionalProperties: false, required: ['pairs'], properties: {
+      pairs: { type: 'array', minItems: pairCount, maxItems: pairCount, items: {
+        type: 'object', additionalProperties: false, required: ['a', 'b', 'conflict', 'confidence'], properties: {
+          a: { type: 'integer', minimum: 1, maximum: relationshipCount },
+          b: { type: 'integer', minimum: 1, maximum: relationshipCount },
+          conflict: { type: 'boolean' }, confidence: { type: 'number', minimum: 0, maximum: 1 },
+        },
+      } },
+    } },
+    validateCodexProposal: (text: string) => {
+      let value: unknown;
+      try { value = JSON.parse(text); } catch { throw new CodexProposalError('invalid_output'); }
+      const pairs = (value as { pairs?: unknown } | null)?.pairs;
+      if (!completeEdgeJudgeVerdict(pairs as JudgePair[] | null, relationshipCount)) throw new CodexProposalError('invalid_output');
+    },
+  };
+}
+
 /** A missing or repeated pair is an unknown judgment, never evidence of compatibility. */
 function completeEdgeJudgeVerdict(verdict: JudgePair[] | null, relationshipCount: number): verdict is JudgePair[] {
   const expected = relationshipCount * (relationshipCount - 1) / 2;
@@ -184,11 +216,14 @@ function completeEdgeJudgeVerdict(verdict: JudgePair[] | null, relationshipCount
 
 export async function defaultEdgeJudge(input: Parameters<EdgeJudgeFn>[0]): Promise<JudgePair[] | null> {
   const { chat } = await import('../ai/gateway.ts');
+  const policy = readPrivateCodexConfig();
+  if (policy) assertPrivateRoute(input.modelHint ?? policy.model, 'edge_contradictions:judge', policy);
   const result = await chat({
     messages: [{ role: 'user', content: buildEdgeJudgePrompt(input.subject, input.relationships) }],
     ...(input.modelHint ? { model: input.modelHint } : {}),
     maxTokens: input.maxOutputTokens ?? JUDGE_MAX_OUTPUT_TOKENS,
     allowFallback: false,
+    ...(policy ? { responseSchema: privateEdgeJudgeSchema(input.relationships.length) } : {}),
   });
   return parseEdgeJudgeOutput(result.text, input.relationships.length);
 }
@@ -268,8 +303,15 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
   if (groups.length === 0) return done('complete', `no subjects left for the judge${declaredDetail}`, withDeclared({ subjects: allGroups.length, reverted }));
   if (config.mode === 'off') return done(declared.handled.size ? 'complete' : 'skipped', `mode off (dream.edge_contradictions.mode)${declaredDetail}`, withDeclared({ subjects: allGroups.length, reverted }));
   if (!opts.judge && !opts.assumeChatAvailable) {
+    const privatePolicy = readPrivateCodexConfig();
+    if (privatePolicy) assertPrivateRoute(model, 'edge_contradictions:model', privatePolicy);
     const { isAvailable } = await import('../ai/gateway.ts');
-    if (!isAvailable('chat', model)) {
+    if (privatePolicy && !codexSubscriptionContext()) {
+      return done(declared.handled.size ? 'complete' : 'skipped',
+        `private Codex subscription allowance missing for ${model}${declaredDetail}`,
+        withDeclared({ subjects: allGroups.length, reverted }));
+    }
+    if (!privatePolicy && !isAvailable('chat', model)) {
       return done(declared.handled.size ? 'complete' : 'skipped', `no chat model available (${model}); configure one (gbrain models) to have relationship contradictions proposed${declaredDetail}`, withDeclared({ subjects: allGroups.length, reverted }));
     }
   }
