@@ -267,6 +267,10 @@ export async function preparePageAdmission(ctx: OperationContext,
       'Drop fence_repair and submit the page without it; gbrain repair fences records its own receipt on the brain host. To fix a malformed facts or takes fence, correct it in content (or write facts with remember and takes with takes_add); a held file is repaired by the brain host operator with gbrain repair fences, so ask the user to run it.');
   }
   if (Object.hasOwn(input.params, 'codex_think_plan')) throw new OperationError('invalid_params', 'Think publication identity is reserved for the host.', 'Submit ordinary page parameters without a publication identity.');
+  if (Object.hasOwn(input.params, 'edge_proposal_guard') && (input.operation !== 'add_timeline_entry' || ctx.remote !== false)) {
+    throw new OperationError('invalid_params', 'Edge proposal publication identity is reserved for the local timeline writer.',
+      'Submit ordinary timeline parameters without an edge proposal identity.');
+  }
   // A body over the page ceiling can never be admitted: refuse it as a caller error before the journal
   // reserves intent bytes, so an oversized write never reads as retryable queue_capacity.
   const body = input.params.content;

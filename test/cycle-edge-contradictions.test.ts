@@ -15,12 +15,13 @@ import {
   isCertifiedApplyModel, loadEdgeContradictionsConfig, privateEdgeJudgeSchema,
 } from '../src/core/cycle/edge-contradictions.ts';
 import { relationshipFilterSql } from '../src/core/link-validity.ts';
+import { installFaultHook } from '../src/core/persistence/fault-points.ts';
 
 setDefaultTimeout(60_000);
 let engine: PGLiteEngine;
 beforeAll(async () => { engine = new PGLiteEngine(); await engine.connect({}); await engine.initSchema(); });
 afterAll(async () => { await engine.disconnect(); resetGateway(); });
-beforeEach(async () => { await resetPgliteState(engine); resetGateway(); });
+beforeEach(async () => { installFaultHook(undefined); await resetPgliteState(engine); resetGateway(); });
 
 const ctx = (): OperationContext => ({ engine, config: { engine: 'pglite' as const }, logger: { info: () => {}, warn: () => {}, error: () => {} }, dryRun: false, remote: false, sourceId: 'default' });
 async function put(slug: string, fm: string, body: string) {
@@ -81,6 +82,33 @@ describe('edge_contradictions', () => {
     expect(rerun.totals).toMatchObject({ judged: 1, proposed: 1 });
     expect((await proposals()).map(p => p.status)).toEqual(['proposed']);
     expect((await applyEdgeProposal(engine, first.id)).status).toBe('applied');
+  });
+
+  test.each([
+    { name: 'context', change: `UPDATE links SET context='changed after preflight' WHERE from_page_id=(SELECT id FROM pages WHERE slug='people/alice-example') AND to_page_id=(SELECT id FROM pages WHERE slug='companies/acme-example')` },
+    { name: 'relationship', change: `UPDATE link_relationships SET evidence_hash='changed after preflight' WHERE from_page_id=(SELECT id FROM pages WHERE slug='people/alice-example') AND to_page_id=(SELECT id FROM pages WHERE slug='companies/acme-example')` },
+    { name: 'target title', change: `UPDATE pages SET title='New target title' WHERE slug='companies/acme-example'` },
+    { name: 'source archive', change: `UPDATE sources SET archived=true, archived_at=now() WHERE id='default'` },
+  ])('accept refuses $name changed after preflight but before timeline publication', async ({ change }) => {
+    await engine.setConfig('dream.edge_contradictions.mode', 'propose');
+    await seed(DATED);
+    await runPhaseEdgeContradictions(engine, { judge: conflict });
+    const [p] = await proposals();
+    let changed = false;
+    installFaultHook(async (point, detail) => {
+      if (point === 'consumer:prepared' && detail.operation === 'add_timeline_entry' && !changed) {
+        changed = true;
+        await engine.executeRaw(change);
+      }
+    });
+    try {
+      expect((await applyEdgeProposal(engine, p.id)).status).toBe('stale');
+    } finally { installFaultHook(undefined); }
+    expect(changed).toBe(true);
+    expect((await proposals()).map(row => row.status)).toEqual(['stale']);
+    expect((await engine.getPage('people/alice-example', { sourceId: 'default' }))?.timeline).not.toContain('Ended works_at');
+    if (change.includes('archived=true')) await engine.executeRaw(`UPDATE sources SET archived=false, archived_at=NULL WHERE id='default'`);
+    expect(await liveWorksAt()).toEqual(['companies/acme-example', 'companies/widget-co']);
   });
 
   test('manual accept refuses an archived source even when pair evidence hashes match', async () => {

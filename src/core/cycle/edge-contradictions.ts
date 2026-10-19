@@ -37,6 +37,7 @@ import { declaredSingleValueTypes, planSingleValueClosures } from '../link-singl
 import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
+import { OperationError } from '../ops/contract.ts';
 
 export interface EdgeContradictionsResult {
   name: 'edge_contradictions';
@@ -594,20 +595,39 @@ export async function edgeContradictionsCyclePhase(engine: BrainEngine | null, d
 
 export type ApplyOutcome = { status: 'applied' | 'stale' | 'not_found' | 'refused' | 'undone' | 'rejected'; reason?: string };
 
+export interface EdgeProposalGuard { id: number; snapshotHash: string }
+
 interface ProposalRow {
   id: number; source_id: string; status: string; from_page_id: number; ending_to_page_id: number | null;
   a_to_page_id: number; b_to_page_id: number; judge_snapshot_hash: string | null;
   link_type: string; close_date: unknown; generated_line: string | null; subject_slug: string; ending_slug: string | null;
 }
 
-async function loadProposal(engine: BrainEngine, id: number): Promise<ProposalRow | null> {
+async function loadProposal(engine: BrainEngine, id: number, lock = false): Promise<ProposalRow | null> {
   const [row] = await engine.executeRaw<ProposalRow>(
     `SELECT p.id, p.source_id, p.status, p.from_page_id, p.a_to_page_id, p.b_to_page_id, p.judge_snapshot_hash,
             p.ending_to_page_id, p.link_type, p.close_date::text AS close_date,
             p.generated_line, f.slug AS subject_slug, t.slug AS ending_slug
        FROM link_edge_proposals p JOIN pages f ON f.id = p.from_page_id LEFT JOIN pages t ON t.id = p.ending_to_page_id
-      WHERE p.id = $1`, [id]);
+      WHERE p.id = $1${lock ? ' FOR SHARE OF p' : ''}`, [id]);
   return row ?? null;
+}
+
+/** Recheck the judged evidence while the coordinated timeline publication holds its transaction. */
+export async function validateEdgeProposalPublication(tx: BrainEngine, guard: EdgeProposalGuard,
+  target: { sourceId: string; slug: string; date: string; summary: string; pageId: number | null }): Promise<void> {
+  const stale = () => new OperationError('revision_conflict',
+    'The edge proposal evidence changed before publication.', 'Run the next dream cycle to re-judge the relationship.');
+  if (!Number.isSafeInteger(guard.id) || guard.id < 1 || !/^[a-f0-9]{64}$/.test(guard.snapshotHash)) throw stale();
+  // Row locks alone do not prevent a new context or relationship row from appearing.
+  await tx.executeRaw('LOCK TABLE links, link_relationships IN SHARE MODE');
+  const p = await loadProposal(tx, guard.id, true);
+  if (!p || p.status !== 'proposed' || p.judge_snapshot_hash !== guard.snapshotHash ||
+      p.source_id !== target.sourceId || p.subject_slug !== target.slug || p.from_page_id !== target.pageId ||
+      dateKey(p.close_date) !== target.date || p.generated_line !== target.summary) throw stale();
+  const members = await readEdgeSnapshot(tx, p.source_id, Number(p.from_page_id), p.link_type,
+    [Number(p.a_to_page_id), Number(p.b_to_page_id)], p.subject_slug);
+  if (!members || edgeSnapshotHash(p.source_id, Number(p.from_page_id), p.link_type, p.subject_slug, members) !== guard.snapshotHash) throw stale();
 }
 
 /** Does the subject page carry this proposal's closure (a dream transition on the ending relationship at the close date)? */
@@ -644,11 +664,12 @@ export async function applyEdgeProposal(engine: BrainEngine, id: number): Promis
   });
   if (!expectedRevision) return { status: 'stale', reason: 'the proposal evidence or source changed; the next dream cycle re-judges it' };
   try {
-    await appendTimelineLine(engine, p.source_id, p.subject_slug, String(dateKey(p.close_date)), p.generated_line, expectedRevision);
+    await appendTimelineLine(engine, p.source_id, p.subject_slug, String(dateKey(p.close_date)), p.generated_line, expectedRevision,
+      { id: p.id, snapshotHash: p.judge_snapshot_hash! });
   } catch (error) {
-    if ((error as { code?: string })?.code !== 'revision_conflict') throw error;
+    if (!['revision_conflict', 'source_changed'].includes((error as { code?: string })?.code ?? '')) throw error;
     await engine.executeRaw(`UPDATE link_edge_proposals SET status='stale', updated_at=now() WHERE id=$1 AND status='proposed'`, [id]);
-    return { status: 'stale', reason: 'the subject page changed during acceptance; the next dream cycle re-judges it' };
+    return { status: 'stale', reason: 'the proposal evidence or subject page changed during acceptance; the next dream cycle re-judges it' };
   }
   await rederivePage(engine, p.source_id, p.subject_slug);
   const landed = await closureLanded(engine, p);
@@ -692,11 +713,13 @@ async function trustedCtx(engine: BrainEngine, sourceId: string) {
   } as unknown as import('../operations.ts').OperationContext;
 }
 
-async function appendTimelineLine(engine: BrainEngine, sourceId: string, slug: string, date: string, summary: string, expectedRevision?: string): Promise<void> {
+async function appendTimelineLine(engine: BrainEngine, sourceId: string, slug: string, date: string, summary: string, expectedRevision?: string,
+  edgeProposalGuard?: EdgeProposalGuard): Promise<void> {
   const { operations } = await import('../operations.ts');
   const op = operations.find(o => o.name === 'add_timeline_entry')!;
   await op.handler(await trustedCtx(engine, sourceId), { slug, date, summary, source: DREAM_TIMELINE_SOURCE,
-    ...(expectedRevision ? { expected_revision: expectedRevision } : {}) });
+    ...(expectedRevision ? { expected_revision: expectedRevision } : {}),
+    ...(edgeProposalGuard ? { edge_proposal_guard: edgeProposalGuard } : {}) });
 }
 
 async function removeTimelineLine(engine: BrainEngine, sourceId: string, slug: string, date: string, summary: string): Promise<boolean> {
