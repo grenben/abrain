@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, afterAll, test, expect, spyOn } from 'bun:test';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,6 +23,8 @@ import { BudgetMeter } from '../../src/core/cycle/budget-meter.ts';
 import { runEnrichCore } from '../../src/commands/enrich.ts';
 import { createEphemeralBrain } from '../../src/core/ephemeral-brain.ts';
 import { withSubscriptionScratch } from '../../src/core/ai/subscription-target.ts';
+import { submitPageMutation } from '../../src/core/persistence/page-mutations.ts';
+import type { OperationContext } from '../../src/core/operations.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
 const root = mkdtempSync(join(tmpdir(), 'codex-jobs-'));
@@ -193,6 +195,20 @@ test('transactional publication fence rejects a second worker ownership change',
     })).rejects.toMatchObject({code:'subscription_owner_lost'});
     expect(await engine.getConfig('synthetic.publication_fence')).toBeNull();
   })).rejects.toMatchObject({code:'subscription_owner_lost'});
+});
+test('ordinary page admission under a subscription rejects a lost worker lease', async () => {
+  const job = await claimed();
+  const context: OperationContext = { engine, config: { engine: 'pglite', embedding_disabled: true },
+    logger: { info() {}, warn() {}, error() {} }, dryRun: false, remote: false, sourceId: 'default' };
+  const put = (slug: string) => submitPageMutation(context, { operation: 'put_page', params: {
+    slug, content: `---\ntype: note\ntitle: ${slug}\n---\n\nSynthetic body.`, request_id: randomUUID(), wait_ms: 100,
+  } });
+  await expect(runWithJobSpend(engine, job, ctxFor(job), async () => {
+    await put('notes/subscription-owned');
+    await engine.executeRaw("UPDATE minion_jobs SET lock_token='replacement',codex_claim_token=claim_generation+1,claim_generation=claim_generation+1 WHERE id=$1", [job.id]);
+    await expect(put('notes/subscription-lost')).rejects.toMatchObject({ code: 'subscription_owner_lost' });
+  })).rejects.toMatchObject({ code: 'subscription_owner_lost' });
+  expect(await engine.executeRaw("SELECT request_id FROM persistence_requests WHERE slug='notes/subscription-lost'")).toHaveLength(0);
 });
 test('cancelled jobs cannot dispatch even when the caller omits a gateway abort signal', async () => {
   const job = await claimed(); const controller = new AbortController();

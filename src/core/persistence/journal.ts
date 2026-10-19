@@ -1,4 +1,5 @@
 import { authorizeCodexWrite } from './codex-action-guard.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { randomUUID } from 'node:crypto';
 import { WRITE_SWITCHES, writeSwitchOn } from './switches.ts';
 import type { BrainEngine } from '../engine.ts';
@@ -274,7 +275,15 @@ async function prepareAdmission(engine: BrainEngine, input: WriteAdmission, over
       () => assertGraduationAdmission(tx),
       async () => assertMutationProtocol({ target_kind: input.targetKind, protocol_version: input.protocolVersion }),
       async () => { if (input.worktreeId) await assertWorktreeAdmission(tx, input); },
-      () => authorizeCodexWrite(tx, input, true),
+      async () => {
+        await authorizeCodexWrite(tx, input, true);
+        // Ordinary owner-brain page writes can publish model output too. Keep
+        // their admission inside the host's durable lease, after worktree
+        // fencing and before source/writer/request locks. Foreign scratch
+        // brains use their separate target protocol.
+        const subscription = codexSubscriptionContext();
+        if (subscription?.engine === engine) await subscription.checkAuthorityInTransaction?.(tx);
+      },
       // Source membership is locked before principal/counter/request guards. A
       // deleted/recreated source never receives work accepted for its old identity.
       async () => {
