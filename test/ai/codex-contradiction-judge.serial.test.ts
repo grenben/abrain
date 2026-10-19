@@ -427,3 +427,73 @@ test('private eval CLI admits paid query embedding only with its bound auxiliary
     writeFileSync(configFile, original);
   }
 });
+
+test('private eval CLI reserves paid reranking during hybrid retrieval', async () => {
+  const configFile = join(root, '.gbrain', 'config.json'), original = readFileSync(configFile, 'utf8');
+  const config = JSON.parse(original) as Record<string, unknown>;
+  delete config.embedding_disabled;
+  const keys = ['search.mode', 'search.reranker.enabled', 'search.reranker.model'];
+  const prior = await Promise.all(keys.map(key => engine.getConfig(key)));
+  writeFileSync(configFile, JSON.stringify(config));
+  configureGateway({ embedding_model: 'openai:text-embedding-3-small', embedding_dimensions: 1536,
+    reranker_model: 'voyage:rerank-2.5', env: { OPENAI_API_KEY: 'sk-fake', VOYAGE_API_KEY: 'sk-fake' } });
+  let embedCalls = 0, rerankCalls = 0;
+  __setEmbedTransportForTests((async () => {
+    embedCalls++;
+    return { embeddings: [Array.from({ length: 1536 }, (_, i) => i === 0 ? 1 : 0)], usage: { tokens: 100 } };
+  }) as never);
+  __setRerankTransportForTests(async (_url, init) => {
+    rerankCalls++;
+    const body = JSON.parse(init.body as string) as { documents: string[] };
+    return new Response(JSON.stringify({ results: body.documents.map((_, index) =>
+      ({ index, relevance_score: 0.9 - index * 0.01 })) }), { status: 200 });
+  });
+  try {
+    await engine.setConfig('search.mode', 'balanced');
+    await engine.setConfig('search.reranker.enabled', 'true');
+    await engine.setConfig('search.reranker.model', 'voyage:rerank-2.5');
+    const args = (requestId: string, maxUsd: string) => ['run', '--query', input.query, '--judge', input.model, '--top-k', '2',
+      '--budget-usd', '100', '--yes', '--no-cache', '--max-usd', maxUsd, '--codex-max-attempts', '2',
+      '--codex-max-turns', '2', '--codex-deadline', new Date(Date.now() + 600_000).toISOString(),
+      '--codex-request-id', requestId];
+    const before = calls().length;
+    const beforeReports = (await loadTrend(engine, 30)).length;
+    const deniedId = randomUUID();
+    await expect(runEvalSuspectedContradictions(engine, args(deniedId, '0.0000025')))
+      .rejects.toMatchObject({ name: 'GroupBudgetRefusal' });
+    expect(embedCalls).toBeGreaterThan(0);
+    expect(rerankCalls).toBe(0);
+    expect(calls()).toHaveLength(before);
+    expect((await loadTrend(engine, 30)).length).toBe(beforeReports);
+    const [denied] = await engine.executeRaw<{ run_id: string; attempts: number }>(
+      'SELECT run_id,attempts FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${deniedId}:%`]);
+    expect(Number(denied?.attempts)).toBe(0);
+    const deniedHolds = await engine.executeRaw<{ model: string; status: string }>(
+      'SELECT model,status FROM mcp_spend_reservations WHERE budget_key=$1', [`group:${denied!.run_id}`]);
+    expect(deniedHolds).toEqual([{ model: 'openai:text-embedding-3-small', status: 'settled' }]);
+
+    const requestId = randomUUID();
+    const beforeSuccessEmbeds = embedCalls, beforeSuccessReranks = rerankCalls;
+    await runEvalSuspectedContradictions(engine, args(requestId, '10'));
+    expect(embedCalls).toBeGreaterThan(0);
+    expect(rerankCalls).toBeGreaterThan(0);
+    expect(calls()).toHaveLength(before + 1);
+    const [allowance] = await engine.executeRaw<{ run_id: string }>(
+      'SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${requestId}:%`]);
+    const holds = await engine.executeRaw<{ status: string; usage_unknown_reason: string | null }>(
+      'SELECT status,usage_unknown_reason FROM mcp_spend_reservations WHERE budget_key=$1',
+      [`group:${allowance!.run_id}`]);
+    expect(holds).toHaveLength(embedCalls - beforeSuccessEmbeds + rerankCalls - beforeSuccessReranks);
+    expect(holds.some(row => row.status === 'settled')).toBe(true);
+    expect(holds.some(row => row.status === 'pending' && row.usage_unknown_reason === 'provider_usage_unknown')).toBe(true);
+    expect((await loadTrend(engine, 30))[0]!.report_json.run_status).toBe('ok');
+  } finally {
+    __setEmbedTransportForTests(null); __setRerankTransportForTests(null);
+    configureGateway({ env: {} });
+    writeFileSync(configFile, original);
+    for (let i = 0; i < keys.length; i++) {
+      if (prior[i] === null) await engine.unsetConfig(keys[i]!);
+      else await engine.setConfig(keys[i]!, prior[i]!);
+    }
+  }
+});
