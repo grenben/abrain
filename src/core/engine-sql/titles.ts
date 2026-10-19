@@ -33,7 +33,10 @@
  * websearch query with every lexeme labeled `:A`. That is served by
  * `idx_pages_search`, and negated or phrase terms are evaluated on title
  * lexemes only, so timeline text can never change which titles a remote
- * caller sees. Ranking uses the weight-A slice (`ts_filter(..., '{a}')`).
+ * caller sees. A plain one-word query also checks its trailing-NBSP lexeme:
+ * PostgreSQL can index `Acme ` as a different word from `Acme`, although the
+ * exact-title normalizer treats them as equal. Both probes use the GIN index.
+ * Ranking uses the weight-A slice (`ts_filter(..., '{a}')`).
  * Remote matching follows the language `search_vector` was built with;
  * `gbrain reindex-search-vector` rebuilds it after an FTS language change.
  * A page with a NULL `search_vector` is absent from the remote arm (the

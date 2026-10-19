@@ -44,8 +44,8 @@ export interface SearchTitlesStatement {
  * (`'acm' & !'secret'` → `'acm':A & !'secret':A`; prefix `'acm':*` →
  * `'acm':*A`). Lexemes are single-quoted with `''` escapes in that form.
  */
-const WEIGHT_A_QUERY = (ftsLang: string): string =>
-  `regexp_replace(websearch_to_tsquery('${ftsLang}', gbrain_fts_input($1))::text, '(''(?:[^'']|'''')*'')(?::(\\*))?', '\\1:\\2A', 'g')::tsquery`;
+const WEIGHT_A_QUERY = (ftsLang: string, input = '$1'): string =>
+  `regexp_replace(websearch_to_tsquery('${ftsLang}', gbrain_fts_input(${input}))::text, '(''(?:[^'']|'''')*'')(?::(\\*))?', '\\1:\\2A', 'g')::tsquery`;
 
 export function buildSearchTitlesStatement(query: string, opts: SearchOpts | undefined, dialect: SearchTitlesDialect): SearchTitlesStatement {
   const limit = clampSearchLimit(opts?.limit, 20, searchLimitCap());
@@ -61,7 +61,14 @@ export function buildSearchTitlesStatement(query: string, opts: SearchOpts | und
   // — safe to interpolate into raw SQL.
   const ftsLang = getFtsLanguage();
   const tsq = `websearch_to_tsquery('${ftsLang}', gbrain_fts_input($1))`;
-  const matchSql = safeChunks ? `p.search_vector @@ ${WEIGHT_A_QUERY(ftsLang)}` : `p.search_vector @@ ${tsq}`;
+  // PostgreSQL's parser keeps a trailing NBSP inside a title lexeme ("Acme "),
+  // so a plain "Acme" tsquery misses it even though the exact-title key matches.
+  // A second indexed tsquery recovers that one-token identity without scanning titles.
+  const nbspQuery = /^[A-Za-z0-9]+$/.test(query)
+    ? `websearch_to_tsquery('${ftsLang}', gbrain_fts_input($1 || chr(160)))` : null;
+  const matchSql = safeChunks
+    ? `(p.search_vector @@ ${WEIGHT_A_QUERY(ftsLang)}${nbspQuery ? ` OR p.search_vector @@ ${WEIGHT_A_QUERY(ftsLang, '$1 || chr(160)')}` : ''})`
+    : `(p.search_vector @@ ${tsq}${nbspQuery ? ` OR p.search_vector @@ ${nbspQuery}` : ''})`;
   const rankSql = safeChunks ? `ts_rank_cd(ts_filter(p.search_vector, '{a}'), ${tsq})` : `ts_rank_cd(p.search_vector, ${tsq})`;
 
   const params: unknown[] = [boundWebsearchQuery(query), normalizeAlias(query), limit, offset];
