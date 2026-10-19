@@ -34,6 +34,11 @@ import { CostTracker, estimateUpperBoundCost } from './cost-tracker.ts';
 import { buildSourceTierBreakdown, classifySlugTier } from './cross-source.ts';
 import { shouldSkipForDateMismatch } from './date-filter.ts';
 import { withBudgetTracker } from '../ai/gateway.ts';
+import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
+import { assertSubscriptionTarget } from '../ai/subscription-target.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { resolveTierDefault } from '../model-config.ts';
 import { BudgetTracker, BudgetExhausted } from '../budget/budget-tracker.ts';
 import { judgeContradiction, type JudgeInput, type JudgeOutput } from './judge.ts';
@@ -245,6 +250,18 @@ function sortPairs(
  * strings — CLI flag parsing lives in the command file, not here.
  */
 export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerResult> {
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) {
+    assertPrivateRoute(opts.judgeModel ?? resolveTierDefault('utility'), 'eval-contradictions:runner', privatePolicy);
+    if (opts.judgeFn || opts.searchFn) throw new CodexProposalError('invalid_input');
+    await assertSubscriptionTarget(opts.engine);
+    const context = codexSubscriptionContext()!;
+    await context.checkAuthority?.();
+    const [allowance] = await context.engine.executeRaw<{ current: boolean }>(
+      'SELECT deadline > now() AS current FROM codex_subscription_runs WHERE run_id=$1', [context.runId]);
+    if (!allowance) throw new SubscriptionAdmissionError('subscription_required');
+    if (!allowance.current) throw new SubscriptionAdmissionError('subscription_exhausted');
+  }
   // T6: wrap the entire body in withBudgetTracker so every gateway-layer
   // chat/embed/rerank call (judge, embed-on-query) auto-records via the
   // AsyncLocalStorage scope from src/core/ai/gateway.ts. The existing

@@ -25,8 +25,10 @@ export const SCHEMA_VERSION = 1 as const;
  * v4 (N2 undated conflicts, 2026-10): a same-fact check, then a time check
  *   that forbids ordering two values by size, document kind or listing order;
  *   a negative claim about one party and a positive claim about another agree.
+ * v5 (private Codex, 2026-10): native-schema judgment requires exact quotes;
+ *   older cache rows cannot serve as private verdicts without that validation.
  */
-export const PROMPT_VERSION = '4' as const;
+export const PROMPT_VERSION = '5' as const;
 
 /** Truncation policy string baked into the cache key. */
 export const TRUNCATION_POLICY = '1500-chars-utf8-safe' as const;

@@ -133,7 +133,7 @@ describe('buildJudgePrompt', () => {
     expect(p).toContain('"Fund A is not leading the round"');
     expect(p).toContain('Never infer an order from the values themselves');
     expect(p).toContain('which statement is listed first');
-    expect(PROMPT_VERSION).toBe('4');
+    expect(PROMPT_VERSION).toBe('5');
   });
 });
 

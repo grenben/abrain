@@ -9,6 +9,7 @@ import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { judgeContradiction, type JudgeInput } from '../../src/core/eval-contradictions/judge.ts';
+import { runContradictionProbe } from '../../src/core/eval-contradictions/runner.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'codex-contradiction-judge-'));
 const bin = join(root, 'fixture.mjs'), capture = join(root, 'calls.jsonl'), control = join(root, 'response.json');
@@ -101,5 +102,29 @@ test('a private caller cannot inject another transport or conflicting model', as
     .rejects.toMatchObject({ reason: 'invalid_input' });
   await expect(judgeContradiction({ ...input, model: 'anthropic:forbidden' }))
     .rejects.toMatchObject({ name: 'PrivateRoutingError' });
+  expect(calls()).toHaveLength(before);
+});
+
+test('a private probe requires subscription admission before search or cache access', async () => {
+  const before = calls().length;
+  await expect(runContradictionProbe({ engine, queries: [input.query], judgeModel: input.model }))
+    .rejects.toMatchObject({ code: 'subscription_required' });
+  await withCodexSubscription({ engine, runId: 'missing-contradiction-allowance' }, async () => {
+    await expect(runContradictionProbe({ engine, queries: [input.query], judgeModel: input.model }))
+      .rejects.toMatchObject({ code: 'subscription_required' });
+  });
+  expect(calls()).toHaveLength(before);
+});
+
+test('an admitted private probe cannot substitute a judge or search function', async () => {
+  const before = calls().length;
+  await run(async () => {
+    await expect(runContradictionProbe({ engine, queries: [input.query], judgeModel: input.model,
+      judgeFn: async () => { throw new Error('injected judge'); } }))
+      .rejects.toMatchObject({ reason: 'invalid_input' });
+    await expect(runContradictionProbe({ engine, queries: [input.query], judgeModel: input.model,
+      searchFn: async () => { throw new Error('injected search'); } }))
+      .rejects.toMatchObject({ reason: 'invalid_input' });
+  });
   expect(calls()).toHaveLength(before);
 });
