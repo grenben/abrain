@@ -74,3 +74,26 @@ test('workers CLI performs the host scan without opening a brain database', asyn
       cross_host_complete: false });
   } finally { print.mockRestore(); }
 });
+
+test('preflight on an older brain reports missing migration without querying the queue', async () => {
+  const written: string[] = [], queried: string[] = [];
+  const print = spyOn(output, 'writeStdoutFinal').mockImplementation(async value => { written.push(value); });
+  const engine = { executeRaw: async (sql: string) => {
+    queried.push(sql);
+    if (!sql.startsWith("SELECT to_regclass('minion_jobs')")) throw new Error('queue must stay unread');
+    return [{ jobs: true, parking: false, locks: true }];
+  }, disconnect: async () => {} };
+  const ctx = { connectEngine: async (opts: unknown) => {
+    expect(opts).toEqual({ probeOnly: true }); return engine;
+  } } as unknown as CliDispatchContext;
+  try {
+    await run(['jobs', 'preflight', '--json'], ctx);
+    const report = JSON.parse(written.join(''));
+    expect(report.blockers).toContainEqual({ code: 'job_upgrade_schema_missing',
+      required_migration: 267, missing_relations: ['codex_parked_jobs'] });
+    expect(report).toMatchObject({ status: 'blocked', cutover_ready: false,
+      brain_id: null, queue_snapshot_hash: null });
+    expect(queried).toHaveLength(1);
+    expect(output.currentExitCode()).toBe(1);
+  } finally { print.mockRestore(); output._resetCliExitVerdictForTests(); process.exitCode = 0; }
+});

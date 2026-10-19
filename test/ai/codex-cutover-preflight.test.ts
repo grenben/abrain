@@ -36,3 +36,14 @@ test('cutover preflight cannot certify readiness with empty or partial snapshots
     { code: 'local_process_scan_incomplete', count: 2 },
   ]);
 });
+
+test('missing upgrade schema keeps queue unknown while retaining local blockers', () => {
+  const l = local(); l.processes.push({ pid: 77, role: 'server' });
+  const report = reviewPrivateCutover(null, l, 100, ['codex_parked_jobs']);
+  expect(report).toMatchObject({ status: 'blocked', brain_id: null, queue_snapshot_hash: null,
+    cutover_ready: false, blockers: [
+      { code: 'job_upgrade_schema_missing', required_migration: 267, missing_relations: ['codex_parked_jobs'] },
+      { code: 'local_gbrain_processes_require_stop_or_review', count: 1,
+        processes_sample: [{ pid: 77, role: 'server' }] },
+    ] });
+});

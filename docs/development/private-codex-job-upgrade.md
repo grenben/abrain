@@ -49,6 +49,10 @@ other than the scanning CLI. It exits nonzero and always reports
 are not atomic and cannot certify other hosts, producer quiescence, runtime
 qualification, copied-brain custody or feature acceptance. Treat it as a
 review checklist, not an activation command.
+Before migration v267 is present, preflight reports `job_upgrade_schema_missing`
+with the missing relation names and still includes local process blockers. Its
+database queue snapshot is then unknown; the command does not apply migrations
+or imply an empty queue.
 
 Preview reads only an explicit bounded selection (at most 128 IDs) and immediate
 dependencies. Output includes hashes, status, recognized protocol and disposition;

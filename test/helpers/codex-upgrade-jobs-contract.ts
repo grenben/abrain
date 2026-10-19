@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
 import { previewJobUpgrade } from '../../src/core/minions/codex-upgrade-snapshot.ts';
-import { inventoryQueuedJobs } from '../../src/core/minions/codex-upgrade-inventory.ts';
+import { inventoryQueuedJobs, missingJobUpgradeRelations } from '../../src/core/minions/codex-upgrade-inventory.ts';
 import { parkUpgradeJobs, restoreParkedJobs } from '../../src/core/minions/codex-upgrade-park.ts';
 import { previewUpgradeSubmission, resubmitUpgradeJob, type UpgradeSubmission } from '../../src/core/minions/codex-upgrade-resubmit.ts';
 import { run } from '../../src/cli/commands/private-codex.ts';
@@ -65,6 +65,7 @@ export function codexUpgradeJobsContract(factory: () => Promise<{ engine: BrainE
   });
   test('preflight CLI reports queue blockers through a probe-only connection and stays nonready', async () => {
     const id=await old(), written:string[]=[], connections:unknown[]=[];
+    expect(await missingJobUpgradeRelations(engine)).toEqual([]);
     const print=spyOn(output,'writeStdoutFinal').mockImplementation(async value=>{written.push(value);}),disconnect=spyOn(engine,'disconnect').mockResolvedValue();
     const ctx={connectEngine:async (opts:unknown)=>{connections.push(opts);return engine;}} as unknown as CliDispatchContext;
     try {

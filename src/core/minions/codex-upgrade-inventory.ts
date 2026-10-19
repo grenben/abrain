@@ -11,6 +11,14 @@ const MAX_LOCK_FIELD_BYTES = 4096;
 const SUPERVISOR_LOCK_PREFIX = 'gbrain-supervisor:';
 const MODEL_PIN_KEYS = ['model', 'model_id', 'modelId'] as const;
 
+/** Probe before inventory on an older installed brain; no startup migration or queue read. */
+export async function missingJobUpgradeRelations(engine: BrainEngine): Promise<string[]> {
+  const [row] = await engine.executeRaw<{ jobs: boolean; parking: boolean; locks: boolean }>(
+    "SELECT to_regclass('minion_jobs') IS NOT NULL AS jobs, to_regclass('codex_parked_jobs') IS NOT NULL AS parking, to_regclass('gbrain_cycle_locks') IS NOT NULL AS locks");
+  return [!row?.jobs ? 'minion_jobs' : null, !row?.parking ? 'codex_parked_jobs' : null,
+    !row?.locks ? 'gbrain_cycle_locks' : null].filter((name): name is string => name !== null);
+}
+
 interface InventoryRow {
   id: number;
   name: string;
