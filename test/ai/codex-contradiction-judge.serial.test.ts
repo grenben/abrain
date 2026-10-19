@@ -316,3 +316,24 @@ test('the private CLI retrieves pages, judges once, persists a run and reuses it
     .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
   expect(calls()).toHaveLength(before + 1);
 });
+
+test('invalid native verdict persists a failed report without accepting a turn', async () => {
+  const requestId = randomUUID();
+  const args = ['run', '--query', input.query, '--judge', input.model, '--top-k', '2',
+    '--budget-usd', '100', '--yes', '--no-cache', '--codex-max-attempts', '2', '--codex-max-turns', '2',
+    '--codex-deadline', new Date(Date.now() + 600_000).toISOString(), '--codex-request-id', requestId];
+  reply({ raw: '{"unexpected":true}' });
+  const before = calls().length, originalExit = process.exit;
+  process.exit = ((code: number) => { throw new Error(`exit:${code}`); }) as typeof process.exit;
+  try {
+    await expect(runEvalSuspectedContradictions(engine, args)).rejects.toThrow('exit:1');
+  } finally { process.exit = originalExit; }
+  expect(calls()).toHaveLength(before + 1);
+  const report = (await loadTrend(engine, 30)).find(row => row.report_json.run_status === 'judge_failed')?.report_json;
+  expect(report).toMatchObject({ run_status: 'judge_failed', judge_errors: { total: 1 },
+    per_query: [{ pairs_judged: 0 }], verdict_breakdown: { contradiction: 0 } });
+  const [allowance] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+    'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${requestId}:%`]);
+  expect(Number(allowance?.attempts)).toBe(1);
+  expect(Number(allowance?.accepted_turns)).toBe(0);
+});
