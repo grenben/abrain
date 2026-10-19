@@ -12,6 +12,9 @@ import { digest } from '../core/persistence/digest.ts';
 import { isWriteRequestId } from '../core/persistence/types.ts';
 import { intFlagValue } from '../cli/flag-values.ts';
 import { usageError } from '../cli/cli-error.ts';
+import { MinionQueue } from '../core/minions/queue.ts';
+import type { MinionJob } from '../core/minions/types.ts';
+import type { SpendAuthorization } from '../core/minions/spend-record.ts';
 
 export interface EnrichAllowanceFlags {
   maxAttempts?: string;
@@ -127,4 +130,54 @@ export async function withEnrichSubscription<T>(engine: BrainEngine, flags: Enri
       await checkAuthority();
       return result;
     }));
+}
+
+/** One durable parent allowance and one paid cap across the entire source fan-out. */
+export async function queuePrivateEnrich(engine: BrainEngine, flags: EnrichAllowanceFlags,
+  identity: EnrichRunIdentity, paramsForSource: (sourceId: string) => Record<string, unknown>,
+  keyForSource: (sourceId: string) => string, spendAuthorization?: SpendAuthorization): Promise<{
+    jobs: MinionJob[]; requestId: string; spendAuthorization?: SpendAuthorization;
+  }> {
+  const policy = readPrivateCodexConfig();
+  if (!policy || codexSubscriptionContext()) throw new SubscriptionAdmissionError('subscription_required');
+  if (identity.auxiliaryMaxUsd !== undefined && (!Number.isFinite(identity.auxiliaryMaxUsd) || identity.auxiliaryMaxUsd <= 0)) {
+    throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
+  }
+  const grant = parseGrant(flags);
+  await resolvePrivateModel(engine, { cliFlag: identity.params.model as string | undefined,
+    configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, policy);
+  const sourceIds = [...new Set(identity.sourceIds)].sort();
+  const paid = spendAuthorization ? { ...spendAuthorization, group_id: grant.requestId } : undefined;
+  if (paid?.uncapped || identity.auxiliaryMaxUsd !== undefined && (!paid || paid.cap_usd !== identity.auxiliaryMaxUsd)) {
+    throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
+  }
+  const jobs = await engine.transaction(async tx => {
+    await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
+    await declareDurablePersistence(tx);
+    await lockSources(tx, sourceIds);
+    const sources = await selectedSources(tx, sourceIds);
+    const current = readPrivateCodexConfig();
+    if (!current || current.model !== policy.model || current.bin !== policy.bin) {
+      throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    }
+    const prefix = `codex-enrich-batch:${grant.requestId}:`;
+    const runId = prefix + digest({ protocol: 'codex-enrich-batch-v1', identity, sources,
+      model: policy.model, bin: policy.bin, auxiliaryMaxUsd: identity.auxiliaryMaxUsd ?? null });
+    const prior = await tx.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`${prefix}%`]);
+    if (prior.some(row => row.run_id !== runId)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    await createSubscriptionRun(tx, { ...grant, runId, accountLane: CODEX_JOB_ACCOUNT_LANE });
+    const queue = new MinionQueue(tx);
+    const submitted: MinionJob[] = [];
+    for (const sourceId of sourceIds) {
+      submitted.push(await queue.add('enrich', paramsForSource(sourceId),
+        { idempotency_key: `${keyForSource(sourceId)}:${grant.requestId}` },
+        { codexSubscription: { maxAttempts: grant.maxAttempts, maxTurns: grant.maxTurns,
+          deadline: grant.deadline, parentRunId: runId }, ...(paid ? { spendAuthorization: paid } : {}) }));
+    }
+    return submitted;
+  });
+  process.stderr.write(`[enrich] subscription batch ${grant.requestId} ` + JSON.stringify({ billing: 'subscription',
+    jobs: jobs.length, max_attempts: grant.maxAttempts, max_turns: grant.maxTurns,
+    deadline: grant.deadline.toISOString(), auxiliary_cap_usd: identity.auxiliaryMaxUsd ?? null }) + '\n');
+  return { jobs, requestId: grant.requestId, ...(paid ? { spendAuthorization: paid } : {}) };
 }

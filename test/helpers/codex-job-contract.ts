@@ -18,14 +18,14 @@ import { SOURCE_FRESHNESS_PHASES } from '../../src/core/cycle/phase-scope.ts';
 import { dispatchGlobalMaintenance } from '../../src/commands/autopilot-fanout.ts';
 import { scheduledCodexSubmit } from '../../src/core/minions/subscription-schedules.ts';
 import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
-import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
+import { codexSubscriptionContext, withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { BudgetMeter } from '../../src/core/cycle/budget-meter.ts';
 import { parseArgs as parseEnrichArgs, runEnrich, runEnrichCore } from '../../src/commands/enrich.ts';
 import { createEphemeralBrain } from '../../src/core/ephemeral-brain.ts';
 import { withSubscriptionScratch } from '../../src/core/ai/subscription-target.ts';
 import { submitPageMutation } from '../../src/core/persistence/page-mutations.ts';
 import type { OperationContext } from '../../src/core/operations.ts';
-import { withEnrichSubscription } from '../../src/commands/enrich-subscription.ts';
+import { queuePrivateEnrich, withEnrichSubscription } from '../../src/commands/enrich-subscription.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
 const root = mkdtempSync(join(tmpdir(), 'codex-jobs-'));
@@ -167,16 +167,65 @@ test('direct enrich CLI carries its explicit allowance into page publication', a
   expect((await engine.readPageSnapshot(slug, { sourceId: 'default' }))?.page.compiled_truth).toContain(`[Source: ${slug}]`);
   expect(count()).toBe(1);
 });
+test('background enrich CLI submits a source job with a parent subscription allowance', async () => {
+  const backgroundEngine = Object.assign(Object.create(engine) as BrainEngine, { kind: 'postgres' as const });
+  const requestId = randomUUID();
+  const flags = ['--background', '--source', 'default', '--model', 'codex-cli:gpt-test', '--limit', '1',
+    '--max-usd', '0.01', '--yes', '--codex-max-attempts', '1', '--codex-max-turns', '1',
+    '--codex-deadline', grant().deadline.toISOString(), '--codex-request-id', requestId];
+  const log = spyOn(console, 'log').mockImplementation(() => {});
+  try { await runEnrich(backgroundEngine, flags); } finally { log.mockRestore(); }
+  const [child] = await engine.executeRaw<{ parent_run_id: string }>(
+    "SELECT parent_run_id FROM codex_subscription_runs WHERE run_id LIKE 'codex-job:%'");
+  expect(child?.parent_run_id).toContain(`codex-enrich-batch:${requestId}:`);
+  const [job] = await engine.executeRaw<{ spend_authorization: { group_id: string } }>(
+    "SELECT spend_authorization FROM minion_jobs WHERE name='enrich' ORDER BY id DESC LIMIT 1");
+  expect(job?.spend_authorization.group_id).toBe(requestId);
+  expect(count()).toBe(0);
+});
 test('direct enrich CLI refuses missing or duplicated subscription flags before work', async () => {
   await expect(runEnrich(engine, ['--source', 'default', '--yes']))
     .rejects.toMatchObject({ code: 'subscription_required' });
   const backgroundEngine = Object.assign(Object.create(engine) as BrainEngine, { kind: 'postgres' as const });
-  await expect(runEnrich(backgroundEngine, ['--background', '--source', 'default', '--yes',
-    '--codex-max-attempts', '1', '--codex-max-turns', '1', '--codex-deadline', grant().deadline.toISOString()]))
-    .rejects.toThrow('Private Codex --background enrichment is not supported yet.');
+  await expect(runEnrich(backgroundEngine, ['--background', '--source', 'default', '--yes']))
+    .rejects.toMatchObject({ code: 'subscription_required' });
+  await expect(runEnrich(backgroundEngine, ['--background', '--dry-run', '--source', 'default']))
+    .rejects.toThrow('Private Codex --dry-run cannot be queued.');
   expect(parseEnrichArgs(['--codex-max-attempts', '2', '--codex-max-attempts', '3']).error)
     .toContain('requires one space-separated value');
   expect(count()).toBe(0);
+});
+test('private background source jobs share one durable subscription and paid cap', async () => {
+  await engine.executeRaw("INSERT INTO sources (id, name) VALUES ('other', 'Other') ON CONFLICT (id) DO NOTHING");
+  try {
+    const flags = { maxAttempts: '2', maxTurns: '2', deadline: grant().deadline.toISOString(), requestId: randomUUID() };
+    const identity = { sourceIds: ['default', 'other'], params: { model: 'codex-cli:gpt-test', limit: 1 }, auxiliaryMaxUsd: 0.02 };
+    const spend = jobSpendAuthorization({ consented_effects: ['paid'], cap_usd: 0.02, cap_source: 'user', via: 'yes' },
+      { command: 'enrich', of: 2 });
+    const submit = () => queuePrivateEnrich(engine, flags, identity, sourceId => ({ sourceId, model: 'codex-cli:gpt-test', limit: 1 }),
+      sourceId => `test-enrich:${sourceId}`, spend);
+    const first = await submit();
+    expect(first.jobs).toHaveLength(2);
+    expect(first.jobs.every(job => job.spend_authorization?.group_id === flags.requestId)).toBe(true);
+    const [parent] = await engine.executeRaw<{ run_id: string; max_attempts: number; max_turns: number }>(
+      "SELECT run_id,max_attempts,max_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-enrich-batch:%'");
+    expect(parent).toMatchObject({ max_attempts: 2, max_turns: 2 });
+    const children = await engine.executeRaw<{ run_id: string; parent_run_id: string }>(
+      "SELECT run_id,parent_run_id FROM codex_subscription_runs WHERE parent_run_id LIKE 'codex-enrich-batch:%' ORDER BY run_id");
+    expect(children).toHaveLength(2);
+    expect(children.every(child => child.parent_run_id === parent?.run_id)).toBe(true);
+    const retry = await submit();
+    expect(retry.jobs.map(job => job.id)).toEqual(first.jobs.map(job => job.id));
+    await expect(queuePrivateEnrich(engine, flags, { ...identity, params: { ...identity.params, limit: 2 } },
+      sourceId => ({ sourceId, model: 'codex-cli:gpt-test', limit: 2 }), sourceId => `test-enrich:${sourceId}`, spend))
+      .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+    for (const child of children) await withCodexSubscription({ engine, runId: child.run_id }, () => call());
+    await expect(withCodexSubscription({ engine, runId: children[0]!.run_id }, () => call()))
+      .rejects.toMatchObject({ code: 'subscription_exhausted' });
+    expect(count()).toBe(2);
+  } finally {
+    await engine.executeRaw("DELETE FROM sources WHERE id='other'");
+  }
 });
 test('a real worker carries the grant through gateway dispatch and fenced completion', async () => {
   const job = await queue.add('enrich', { sourceId: 'default' }, { max_attempts: 1 }, { codexSubscription: grant() });

@@ -64,7 +64,7 @@ import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError } from
 import { codexSubscriptionContext } from '../core/ai/subscription-context.ts';
 import { assertSubscriptionTarget } from '../core/ai/subscription-target.ts';
 import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
-import { withEnrichSubscription, type EnrichAllowanceFlags } from './enrich-subscription.ts';
+import { queuePrivateEnrich, withEnrichSubscription, type EnrichAllowanceFlags } from './enrich-subscription.ts';
 import { cachedCodexProposal, withCodexProposalCache } from '../core/ai/codex-proposal-cache.ts';
 import { CodexProposalError } from '../core/ai/providers/codex-contract.ts';
 import { digest } from '../core/persistence/digest.ts';
@@ -926,7 +926,7 @@ Options:
   --dry-run              List candidates + cost estimate; no LLM, no write.
   --resume               Resume from the prior checkpoint (default behavior).
   --force                Clear the checkpoint and re-process every candidate.
-  --background           Submit as Minion job(s); print job_id(s); exit.
+  --background           Submit as Minion job(s); private Codex shares one allowance across them.
   --json                 Machine-readable summary.
   --yes, -y              Auto-confirm cost preview in non-TTY contexts.
   --help, -h             Show this help.
@@ -1052,11 +1052,13 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
   if ((!privatePolicy || parsed.dryRun) && Object.values(grantFlags).some(value => value !== undefined)) {
     throw usageError('Codex allowance flags require private, non-dry-run enrichment.', 'Remove the flags or enable strict private Codex.');
   }
-  if (privatePolicy && background && !parsed.dryRun) {
-    throw usageError('Private Codex --background enrichment is not supported yet.',
-      'Run enrichment inline with an explicit Codex allowance.');
+  if (privatePolicy && background && parsed.dryRun) {
+    throw usageError('Private Codex --dry-run cannot be queued.', 'Remove --background to preview enrichment inline.');
   }
-  if (privatePolicy && !parsed.dryRun && !background && !codexSubscriptionContext() &&
+  if (privatePolicy && background && codexSubscriptionContext()) {
+    throw usageError('An enclosing host cannot queue a new enrichment allowance.', 'Run enrichment inline under the host allowance.');
+  }
+  if (privatePolicy && !parsed.dryRun && !codexSubscriptionContext() &&
       (!grantFlags.maxAttempts || !grantFlags.maxTurns || !grantFlags.deadline)) {
     throw new SubscriptionAdmissionError('subscription_required');
   }
@@ -1122,6 +1124,23 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
   }
 
   if (background) {
+    if (privatePolicy && !parsed.dryRun) {
+      const submission = await queuePrivateEnrich(engine, grantFlags, { sourceIds, params: buildJobParams(args),
+        auxiliaryMaxUsd: maxCostUsd }, sid => ({ ...buildJobParams(args), sourceId: sid }),
+      sid => backgroundIdempotencyKey(sid, args), spend);
+      const jobs = submission.jobs;
+      if (jobs.length === 1) console.log(`job_id=${jobs[0]!.id}`);
+      else console.log(`Submitted ${jobs.length} enrich job(s) (one per source): ${jobs.map(j => `job_id=${j.id}`).join(' ')}`);
+      console.log('Follow with: gbrain jobs follow <id>');
+      if (submission.spendAuthorization) for (const line of spendSubmitSummary(submission.spendAuthorization, jobs,
+        submission.spendAuthorization.argv ?? []).lines) console.error(line);
+      if (args.includes('--follow') && jobs.length === 1) {
+        const { spawnCliChild } = await import('../core/cli-force-exit.ts');
+        const child = spawnCliChild(process.argv[0] ?? 'bun', [process.argv[1] ?? '', 'jobs', 'follow', String(jobs[0]!.id)]);
+        await new Promise<void>(resolve => child.on('exit', () => resolve()));
+      }
+      return;
+    }
     if (sourceIds.length === 1) {
       await maybeBackground({
         engine,
