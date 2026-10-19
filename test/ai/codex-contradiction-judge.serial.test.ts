@@ -382,6 +382,85 @@ test('a page edit after an accepted turn still blocks private eval publication',
   expect(Number(allowance?.accepted_turns)).toBe(1);
 });
 
+test.each([
+  { name: 'active take', mutate: async () => {
+    const rows = await engine.executeRaw<{ id: number }>(`INSERT INTO takes(page_id,row_num,claim,kind,holder)
+      SELECT id, 1, 'A new independent claim', 'take', 'test' FROM pages WHERE slug='notes/revenue-a' RETURNING id`);
+    expect(rows).toHaveLength(1);
+    return async () => { await engine.executeRaw('DELETE FROM takes WHERE id=$1', [rows[0]!.id]); };
+  } },
+  { name: 'chunk projection', mutate: async () => {
+    const [chunk] = await engine.executeRaw<{ id: number; model: string }>(`SELECT id,model FROM content_chunks
+      WHERE page_id=(SELECT id FROM pages WHERE slug='notes/revenue-a') ORDER BY id LIMIT 1`);
+    expect(chunk).toBeDefined();
+    await engine.executeRaw('UPDATE content_chunks SET model=model || $2 WHERE id=$1', [chunk!.id, '-changed']);
+    return async () => { await engine.executeRaw('UPDATE content_chunks SET model=$2 WHERE id=$1', [chunk!.id, chunk!.model]); };
+  } },
+  { name: 'search config', mutate: async () => {
+    const prior = await engine.getConfig('search.mode');
+    await engine.setConfig('search.mode', 'conservative');
+    return async () => { if (prior === null) await engine.unsetConfig('search.mode'); else await engine.setConfig('search.mode', prior); };
+  } },
+  { name: 'source config', mutate: async () => {
+    const [source] = await engine.executeRaw<{ config: Record<string, unknown> }>(`SELECT config FROM sources WHERE id='default'`);
+    const rows = await engine.executeRaw(`UPDATE sources SET config=config || '{"codex_eval_input_test":true}'::jsonb
+      WHERE id='default' RETURNING id`);
+    expect(rows).toHaveLength(1);
+    return async () => { await engine.executeRaw('UPDATE sources SET config=$1::jsonb WHERE id=$2', [JSON.stringify(source!.config), 'default']); };
+  } },
+])('a $name change invalidates private eval before dispatch or publication', async ({ mutate }) => {
+  const requestId = randomUUID();
+  const flags = { maxAttempts: '2', maxTurns: '2', deadline: new Date(Date.now() + 600_000).toISOString(), requestId };
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  const before = calls().length;
+  let cleanup = async () => {};
+  try {
+    await expect(withEvalContradictionSubscription(engine, flags, identity, async () => {
+      cleanup = await mutate();
+      await expect(codexSubscriptionContext()!.checkAuthority!()).rejects
+        .toMatchObject({ code: 'subscription_identity_conflict' });
+      await expect(judgeContradiction(input)).rejects
+        .toMatchObject({ code: 'subscription_identity_conflict' });
+      let published = false;
+      await expect(subscriptionTargetTransaction(engine, async () => { published = true; }))
+        .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect(published).toBe(false);
+    })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  } finally { await cleanup(); }
+  expect(calls()).toHaveLength(before);
+  const [allowance] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+    'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${requestId}:%`]);
+  expect(Number(allowance?.attempts)).toBe(0);
+  expect(Number(allowance?.accepted_turns)).toBe(0);
+});
+
+test('a projection change after an accepted turn still blocks private eval publication', async () => {
+  const requestId = randomUUID();
+  const flags = { maxAttempts: '2', maxTurns: '2', deadline: new Date(Date.now() + 600_000).toISOString(), requestId };
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  let published = false;
+  const [chunk] = await engine.executeRaw<{ id: number; model: string }>(`SELECT id,model FROM content_chunks
+    WHERE page_id=(SELECT id FROM pages WHERE slug='notes/revenue-b') ORDER BY id LIMIT 1`);
+  expect(chunk).toBeDefined();
+  try {
+    await expect(withEvalContradictionSubscription(engine, flags, identity, async () => {
+      expect((await judgeContradiction(input)).verdict.verdict).toBe('contradiction');
+      await engine.executeRaw('UPDATE content_chunks SET model=model || $2 WHERE id=$1', [chunk!.id, '-later']);
+      await expect(subscriptionTargetTransaction(engine, async () => { published = true; }))
+        .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+    })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  } finally { await engine.executeRaw('UPDATE content_chunks SET model=$2 WHERE id=$1', [chunk!.id, chunk!.model]); }
+  expect(published).toBe(false);
+  const [allowance] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+    'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${requestId}:%`]);
+  expect(Number(allowance?.attempts)).toBe(1);
+  expect(Number(allowance?.accepted_turns)).toBe(1);
+});
+
 test('private eval CLI admits paid query embedding only with its bound auxiliary cap', async () => {
   const configFile = join(root, '.gbrain', 'config.json'), original = readFileSync(configFile, 'utf8');
   const config = JSON.parse(original) as Record<string, unknown>;

@@ -11,6 +11,7 @@ import { digest } from '../core/persistence/digest.ts';
 import { isWriteRequestId } from '../core/persistence/types.ts';
 import { intFlagValue, numberFlagValue } from '../cli/flag-values.ts';
 import { usageError } from '../cli/cli-error.ts';
+import { CODEX_EVAL_INPUT_TABLES } from '../core/schema-migrations/v290-codex-eval-input-clock.ts';
 
 export interface EvalContradictionAllowance {
   maxAttempts?: string;
@@ -64,10 +65,18 @@ async function pageClock(engine: BrainEngine): Promise<string> {
   return row.value;
 }
 
-/** Hold both inventories stable through a durable run or report write. */
+/** Statement triggers advance this even when a transaction later rolls back. */
+async function inputClock(engine: BrainEngine): Promise<string> {
+  const [row] = await engine.executeRaw<{ value: string }>(
+    'SELECT last_value::text AS value FROM codex_eval_input_clock_seq');
+  if (!row) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  return row.value;
+}
+
+/** Close each clock check-to-write window, including new retrieval rows. */
 async function lockCorpus(engine: BrainEngine): Promise<void> {
   await engine.executeRaw("SELECT set_config('lock_timeout','1s',true)");
-  await engine.executeRaw('LOCK TABLE sources,pages IN SHARE MODE');
+  await engine.executeRaw(`LOCK TABLE sources,pages,${CODEX_EVAL_INPUT_TABLES.filter(table => table !== 'sources').join(',')} IN SHARE MODE`);
 }
 
 /** A local CLI allowance binds query, route, options, and source inventory before any private work. */
@@ -91,8 +100,8 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     return run();
   }
   const grant = parseAllowance(flags);
-  const snapshot = await sources(engine), clock = await pageClock(engine);
-  const claim = { identity, sources: snapshot, pageClock: clock, model: policy.model, bin: policy.bin,
+  const snapshot = await sources(engine), clock = await pageClock(engine), retrievalClock = await inputClock(engine);
+  const claim = { identity, sources: snapshot, pageClock: clock, inputClock: retrievalClock, model: policy.model, bin: policy.bin,
     auxiliaryUsd: grant.maxUsd ?? null };
   const prefix = `codex-eval:${grant.requestId}:`;
   const runId = prefix + digest(claim);
@@ -101,7 +110,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
     await lockCorpus(tx);
     await declareDurablePersistence(tx);
-    if (digest({ ...claim, sources: await sources(tx), pageClock: await pageClock(tx) }) !== digest(claim)) {
+    if (digest({ ...claim, sources: await sources(tx), pageClock: await pageClock(tx), inputClock: await inputClock(tx) }) !== digest(claim)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     const prior = await tx.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`${prefix}%`]);
@@ -115,7 +124,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy);
-    if (digest({ ...claim, sources: await sources(db), pageClock: await pageClock(db) }) !== digest(claim)) {
+    if (digest({ ...claim, sources: await sources(db), pageClock: await pageClock(db), inputClock: await inputClock(db) }) !== digest(claim)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
   };
