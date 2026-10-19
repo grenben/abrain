@@ -121,10 +121,10 @@ describe.skipIf(skip)('schema drift: PGLite ↔ Postgres post-initSchema parity 
     const dbName = url.pathname.replace(/^\//, '');
     const host = url.hostname;
     const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
-    // db-name pattern is the floor: gbrain_test, *_test, test_*, *_e2e.
-    // Required REGARDLESS of any override — a production db named "production_data"
-    // cannot be reset even with GBRAIN_TEST_DB=1.
-    const looksLikeTestDb = /^(gbrain_test|.*_test|test_.*|.*_e2e)$/i.test(dbName);
+    // db-name pattern is the floor: gbrain_test, its numbered E2E shards,
+    // *_test, test_*, or *_e2e. Required REGARDLESS of any override — a
+    // production db named "production_data" cannot be reset even with GBRAIN_TEST_DB=1.
+    const looksLikeTestDb = /^(gbrain_test(?:_e2e_[1-9][0-9]*)?|.*_test|test_.*|.*_e2e)$/i.test(dbName);
     const ciOptIn = process.env.GBRAIN_TEST_DB === '1';
     // resetAllowed semantics: db name is test-shaped AND (localhost OR ci-opt-in).
     // Neither host nor env-var alone is sufficient.
@@ -136,7 +136,7 @@ describe.skipIf(skip)('schema drift: PGLite ↔ Postgres post-initSchema parity 
       // Surface a loud, paste-ready hint. The test will still try initSchema;
       // if the caller already had a fresh DB the parity check passes anyway.
       const reason = !looksLikeTestDb
-        ? `db name "${dbName}" doesn't match the test pattern (gbrain_test, *_test, test_*, *_e2e). ` +
+        ? `db name "${dbName}" doesn't match the test pattern (gbrain_test, gbrain_test_e2e_N, *_test, test_*, *_e2e). ` +
           `GBRAIN_TEST_DB=1 does NOT override this — db name is the hard floor.`
         : `host="${host}" is non-local AND GBRAIN_TEST_DB=1 is not set. ` +
           `Set GBRAIN_TEST_DB=1 to allow non-local hosts (e.g. CI service names) — ` +

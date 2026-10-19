@@ -895,7 +895,7 @@ describeE2E('E2E: Setup Journey', () => {
       timeout: 15_000,
     });
     const stdout = new TextDecoder().decode(result.stdout);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
     expect(stdout).toContain('Brain ready');
   }, 30_000);
 
@@ -907,7 +907,7 @@ describeE2E('E2E: Setup Journey', () => {
       timeout: 30_000,
     });
     const stdout = new TextDecoder().decode(result.stdout);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
     expect(stdout).toContain('imported');
   }, 60_000);
 
@@ -1506,7 +1506,7 @@ describeE2E('E2E: Parallel Import', () => {
       env: cliEnv(),
       timeout: 30_000,
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
 
     const stats = await callOp('get_stats') as any;
     seqPageCount = stats.page_count;
@@ -1528,7 +1528,7 @@ describeE2E('E2E: Parallel Import', () => {
       env: cliEnv(),
       timeout: 30_000,
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
 
     const stats = await callOp('get_stats') as any;
     expect(stats.page_count).toBe(seqPageCount);
