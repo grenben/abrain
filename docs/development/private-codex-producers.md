@@ -30,8 +30,9 @@ publication and the host action loop remain unfinished.
 ## Explicit recurring allowances
 
 The trusted file plane optionally accepts `private_codex.scheduled_jobs`, with
-entries for `autopilot-cycle` (legacy full cycle) and/or
-`autopilot-global-maintenance`. Each entry has this shape:
+entries for `autopilot-cycle` (legacy full cycle),
+`autopilot-global-maintenance`, and `nightly-quality-probe`. Each entry has
+this shape:
 
 ```json
 {
@@ -55,6 +56,18 @@ currently reports `subscription_identity_conflict`. This is an explicit deferral
 limitation; no new allowance is created. Existing scheduler cadence/single-flight
 checks and the durable one-call account lane still apply. Other automatic producers
 are not yet wired to recurring subscription grants.
+
+`nightly-quality-probe` uses one UTC-day occurrence with an immutable deadline,
+attempt and turn counters, owner brain, fixture hash, route/search snapshot and
+policy identity. It opens the grant only after the probe's due-time, embedding and
+fixture gates. It requires `auxiliaryMaxUsd` because retrieval may make paid API
+calls. In private mode the reader, extractor and three judge slots resolve to the
+configured Codex model; judge proposals run sequentially and are validated before
+acceptance. A one-model judge panel is recorded as `panel_collapsed` and
+`inconclusive`, even when the batch's own score is a pass. This is diagnostic
+coverage, not an independent cross-model quality verdict. The combined native
+LongMemEval reader/embedding path and full daemon entrypoint still need an
+end-to-end fixture before private activation.
 
 Source-freshness-only `autopilot-cycle` jobs, deterministic `extract_facts` parsing
 and the result aggregator do not need subscription grants or model configuration.

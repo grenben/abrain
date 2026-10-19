@@ -115,6 +115,19 @@ function makeDeps(overrides: Partial<NightlyProbeDeps> = {}): NightlyProbeDeps {
 }
 
 describe('runNightlyQualityProbe (DI stub harness)', () => {
+  test('scheduled authorization opens only for a due run, not a rate-limited tick', async () => {
+    await withEnv({ GBRAIN_AUDIT_DIR: auditTmp }, async () => {
+      let admissions = 0;
+      const deps = makeDeps({ withRunAuthorization: async (input, run) => {
+        admissions++;
+        expect(input.fixturePath).toContain('longmemeval-nightly.jsonl');
+        return run();
+      } });
+      expect((await runNightlyQualityProbe(deps)).outcome).toBe('pass');
+      expect((await runNightlyQualityProbe(deps)).outcome).toBe('rate_limited');
+      expect(admissions).toBe(1);
+    });
+  });
   test('disabled config → outcome: disabled, no audit row', async () => {
     await withEnv({ GBRAIN_AUDIT_DIR: auditTmp }, async () => {
       const r = await runNightlyQualityProbe(makeDeps({ isEnabled: async () => false }));

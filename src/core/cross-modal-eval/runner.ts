@@ -17,6 +17,12 @@ import { join } from 'path';
 
 import { chat as gwChat, thinkingOffOutputCap } from '../ai/gateway.ts';
 import type { ChatMessage } from '../ai/gateway.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { cachedCodexProposal, withCodexProposalCache } from '../ai/codex-proposal-cache.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { digest } from '../persistence/digest.ts';
 import { aggregate } from './aggregate.ts';
 import type { AggregateResult, SlotResult } from './aggregate.ts';
 import { parseModelJSON } from './json-repair.ts';
@@ -207,9 +213,14 @@ interface OneCycleOpts {
 
 async function runOneCycle(opts: OneCycleOpts): Promise<SlotResult[]> {
   const prompt = buildPrompt(opts.task, opts.dimensions, opts.output);
-
-  const tasks = opts.slots.map(slot => callSlot(slot, prompt, opts));
-  const settled = await Promise.allSettled(tasks);
+  // The private account lane allows one unresolved Codex call at a time.
+  const settled = readPrivateCodexConfig()
+    ? await (async () => {
+      const results: Array<PromiseSettledResult<SlotResult>> = [];
+      for (const slot of opts.slots) results.push(...await Promise.allSettled([callSlot(slot, prompt, opts)]));
+      return results;
+    })()
+    : await Promise.allSettled(opts.slots.map(slot => callSlot(slot, prompt, opts)));
 
   const slotResults: SlotResult[] = settled.map((s, idx) => {
     const slot = opts.slots[idx]!;
@@ -230,17 +241,38 @@ async function callSlot(
     const messages: ChatMessage[] = [
       { role: 'user', content: prompt },
     ];
-    const result = await gwChat({
-      model: slot.model,
-      system: EVALUATOR_SYSTEM_PROMPT,
-      messages,
-      maxTokens: opts.maxTokens,
-      abortSignal: opts.abortSignal,
-      allowFallback: false,
-      thinking: 'off',
-    });
-
-    const parsed = parseModelJSON(result.text ?? '');
+    const base = { model: slot.model, system: EVALUATOR_SYSTEM_PROMPT, messages,
+      maxTokens: opts.maxTokens, abortSignal: opts.abortSignal, allowFallback: false, thinking: 'off' as const };
+    let responseText: string;
+    if (readPrivateCodexConfig()) {
+      const context = codexSubscriptionContext();
+      if (!context) throw new SubscriptionAdmissionError('subscription_required');
+      const keys = opts.dimensions.map(dimensionScoreKey);
+      if (new Set(keys).size !== keys.length) throw new CodexProposalError('invalid_input');
+      const score = { type: 'object', properties: { score: { type: 'integer', minimum: 1, maximum: 10 },
+        feedback: { type: 'string' } }, required: ['score', 'feedback'], additionalProperties: false };
+      const schema = { type: 'object', properties: {
+        scores: { type: 'object', properties: Object.fromEntries(keys.map(key => [key, score])),
+          required: keys, additionalProperties: false },
+        overall: { type: 'integer', minimum: 1, maximum: 10 },
+        improvements: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 10, maxItems: 10 },
+      }, required: ['scores', 'overall', 'improvements'], additionalProperties: false };
+      const bindingHash = digest({ protocol: 'cross-modal-judge-v1', runId: context.runId,
+        task: opts.task, output: opts.output, dimensions: opts.dimensions, slot: slot.id, cycle: opts.cycle });
+      const proposal = await withCodexProposalCache({ namespace: 'cross-modal-judge-v1', bindingHash },
+        () => cachedCodexProposal({ ...base, responseSchema: { name: 'cross-modal-judge-v1', schema,
+          validateCodexProposal: raw => {
+            const parsed = parseModelJSON(raw);
+            if (parsed._repaired || keys.some(key => !Number.isInteger(parsed.scores[key]?.score) ||
+                parsed.scores[key]!.score < 1 || parsed.scores[key]!.score > 10) || parsed.improvements.length !== 10) {
+              throw new CodexProposalError('invalid_output');
+            }
+          } } }));
+      responseText = proposal.text;
+    } else {
+      responseText = (await gwChat(base)).text ?? '';
+    }
+    const parsed = parseModelJSON(responseText);
     const ms = Date.now() - start;
     opts.onProgress?.({
       kind: 'slot_done',

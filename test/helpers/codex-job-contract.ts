@@ -27,6 +27,12 @@ import { withSubscriptionScratch } from '../../src/core/ai/subscription-target.t
 import { submitPageMutation } from '../../src/core/persistence/page-mutations.ts';
 import type { OperationContext } from '../../src/core/operations.ts';
 import { queuePrivateEnrich, withEnrichSubscription } from '../../src/commands/enrich-subscription.ts';
+import { withScheduledNightlyProbe } from '../../src/commands/nightly-probe-subscription.ts';
+import { resolveNightlyProbeModelRoutes } from '../../src/core/cycle/nightly-probe-routes.ts';
+import { resolveNightlyProbeSearchConfigSnapshot } from '../../src/core/cycle/nightly-probe-search-config.ts';
+import { runCrossModalBatchForProbe } from '../../src/core/cycle/nightly-probe-adapters.ts';
+import { runNightlyQualityProbe } from '../../src/core/cycle/nightly-quality-probe.ts';
+import { readRecentQualityProbeEvents } from '../../src/core/audit-quality-probe.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
 const root = mkdtempSync(join(tmpdir(), 'codex-jobs-'));
@@ -61,7 +67,8 @@ import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1];
 const input=readFileSync(0,'utf8');appendFileSync(${JSON.stringify(capture)},'call\\n');
 const slug=(input.match(/people\\/enrich-(?:default|other)-worker/)||[])[0]||'';
-const text=JSON.stringify({text:readFileSync(${JSON.stringify(replyPath)},'utf8').replaceAll('{{slug}}',slug)});writeFileSync(arg('--output-last-message'),text);
+const reply=readFileSync(${JSON.stringify(replyPath)},'utf8').replaceAll('{{slug}}',slug);
+const text=reply.startsWith('__RAW_JSON__')?reply.slice('__RAW_JSON__'.length):JSON.stringify({text:reply});writeFileSync(arg('--output-last-message'),text);
 for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:10,cached_input_tokens:2,output_tokens:3}}])console.log(JSON.stringify(e));
 `;
   writeFileSync(bin, script, { mode: 0o700 }); writeFileSync(replyPath, 'fixture');
@@ -273,6 +280,145 @@ test('a real worker publishes both source jobs under their shared parent allowan
     expect(count()).toBe(2);
   } finally {
     await engine.executeRaw("DELETE FROM sources WHERE id='other'");
+  }
+});
+test('nightly occurrence reuses one immutable allowance and rejects a changed fixture', async () => {
+  const limits = { maxAttempts: 2, maxTurns: 2, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'nightly-quality-probe': limits } } }));
+  const fixturePath = join(root, 'nightly-synthetic.jsonl');
+  writeFileSync(fixturePath, '{"question":"synthetic"}\n');
+  const scope = { fixturePath, startedAt: new Date(), maxUsd: 0.01,
+    searchConfigSnapshot: await resolveNightlyProbeSearchConfigSnapshot(engine),
+    modelRoutes: await resolveNightlyProbeModelRoutes(engine) };
+  const run = () => withScheduledNightlyProbe(engine, scope, async () => {
+    await call(); return { outcome: 'pass', exit_code: 0 };
+  });
+  await run();
+  const [first] = await engine.executeRaw<{ deadline: Date | string }>(
+    "SELECT deadline FROM codex_subscription_runs WHERE run_id LIKE 'codex-nightly-quality:%'");
+  await run();
+  const [retry] = await engine.executeRaw<{ deadline: Date | string; attempts: number; accepted_turns: number }>(
+    "SELECT deadline,attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-nightly-quality:%'");
+  expect(new Date(retry!.deadline).getTime()).toBe(new Date(first!.deadline).getTime());
+  expect(retry).toMatchObject({ attempts: 2, accepted_turns: 2 });
+  await expect(run()).rejects.toMatchObject({ code: 'subscription_exhausted' });
+  writeFileSync(fixturePath, '{"question":"changed"}\n');
+  await expect(run()).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(count()).toBe(2);
+});
+test('nightly private admission requires an explicit schedule and auxiliary cap before inference', async () => {
+  const fixturePath = join(root, 'nightly-no-grant.jsonl');
+  writeFileSync(fixturePath, '{"question":"synthetic"}\n');
+  const scope = { fixturePath, startedAt: new Date(), maxUsd: 0.01,
+    searchConfigSnapshot: await resolveNightlyProbeSearchConfigSnapshot(engine),
+    modelRoutes: await resolveNightlyProbeModelRoutes(engine) };
+  await expect(withScheduledNightlyProbe(engine, scope, async () => {
+    await call(); return { outcome: 'pass', exit_code: 0 };
+  })).rejects.toMatchObject({ code: 'subscription_required' });
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'nightly-quality-probe': { maxAttempts: 1, maxTurns: 1, windowMs: 600_000 } } } }));
+  await expect(withScheduledNightlyProbe(engine, scope, async () => {
+    await call(); return { outcome: 'pass', exit_code: 0 };
+  })).rejects.toMatchObject({ code: 'subscription_auxiliary_budget_required' });
+  expect(count()).toBe(0);
+  const runs = await engine.executeRaw('SELECT run_id FROM codex_subscription_runs');
+  expect(runs).toEqual([]);
+});
+test('private cross-modal judge validates three sequential Codex proposals before acceptance', async () => {
+  const limits = { maxAttempts: 3, maxTurns: 3, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'nightly-quality-probe': limits } } }));
+  const fixturePath = join(root, 'nightly-judge.jsonl');
+  writeFileSync(fixturePath, '{"question":"synthetic"}\n');
+  writeFileSync(replyPath, '__RAW_JSON__' + JSON.stringify({ scores: {
+    CORRECTNESS: { score: 8, feedback: 'Accurate.' }, DIRECTNESS: { score: 8, feedback: 'Direct.' } }, overall: 8,
+    improvements: Array.from({ length: 10 }, (_, i) => `${i + 1}. Clarify the answer.`) }));
+  const routes = await resolveNightlyProbeModelRoutes(engine);
+  expect(Object.values(routes.slots)).toEqual(['codex-cli:gpt-test', 'codex-cli:gpt-test', 'codex-cli:gpt-test']);
+  const batchPath = join(root, 'nightly-judge-batch.jsonl'), summaryPath = join(root, 'nightly-judge-summary.json');
+  writeFileSync(batchPath, JSON.stringify({ question_id: 'q1', question: 'Where?', hypothesis: 'widget-co', answer: 'widget-co' }) + '\n');
+  await withScheduledNightlyProbe(engine, { fixturePath, startedAt: new Date(), maxUsd: 0.01,
+    searchConfigSnapshot: await resolveNightlyProbeSearchConfigSnapshot(engine), modelRoutes: routes }, async () => {
+    const result = await runCrossModalBatchForProbe({ batchPath, summaryPath, maxUsd: 0.01, modelRoutes: routes });
+    expect(result.summary.pass_count).toBe(1);
+    expect(result.summary.panel?.distinct_models).toBe(1);
+    return { outcome: 'inconclusive', exit_code: 2 };
+  });
+  const [run] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+    "SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-nightly-quality:%'");
+  expect(run).toMatchObject({ attempts: 3, accepted_turns: 3 });
+  expect(count()).toBe(3);
+});
+test('invalid private judge scores consume attempts but never accepted turns', async () => {
+  const limits = { maxAttempts: 3, maxTurns: 1, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'nightly-quality-probe': limits } } }));
+  const fixturePath = join(root, 'nightly-invalid.jsonl'), batchPath = join(root, 'nightly-invalid-batch.jsonl');
+  writeFileSync(fixturePath, '{"question":"synthetic"}\n');
+  writeFileSync(batchPath, JSON.stringify({ question_id: 'q1', question: 'Where?', hypothesis: 'widget-co', answer: 'widget-co' }) + '\n');
+  writeFileSync(replyPath, '__RAW_JSON__' + JSON.stringify({ scores: {
+    CORRECTNESS: { score: 99, feedback: 'Invalid.' }, DIRECTNESS: { score: 8, feedback: 'Direct.' } }, overall: 8,
+    improvements: Array.from({ length: 10 }, (_, i) => `${i + 1}. Clarify the answer.`) }));
+  const routes = await resolveNightlyProbeModelRoutes(engine);
+  await withScheduledNightlyProbe(engine, { fixturePath, startedAt: new Date(), maxUsd: 0.01,
+    searchConfigSnapshot: await resolveNightlyProbeSearchConfigSnapshot(engine), modelRoutes: routes }, async () => {
+    const result = await runCrossModalBatchForProbe({ batchPath, summaryPath: join(root, 'nightly-invalid-summary.json'),
+      maxUsd: 0.01, modelRoutes: routes });
+    expect(result.summary.inconclusive_count).toBe(1);
+    return { outcome: 'inconclusive', exit_code: 2 };
+  });
+  const [run] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+    "SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-nightly-quality:%'");
+  expect(run).toMatchObject({ attempts: 3, accepted_turns: 0 });
+  expect(count()).toBe(3);
+});
+test('the scheduled nightly phase records an honest collapsed-panel result under one allowance', async () => {
+  const limits = { maxAttempts: 4, maxTurns: 4, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'nightly-quality-probe': limits } } }));
+  const fixturePath = join(root, 'nightly-phase.jsonl'), auditDir = mkdtempSync(join(root, 'nightly-audit-'));
+  writeFileSync(fixturePath, '{"question":"Where?"}\n');
+  writeFileSync(replyPath, '__RAW_JSON__' + JSON.stringify({ scores: {
+    CORRECTNESS: { score: 8, feedback: 'Accurate.' }, DIRECTNESS: { score: 8, feedback: 'Direct.' } }, overall: 8,
+    improvements: Array.from({ length: 10 }, (_, i) => `${i + 1}. Clarify the answer.`) }));
+  const priorAudit = process.env.GBRAIN_AUDIT_DIR;
+  process.env.GBRAIN_AUDIT_DIR = auditDir;
+  try {
+    const run = () => runNightlyQualityProbe({ isEnabled: () => true, hasEmbeddingProvider: () => true,
+      resolveMaxUsd: () => 0.01, resolveBudgetPolicy: async () => ({ capSource: 'user' as const }),
+      resolveFixturePath: () => fixturePath,
+      resolveSearchConfigSnapshot: () => resolveNightlyProbeSearchConfigSnapshot(engine),
+      resolveModelRoutes: () => resolveNightlyProbeModelRoutes(engine),
+      withRunAuthorization: (input, work) => withScheduledNightlyProbe(engine, input, work),
+      runLongMemEval: async ({ outputPath }) => {
+        const judgeReply = readFileSync(replyPath, 'utf8');
+        writeFileSync(replyPath, 'synthetic reader');
+        await call();
+        writeFileSync(replyPath, judgeReply);
+        writeFileSync(outputPath, JSON.stringify({ question_id: 'q1', question: 'Where?',
+          hypothesis: 'widget-co', answer: 'widget-co' }) + '\n');
+      },
+      runCrossModalBatch: runCrossModalBatchForProbe,
+      now: () => new Date() });
+    const result = await run();
+    expect(result.outcome).toBe('inconclusive');
+    expect(count()).toBe(4);
+    const [audit] = readRecentQualityProbeEvents(1);
+    expect(audit).toMatchObject({ outcome: 'inconclusive', reason: 'panel_collapsed',
+      distinct_judge_models: 1, distinct_judge_providers: 1 });
+    expect((await run()).outcome).toBe('rate_limited');
+    expect(count()).toBe(4);
+    const [parent] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+      "SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-nightly-quality:%'");
+    expect(parent).toMatchObject({ attempts: 4, accepted_turns: 4 });
+  } finally {
+    if (priorAudit === undefined) delete process.env.GBRAIN_AUDIT_DIR; else process.env.GBRAIN_AUDIT_DIR = priorAudit;
   }
 });
 test('a real worker carries the grant through gateway dispatch and fenced completion', async () => {

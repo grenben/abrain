@@ -51,6 +51,7 @@ export async function runNightlyQualityProbeStep(engine: BrainEngine, cfg: GBrai
       const { loadPricingOverrides } = await import('../core/budget/budget-tracker.ts');
       const { isAvailable } = await import('../core/ai/gateway.ts');
       const cap = resolveProbeCap(dbMaxUsd, cfg?.autopilot?.nightly_quality_probe?.max_usd);
+      const { withScheduledNightlyProbe } = await import('./nightly-probe-subscription.ts');
       await runNightlyQualityProbe({
         isEnabled: () => true, // already gated above; phase re-checks for defense-in-depth
         hasEmbeddingProvider: () => isAvailable('embedding'),
@@ -60,6 +61,7 @@ export async function runNightlyQualityProbeStep(engine: BrainEngine, cfg: GBrai
         resolveFixturePath: () => NIGHTLY_PROBE_FIXTURES.longMemEval,
         resolveSearchConfigSnapshot: () => resolveNightlyProbeSearchConfigSnapshot(engine),
         resolveModelRoutes: () => resolveNightlyProbeModelRoutesForDaemon(engine),
+        withRunAuthorization: (input, run) => withScheduledNightlyProbe(engine, input, run),
         runLongMemEval: runLongMemEvalForProbe,
         runCrossModalBatch: runCrossModalBatchForProbe,
         now: () => new Date(),
