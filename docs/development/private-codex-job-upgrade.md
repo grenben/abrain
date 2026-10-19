@@ -8,8 +8,20 @@ The commands use the existing connection bootstrap with startup migrations disab
 ## Review and drain
 
 ```sh
+gbrain private-codex jobs inventory --json
 gbrain private-codex jobs preview --ids 12,34 --json
 ```
+
+Inventory reads every nonterminal job in one read-only database snapshot (up to
+10,000; a larger queue refuses rather than omitting rows). It prints sanitized
+IDs, default/non-default queue status, whether a known job type may generate,
+explicit model-pin key names, opaque queue/payload hashes and the drain/park
+disposition. Unknown job and queue names are hidden, as are prompts, pin values
+and authority payloads. The snapshot is a point in
+time: stop producers and workers, rerun it, then use the IDs for explicit
+parking previews. The output keeps `workers: uninspected` and
+`cutover_ready: false` until worker processes and their launch configuration
+are separately qualified.
 
 Preview reads only an explicit bounded selection (at most 128 IDs) and immediate
 dependencies. Output includes hashes, status, recognized protocol and disposition;

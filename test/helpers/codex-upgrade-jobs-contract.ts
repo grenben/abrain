@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
 import { previewJobUpgrade } from '../../src/core/minions/codex-upgrade-snapshot.ts';
+import { inventoryQueuedJobs } from '../../src/core/minions/codex-upgrade-inventory.ts';
 import { parkUpgradeJobs, restoreParkedJobs } from '../../src/core/minions/codex-upgrade-park.ts';
 import { previewUpgradeSubmission, resubmitUpgradeJob, type UpgradeSubmission } from '../../src/core/minions/codex-upgrade-resubmit.ts';
 import { run } from '../../src/cli/commands/private-codex.ts';
@@ -36,6 +37,49 @@ export function codexUpgradeJobsContract(factory: () => Promise<{ engine: BrainE
     await engine?.disconnect(); await cleanup?.(); globalThis.fetch=fetch;
     if (priorHome===undefined) delete process.env.GBRAIN_HOME; else process.env.GBRAIN_HOME=priorHome;
     rmSync(root,{recursive:true,force:true});
+  });
+  test('global queue inventory sees every live job, exposes no payload, and refuses partial coverage', async () => {
+    const waiting=await old(), active=await old(), parked=await old();
+    await engine.executeRaw("UPDATE minion_jobs SET status='active',claim_generation=claim_generation+1 WHERE id=$1",[active]);
+    await park(parked);
+    const inventory=await inventoryQueuedJobs(engine);
+    expect(inventory.jobs.map(j=>j.id)).toEqual([waiting,active,parked]);
+    expect(inventory.jobs.map(j=>j.disposition)).toEqual(['park','drain','parked']);
+    expect(inventory.jobs.map(j=>j.model_pin_keys)).toEqual([['model'],['model'],['model']]);
+    expect(inventory).toMatchObject({ live_count:3, queue_snapshot_complete:true, workers:'uninspected', cutover_ready:false });
+    expect(JSON.stringify(inventory)).not.toContain('SYNTHETIC_PRIVATE_PROMPT');
+    expect(JSON.stringify(inventory)).not.toContain('anthropic:fixture');
+    await expect(inventoryQueuedJobs(engine,2)).rejects.toThrow('inventory_too_large');
+    expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(3);
+  });
+  test('inventory CLI uses probe-only connection and does not require preselected IDs', async () => {
+    const id=await old(), written:string[]=[], connections:unknown[]=[];
+    const print=spyOn(output,'writeStdoutFinal').mockImplementation(async text=>{written.push(text);}),disconnect=spyOn(engine,'disconnect').mockResolvedValue();
+    const ctx={connectEngine:async (opts:unknown)=>{connections.push(opts);return engine;}} as unknown as CliDispatchContext;
+    try {
+      await run(['jobs','inventory','--json'],ctx);
+      expect(JSON.parse(written.join('')).jobs[0].id).toBe(id);
+      expect(connections).toEqual([{probeOnly:true}]);
+      expect(await engine.executeRaw('SELECT id FROM codex_upgrade_receipts')).toHaveLength(0);
+    } finally {print.mockRestore();disconnect.mockRestore();}
+  });
+  test('inventory crosses its 128-row page boundary without omitting live jobs', async () => {
+    const ids:number[]=[];
+    for (let i=0;i<130;i++) ids.push(await old());
+    const terminal=await old();
+    await engine.executeRaw("UPDATE minion_jobs SET status='completed' WHERE id=$1",[terminal]);
+    const inventory=await inventoryQueuedJobs(engine);
+    expect(inventory.live_count).toBe(130);
+    expect(inventory.jobs.map(j=>j.id)).toEqual(ids);
+    expect(inventory.jobs.some(j=>j.id===terminal)).toBe(false);
+    await expect(inventoryQueuedJobs(engine,129)).rejects.toThrow('inventory_too_large');
+  });
+  test('inventory hides arbitrary job and queue names even when their characters look harmless', async () => {
+    await engine.executeRaw("INSERT INTO minion_jobs(name,queue,status,data,submission_authority) VALUES('PRIVATECUSTOMERNAME','PRIVATECUSTOMERQUEUE','waiting','{}'::jsonb,'{\"version\":1,\"kind\":\"application\"}'::jsonb)");
+    const inventory=await inventoryQueuedJobs(engine), serialized=JSON.stringify(inventory);
+    expect(inventory.jobs[0]).toMatchObject({name:'unclassified',queue:'non_default',generation:'unclassified'});
+    expect(serialized).not.toContain('PRIVATECUSTOMERNAME');
+    expect(serialized).not.toContain('PRIVATECUSTOMERQUEUE');
   });
   test('preview is bounded, sanitized, read-only and reports active work must drain', async () => {
     const id=await old(); await engine.executeRaw("UPDATE minion_jobs SET status='active',claim_generation=claim_generation+1 WHERE id=$1",[id]);
