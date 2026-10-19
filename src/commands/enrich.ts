@@ -60,6 +60,10 @@ import { jobSpendAuthorization, spendSubmitSummary, type SpendAuthorization } fr
 import { getCliOptions, cliOptsToProgressOptions, maybeBackground } from '../core/cli-options.ts';
 import { loadConfig } from '../core/config.ts';
 import { isMustAbortError, runSlidingPool } from '../core/worker-pool.ts';
+import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError } from '../core/ai/private-policy.ts';
+import { codexSubscriptionContext } from '../core/ai/subscription-context.ts';
+import { assertSubscriptionTarget } from '../core/ai/subscription-target.ts';
+import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
 import { parseWorkers, resolveWorkersWithClamp } from '../core/sync-concurrency.ts';
 import { withRefreshingLock, LockUnavailableError } from '../core/db-lock.ts';
 import {
@@ -518,8 +522,22 @@ export async function runEnrichCore(
   const thinThreshold = opts.thinThreshold ?? DEFAULT_THIN_THRESHOLD;
   const minContextChars = opts.minContextChars ?? MIN_CONTEXT_CHARS;
   const reenrichAfterMs = opts.reenrichAfterMs ?? DEFAULT_REENRICH_DAYS * 86_400_000;
-  const model = opts.model || getChatModel();
   const dryRun = !!opts.dryRun;
+  const privatePolicy = dryRun ? undefined : readPrivateCodexConfig();
+  if (privatePolicy) {
+    const context = codexSubscriptionContext();
+    if (!context) throw new SubscriptionAdmissionError('subscription_required');
+    // Enrichment publishes page writes, not disposable benchmark results.
+    if (await assertSubscriptionTarget(engine)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    await context.checkAuthority?.();
+    const [grant] = await context.engine.executeRaw<{ current: boolean }>(
+      'SELECT deadline > now() AS current FROM codex_subscription_runs WHERE run_id=$1', [context.runId]);
+    if (!grant) throw new SubscriptionAdmissionError('subscription_required');
+    if (!grant.current) throw new SubscriptionAdmissionError('subscription_exhausted');
+  }
+  const model = privatePolicy
+    ? (await resolvePrivateModel(engine, { cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, privatePolicy)).model
+    : opts.model || getChatModel();
   const synthesizeFn = opts.synthesizeFn ?? defaultSynthesize;
   const config = loadConfig();
 
@@ -588,9 +606,10 @@ export async function runEnrichCore(
     try {
       pool = await runSlidingPool<EnrichCandidate>({
       items: pending,
-      workers,
+      workers: privatePolicy ? 1 : workers,
       signal,
       failureLabel: (c) => c.slug,
+      onError: err => privatePolicy && (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError) ? 'abort' : 'continue',
       onItem: async (c) => {
         await enrichOne(oneCtx, c);
         // Periodic checkpoint flush so a crash mid-run doesn't lose progress.
@@ -605,10 +624,18 @@ export async function runEnrichCore(
       // pages completed since the last 25-item flush BEFORE it bubbles to
       // runEnrichCore's catch, else resume re-charges them (and SKIP pages stay
       // thin). `done` is in scope here; it isn't in the outer catch.
-      if ((err instanceof BudgetExhausted || isMustAbortError(err)) && !dryRun) {
+      if ((err instanceof BudgetExhausted || isMustAbortError(err) ||
+        privatePolicy && (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError)) && !dryRun) {
         await recordCompleted(engine, cpKey, [...done]);
       }
       throw err;
+    }
+
+    const admissionFailure = privatePolicy && pool.failures.find(f =>
+      f.error instanceof SubscriptionAdmissionError || f.error instanceof PrivateRoutingError);
+    if (admissionFailure) {
+      await recordCompleted(engine, cpKey, [...done]);
+      throw admissionFailure.error;
     }
 
     result.pages_failed = pool.errored;

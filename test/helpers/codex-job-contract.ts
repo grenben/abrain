@@ -20,6 +20,9 @@ import { scheduledCodexSubmit } from '../../src/core/minions/subscription-schedu
 import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
 import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { BudgetMeter } from '../../src/core/cycle/budget-meter.ts';
+import { runEnrichCore } from '../../src/commands/enrich.ts';
+import { createEphemeralBrain } from '../../src/core/ephemeral-brain.ts';
+import { withSubscriptionScratch } from '../../src/core/ai/subscription-target.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
 const root = mkdtempSync(join(tmpdir(), 'codex-jobs-'));
@@ -82,6 +85,29 @@ test('real queue and worker spend wrapper reuse a durable allowance across retri
   expect(count()).toBe(2);
   const [row] = await engine.executeRaw('SELECT attempts,accepted_turns,account_lane FROM codex_subscription_runs');
   expect(row).toMatchObject({ attempts: 2, accepted_turns: 2, account_lane: 'codex-subscription' });
+});
+test('private enrichment core refuses an unowned run before candidate work', async () => {
+  await expect(runEnrichCore(engine, { sourceId: 'default', model: 'codex-cli:gpt-test' }))
+    .rejects.toMatchObject({ code: 'subscription_required' });
+  const job = await claimed();
+  const result = await runWithJobSpend(engine, job, ctxFor(job), () =>
+    runEnrichCore(engine, { sourceId: 'default', model: 'codex-cli:gpt-test', limit: 1 }));
+  expect(result.pages_enriched).toBe(0);
+  expect(count()).toBe(0);
+});
+test('private enrichment core refuses a foreign model and disposable output target', async () => {
+  const job = await claimed();
+  const scratch = await createEphemeralBrain();
+  try {
+    await runWithJobSpend(engine, job, ctxFor(job), async () => {
+      await expect(runEnrichCore(engine, { sourceId: 'default', model: 'anthropic:claude-test' }))
+        .rejects.toMatchObject({ source: 'cli:model' });
+      await expect(withSubscriptionScratch(scratch, () =>
+        runEnrichCore(scratch, { sourceId: 'default', model: 'codex-cli:gpt-test' })))
+        .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+    });
+  } finally { await scratch.disconnect(); }
+  expect(count()).toBe(0);
 });
 test('a real worker carries the grant through gateway dispatch and fenced completion', async () => {
   const job = await queue.add('enrich', { sourceId: 'default' }, { max_attempts: 1 }, { codexSubscription: grant() });
