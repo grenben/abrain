@@ -10,7 +10,6 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFileSync, spawn, spawnSync } from 'child_process';
 import { getLastPushOutcome, hardenBrainRepo, unhardenBrainRepo } from '../src/core/brain-repo-durability.ts';
-import { crontabAvailable } from './helpers/fs-perms.ts';
 import { runPull } from '../src/commands/sources-harden.ts';
 
 // #2943 root cause: `env: process.env` is REQUIRED here. Bun snapshots
@@ -62,6 +61,7 @@ async function waitForOrigin(bare: string, expectSha: string, ms = 30_000): Prom
 
 let root: string, work: string, bare: string;
 let oldHome: string | undefined, oldGbrainHome: string | undefined, oldPath: string | undefined;
+let oldCrontabFile: string | undefined, oldLaunchctlLog: string | undefined;
 
 // #6530: the helper and hook delegate to `gbrain git commit-push`. Tests put a
 // `gbrain` on PATH that runs this checkout's CLI under the current bun, so
@@ -73,10 +73,34 @@ function installGbrainShim(dir: string): void {
   process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
 }
 
+// The schedule case must never register a real user job, even when this file
+// runs through the broad serial runner on a machine with crontab/launchctl.
+function installSchedulerShim(dir: string): void {
+  const bin = join(dir, 'gbrain-bin');
+  process.env.GBRAIN_TEST_CRONTAB_FILE = join(dir, 'crontab');
+  process.env.GBRAIN_TEST_LAUNCHCTL_LOG = join(dir, 'launchctl.log');
+  writeFileSync(join(bin, 'crontab'), `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  -l) test -f "$GBRAIN_TEST_CRONTAB_FILE" || exit 1; cat -- "$GBRAIN_TEST_CRONTAB_FILE" ;;
+  -) cat > "$GBRAIN_TEST_CRONTAB_FILE" ;;
+  *) exit 2 ;;
+esac
+`, { mode: 0o755 });
+  writeFileSync(join(bin, 'launchctl'), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GBRAIN_TEST_LAUNCHCTL_LOG"
+case "\${1:-}" in load|unload|list) exit 0 ;; *) exit 2 ;; esac
+`, { mode: 0o755 });
+}
+
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'bdh-'));
   oldHome = process.env.HOME; oldGbrainHome = process.env.GBRAIN_HOME; oldPath = process.env.PATH;
+  oldCrontabFile = process.env.GBRAIN_TEST_CRONTAB_FILE;
+  oldLaunchctlLog = process.env.GBRAIN_TEST_LAUNCHCTL_LOG;
   installGbrainShim(root);
+  installSchedulerShim(root);
   process.env.HOME = mkdtempSync(join(root, 'home-'));
   // CX2-8: GBRAIN_HOME is a PARENT dir (config.ts semantics — `.gbrain` is
   // appended by both the TS resolver and the bash template), so the
@@ -97,6 +121,10 @@ afterEach(() => {
   if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
   if (oldGbrainHome === undefined) delete process.env.GBRAIN_HOME; else process.env.GBRAIN_HOME = oldGbrainHome;
   process.env.PATH = oldPath;
+  if (oldCrontabFile === undefined) delete process.env.GBRAIN_TEST_CRONTAB_FILE;
+  else process.env.GBRAIN_TEST_CRONTAB_FILE = oldCrontabFile;
+  if (oldLaunchctlLog === undefined) delete process.env.GBRAIN_TEST_LAUNCHCTL_LOG;
+  else process.env.GBRAIN_TEST_LAUNCHCTL_LOG = oldLaunchctlLog;
   delete process.env.GBRAIN_GIT_ALLOW_FILE_TRANSPORT;
   rmSync(root, { recursive: true, force: true });
 });
@@ -550,14 +578,13 @@ describe('post-commit hook (D9 local, D7 self-contained)', () => {
 // The persistence schedule is the DB-free PULL cron (D2/D12) — the push side
 // is the post-commit hook proved above. beforeEach hardens with
 // installCron:false; this block re-hardens the SAME repo with installCron:true
-// and proves the scheduled job is registered with the right command + interval,
-// then invokes that exact command to prove it performs a real pull. It always
-// unregisters the launchd/cron job afterward so no scheduled job survives.
+// and proves the scheduled job is registered with the right command + interval
+// in a private scheduler shim, then invokes that exact command to prove it
+// performs a real pull. No host scheduler state is read or changed.
 describe('durability schedule (installCron:true) [D2/D12]', () => {
-  // skipIf: needs a real crontab/launchctl to register against — on hosts
-  // without one (some sandboxes) hardenBrainRepo correctly degrades the cron
-  // step to 'skipped', which is the product working, not this arc.
-  test.skipIf(!crontabAvailable() && process.platform !== 'darwin')('registers the DB-free pull job with the right command + interval, and the job performs a real pull', async () => {
+  test('registers the DB-free pull job with the right command + interval, and the job performs a real pull', async () => {
+    const schedulerCommand = process.platform === 'darwin' ? 'launchctl' : 'crontab';
+    expect(Bun.which(schedulerCommand, { PATH: process.env.PATH ?? '' })).toBe(join(root, 'gbrain-bin', schedulerCommand));
     const sourceId = 'wiki';
     const report = await hardenBrainRepo({
       repoPath: work, sourceId, pat: 'ghp_x', installCron: true, intervalSec: 900, verify: false,
@@ -585,6 +612,10 @@ describe('durability schedule (installCron:true) [D2/D12]', () => {
         expect(xml).toContain('<key>StartInterval</key><integer>900</integer>'); // 900s = 15m
         expect(xml).toContain(wrapper); // ProgramArguments points at our wrapper
         expect(cronStep.detail).toContain('900s');
+        expect(readFileSync(process.env.GBRAIN_TEST_LAUNCHCTL_LOG!, 'utf-8')).toContain(`load ${plist}`);
+      } else {
+        const tab = readFileSync(process.env.GBRAIN_TEST_CRONTAB_FILE!, 'utf-8');
+        expect(tab).toContain(`*/15 * * * * ${wrapper} # com.gbrain.brain-pull.${sourceId}`);
       }
 
       // Invoke the scheduled command directly to PROVE it performs the pull.
@@ -608,6 +639,10 @@ describe('durability schedule (installCron:true) [D2/D12]', () => {
     } finally {
       // Unregister while HOME is still the temp home (afterEach restores it).
       await unhardenBrainRepo({ repoPath: work, sourceId });
+    }
+    if (process.platform !== 'darwin') {
+      const tab = readFileSync(process.env.GBRAIN_TEST_CRONTAB_FILE!, 'utf-8');
+      expect(tab).not.toContain(`# com.gbrain.brain-pull.${sourceId}`);
     }
   }, 60_000);
 });
