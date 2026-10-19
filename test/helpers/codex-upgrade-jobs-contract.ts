@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
 import { previewJobUpgrade } from '../../src/core/minions/codex-upgrade-snapshot.ts';
-import { inventoryQueuedJobs, missingJobUpgradeRelations } from '../../src/core/minions/codex-upgrade-inventory.ts';
+import { inventoryLegacyQueuedJobs, inventoryQueuedJobs, missingJobUpgradeRelations } from '../../src/core/minions/codex-upgrade-inventory.ts';
 import { parkUpgradeJobs, restoreParkedJobs } from '../../src/core/minions/codex-upgrade-park.ts';
 import { previewUpgradeSubmission, resubmitUpgradeJob, type UpgradeSubmission } from '../../src/core/minions/codex-upgrade-resubmit.ts';
 import { run } from '../../src/cli/commands/private-codex.ts';
@@ -79,6 +79,50 @@ export function codexUpgradeJobsContract(factory: () => Promise<{ engine: BrainE
       expect(await engine.executeRaw('SELECT id FROM codex_upgrade_receipts')).toHaveLength(0);
       expect(written.join('')).not.toContain('SYNTHETIC_PRIVATE_PROMPT');
     } finally {print.mockRestore();disconnect.mockRestore();output._resetCliExitVerdictForTests();process.exitCode=0;}
+  });
+  test('legacy preflight inventories an old queue without reading parking storage', async () => {
+    const id=await old(), written:string[]=[], sqlRead:string[]=[];
+    const print=spyOn(output,'writeStdoutFinal').mockImplementation(async value=>{written.push(value);}),disconnect=spyOn(engine,'disconnect').mockResolvedValue();
+    const proxy = new Proxy(engine, { get(target, key) {
+      if (key === 'executeRaw') return async (sql:string) => {
+        expect(sql).toStartWith("SELECT to_regclass('minion_jobs')");
+        return [{jobs:true,parking:false,locks:true}];
+      };
+      if (key === 'transaction') return async (run: Parameters<BrainEngine['transaction']>[0]) => target.transaction(async tx => {
+        const observed = new Proxy(tx, { get(txTarget, txKey) {
+          if (txKey === 'executeRaw') return async (sql:string, params?:unknown[]) => {
+            sqlRead.push(sql);
+            if (sql.includes('codex_parked_jobs')) throw new Error('legacy inventory queried missing parking table');
+            return txTarget.executeRaw(sql,params);
+          };
+          const value = Reflect.get(txTarget,txKey);
+          return typeof value === 'function' ? value.bind(txTarget) : value;
+        } });
+        return run(observed);
+      });
+      const value = Reflect.get(target,key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const ctx={connectEngine:async (opts:unknown)=>{expect(opts).toEqual({probeOnly:true});return proxy;}} as unknown as CliDispatchContext;
+    try {
+      await run(['jobs','preflight','--json'],ctx);
+      const report=JSON.parse(written.join(''));
+      expect(report).toMatchObject({status:'blocked',cutover_ready:false,queue_snapshot_mode:'legacy_without_parking'});
+      expect(report.blockers).toContainEqual({code:'job_upgrade_schema_missing',required_migration:267,missing_relations:['codex_parked_jobs']});
+      expect(report.blockers).toContainEqual({code:'pending_jobs_require_disposition',count:1,ids_sample:[id]});
+      expect(report.brain_id).toBeString();
+      expect(report.queue_snapshot_hash).toMatch(/^[a-f0-9]{64}$/);
+      expect(sqlRead.some(sql=>sql.includes('FROM minion_jobs'))).toBe(true);
+      expect(written.join('')).not.toContain('SYNTHETIC_PRIVATE_PROMPT');
+      expect(await engine.executeRaw('SELECT id FROM codex_upgrade_receipts')).toHaveLength(0);
+    } finally {print.mockRestore();disconnect.mockRestore();output._resetCliExitVerdictForTests();process.exitCode=0;}
+  });
+  test('legacy inventory leaves parking explicitly absent even if fixture has its table', async () => {
+    const id=await old();
+    const inventory=await inventoryLegacyQueuedJobs(engine);
+    expect(inventory).toMatchObject({live_count:1,parking_schema_present:false,queue_snapshot_complete:true,
+      jobs:[{id,disposition:'park'}],cutover_ready:false});
+    expect(JSON.stringify(inventory)).not.toContain('SYNTHETIC_PRIVATE_PROMPT');
   });
   test('inventory crosses its 128-row page boundary without omitting live jobs', async () => {
     const ids:number[]=[];

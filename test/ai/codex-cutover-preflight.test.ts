@@ -47,3 +47,15 @@ test('missing upgrade schema keeps queue unknown while retaining local blockers'
         processes_sample: [{ pid: 77, role: 'server' }] },
     ] });
 });
+
+test('legacy queue evidence retains migration blocker and observed jobs', () => {
+  const q = { ...queue(), parking_schema_present: false };
+  q.jobs.push({ id: 27, status: 'waiting', disposition: 'park' });
+  const report = reviewPrivateCutover(q, local(), 100, ['codex_parked_jobs']);
+  expect(report).toMatchObject({ status: 'blocked', cutover_ready: false,
+    brain_id: 'synthetic-brain', queue_snapshot_hash: 'synthetic-hash', queue_snapshot_mode: 'legacy_without_parking',
+    blockers: [
+      { code: 'job_upgrade_schema_missing', required_migration: 267, missing_relations: ['codex_parked_jobs'] },
+      { code: 'pending_jobs_require_disposition', count: 1, ids_sample: [27] },
+    ] });
+});

@@ -4,6 +4,7 @@ export interface QueueCutoverEvidence {
   brain_id: string;
   queue_snapshot_complete: boolean;
   supervisor_lock_snapshot_complete: boolean;
+  parking_schema_present?: boolean;
   jobs: Array<Record<string, unknown>>;
   supervisor_locks: Array<Record<string, unknown>>;
 }
@@ -31,9 +32,9 @@ const MAX_SAMPLE = 128;
 export function reviewPrivateCutover(queue: QueueCutoverEvidence | null, local: LocalCutoverEvidence,
   selfPid: number, missingRelations: string[] = []) {
   const blockers: Blocker[] = [];
-  if (queue === null) blockers.push({ code: 'job_upgrade_schema_missing', required_migration: 267,
+  if (missingRelations.length || queue === null) blockers.push({ code: 'job_upgrade_schema_missing', required_migration: 267,
     missing_relations: missingRelations });
-  else if (!queue.queue_snapshot_complete || !queue.supervisor_lock_snapshot_complete) {
+  if (queue !== null && (!queue.queue_snapshot_complete || !queue.supervisor_lock_snapshot_complete)) {
     blockers.push({ code: 'database_snapshot_incomplete' });
   }
   const active = (queue?.jobs ?? []).filter(job => job.status === 'active').map(job => Number(job.id));
@@ -48,6 +49,7 @@ export function reviewPrivateCutover(queue: QueueCutoverEvidence | null, local: 
   return { version: 1, kind: 'cutover_preflight', status: blockers.length ? 'blocked' : 'incomplete',
     cutover_ready: false, snapshots_atomic: false,
     brain_id: queue?.brain_id ?? null, queue_snapshot_hash: queue?.snapshot_hash ?? null,
+    queue_snapshot_mode: queue === null ? 'unavailable' : queue.parking_schema_present === false ? 'legacy_without_parking' : 'current',
     local_scope: local.scope, local_namespace_hash: local.namespace_hash ?? null,
     blockers, external_requirements: [
       'all_worker_hosts_and_pid_namespaces_quiesced',

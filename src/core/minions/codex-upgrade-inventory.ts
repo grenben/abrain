@@ -48,6 +48,15 @@ interface SupervisorLockRow {
 
 /** One read-only snapshot of every nonterminal queue row. No payload or pin value leaves this function. */
 export async function inventoryQueuedJobs(engine: BrainEngine, maxJobs = MAX_LIVE_JOBS, maxSupervisorLocks = MAX_SUPERVISOR_LOCKS) {
+  return inventoryJobs(engine, true, maxJobs, maxSupervisorLocks);
+}
+
+/** Before v267, observe the old queue without implying that durable parking exists. */
+export async function inventoryLegacyQueuedJobs(engine: BrainEngine, maxJobs = MAX_LIVE_JOBS, maxSupervisorLocks = MAX_SUPERVISOR_LOCKS) {
+  return inventoryJobs(engine, false, maxJobs, maxSupervisorLocks);
+}
+
+async function inventoryJobs(engine: BrainEngine, parkingSchemaPresent: boolean, maxJobs: number, maxSupervisorLocks: number) {
   if (!Number.isSafeInteger(maxJobs) || maxJobs < 1 || maxJobs > MAX_LIVE_JOBS) upgradeError('invalid_inventory_limit');
   if (!Number.isSafeInteger(maxSupervisorLocks) || maxSupervisorLocks < 1 || maxSupervisorLocks > MAX_SUPERVISOR_LOCKS) upgradeError('invalid_lock_inventory_limit');
   return engine.transaction(async tx => {
@@ -60,10 +69,10 @@ export async function inventoryQueuedJobs(engine: BrainEngine, maxJobs = MAX_LIV
       const rows = await tx.executeRaw<InventoryRow>(
         `SELECT j.id,j.name,j.queue,j.status,j.parent_job_id,j.attempts_made,j.attempts_started,j.started_at,
                 CASE WHEN pg_column_size(j.data)<=$4 THEN j.data ELSE NULL END AS data,
-                pg_column_size(j.data)::int AS payload_bytes,p.job_id AS parked_job_id,
+                pg_column_size(j.data)::int AS payload_bytes,${parkingSchemaPresent ? 'p.job_id' : 'NULL::int'} AS parked_job_id,
                 j.submission_authority->>'kind' AS submission_kind,
                 (j.lock_token IS NOT NULL) AS has_lock_token,(j.lock_until>now()) AS lock_unexpired
-           FROM minion_jobs j LEFT JOIN codex_parked_jobs p ON p.job_id=j.id
+           FROM minion_jobs j ${parkingSchemaPresent ? 'LEFT JOIN codex_parked_jobs p ON p.job_id=j.id' : ''}
           WHERE j.id>$1 AND j.status=ANY($2::text[])
           ORDER BY j.id LIMIT $3`,
         [after, LIVE_UPGRADE_STATUSES, PAGE_SIZE, MAX_PAYLOAD_BYTES]);
@@ -106,9 +115,11 @@ export async function inventoryQueuedJobs(engine: BrainEngine, maxJobs = MAX_LIV
         refresh_age_seconds: row.refresh_age_seconds === null ? null : Number(row.refresh_age_seconds) };
     });
     const body = { version: 1, kind: 'queue_inventory', brain_id: brainId, live_count: jobs.length,
-      jobs, queue_snapshot_complete: true, supervisor_locks: supervisorLocks,
+      jobs, queue_snapshot_complete: true, ...(!parkingSchemaPresent ? { parking_schema_present: false } : {}), supervisor_locks: supervisorLocks,
       supervisor_lock_snapshot_complete: true, workers: 'uninspected', cutover_ready: false,
-      note: 'Stop producers and workers on every host, then rerun this snapshot and use explicit job previews for parking.' };
+      note: parkingSchemaPresent
+        ? 'Stop producers and workers on every host, then rerun this snapshot and use explicit job previews for parking.'
+        : 'Stop producers and workers on every host and rerun this snapshot. Migration v267 is required before parking previews.' };
     return { ...body, snapshot_hash: digest(body) };
   });
 }

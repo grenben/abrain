@@ -3,7 +3,7 @@ import type { CliDispatchContext } from '../command-table.ts';
 import type { BrainEngine } from '../../core/engine.ts';
 import { writeStdoutFinal, setCliExitVerdict } from '../../core/cli-force-exit.ts';
 import { previewJobUpgrade, upgradeError, upgradeHash, upgradeIds } from '../../core/minions/codex-upgrade-snapshot.ts';
-import { inventoryQueuedJobs, missingJobUpgradeRelations } from '../../core/minions/codex-upgrade-inventory.ts';
+import { inventoryLegacyQueuedJobs, inventoryQueuedJobs, missingJobUpgradeRelations } from '../../core/minions/codex-upgrade-inventory.ts';
 import { inventoryLocalGbrainProcesses } from '../../core/minions/codex-worker-inventory.ts';
 import { reviewPrivateCutover } from '../../core/minions/codex-cutover-preflight.ts';
 import { parkUpgradeJobs, restoreParkedJobs } from '../../core/minions/codex-upgrade-park.ts';
@@ -34,7 +34,9 @@ function submissionFile(file: string) {
 }
 async function readJobPreflight(engine: BrainEngine, local: ReturnType<typeof inventoryLocalGbrainProcesses>) {
   const missing = await missingJobUpgradeRelations(engine);
-  return reviewPrivateCutover(missing.length ? null : await inventoryQueuedJobs(engine),local,process.pid,missing);
+  const queue = missing.length === 0 ? await inventoryQueuedJobs(engine)
+    : missing.length === 1 && missing[0] === 'codex_parked_jobs' ? await inventoryLegacyQueuedJobs(engine) : null;
+  return reviewPrivateCutover(queue,local,process.pid,missing);
 }
 export async function runJobUpgrade(args: string[], ctx: CliDispatchContext): Promise<void> {
   const command = args[0], flags = new Map<string,string>();

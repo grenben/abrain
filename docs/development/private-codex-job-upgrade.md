@@ -50,9 +50,14 @@ are not atomic and cannot certify other hosts, producer quiescence, runtime
 qualification, copied-brain custody or feature acceptance. Treat it as a
 review checklist, not an activation command.
 Before migration v267 is present, preflight reports `job_upgrade_schema_missing`
-with the missing relation names and still includes local process blockers. Its
-database queue snapshot is then unknown; the command does not apply migrations
-or imply an empty queue.
+with the missing relation names and still includes local process blockers. If
+only `codex_parked_jobs` is absent, the existing job and supervisor-lock tables
+are inventoried in the same bounded read-only transaction. The report labels this
+`queue_snapshot_mode: legacy_without_parking`, retains the migration blocker,
+and reports observed active/pending jobs. The snapshot cannot identify durable
+parking because its table does not yet exist. If a job or lock table is absent,
+the queue remains unknown (`queue_snapshot_mode: unavailable`). Neither path
+applies migrations or certifies a cutover from a point-in-time observation.
 
 Preview reads only an explicit bounded selection (at most 128 IDs) and immediate
 dependencies. Output includes hashes, status, recognized protocol and disposition;
