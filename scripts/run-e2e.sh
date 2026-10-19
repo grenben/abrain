@@ -443,7 +443,8 @@ for f in "${files[@]}"; do
   # process-spawn-bound, not test-bound.
   # The native Codex actions contract has 169 sequential cases and took 1332s
   # under four-shard load. Measured PostgreSQL chronicle, Git, repair, dead-owner,
-  # liveness, and the files below exceed the normal outer cap under shard load; chaos
+  # liveness, and the files below exceed the normal outer cap under shard load; the
+  # 18-case conversation-facts PostgreSQL file took 320s in isolation. Chaos
   # needs more per-test time for eight crash/recovery stages. Other files
   # retain the 180s/60s defaults.
   default_file_timeout=180
@@ -457,6 +458,7 @@ for f in "${files[@]}"; do
     */persistence-preparation-deadline.e2e.test.ts) default_file_timeout=720; test_timeout_ms=300000 ;;
     */schema-catalog-golden.test.ts|*/unsupported-embedding-identity-postgres.test.ts) default_file_timeout=720 ;;
     */chronicle-auto-phase-postgres.test.ts|*/persistence-git-coalescing-5530-postgres.test.ts) default_file_timeout=720 ;;
+    */conversation-facts-managed-postgres.test.ts) default_file_timeout=720 ;;
     */persistence-dead-owner-reclaim-6650.test.ts|*/persistence-phase-liveness.test.ts|*/repair-extractor-facts-postgres.test.ts) default_file_timeout=720 ;;
     */reconcile-crash-unactivated.test.ts|*/codex-think.test.ts|*/codex-take-accept.test.ts|*/persistence-large-manifest-postgres.test.ts|*/single-write-fast-path-postgres.test.ts|*/reconcile-crash.test.ts|*/persistence-idle-pool.test.ts|*/unbound-source-postgres.test.ts|*/write-attribution-postgres.test.ts|*/w5-persistence-postgres.test.ts) default_file_timeout=720 ;;
   esac

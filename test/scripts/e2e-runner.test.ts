@@ -299,6 +299,7 @@ test('long E2E files get their measured outer caps while overrides and per-test 
     const actions = 'test/e2e/codex-actions.test.ts';
     const chaos = 'test/e2e/persistence-chaos.test.ts';
     const chronicle = 'test/e2e/chronicle-auto-phase-postgres.test.ts';
+    const conversationFacts = 'test/e2e/conversation-facts-managed-postgres.test.ts';
     const coalescing = 'test/e2e/persistence-git-coalescing-5530-postgres.test.ts';
     const deadOwner = 'test/e2e/persistence-dead-owner-reclaim-6650.test.ts';
     const liveness = 'test/e2e/persistence-phase-liveness.test.ts';
@@ -309,7 +310,7 @@ test('long E2E files get their measured outer caps while overrides and per-test 
     const preparationDeadlines = 'test/e2e/persistence-preparation-deadline.e2e.test.ts';
     const schemaCatalog = 'test/e2e/schema-catalog-golden.test.ts';
     const embeddingIdentity = 'test/e2e/unsupported-embedding-identity-postgres.test.ts';
-    for (const file of [actions, chaos, chronicle, coalescing, deadOwner, liveness, extractor, think, unbound,
+    for (const file of [actions, chaos, chronicle, conversationFacts, coalescing, deadOwner, liveness, extractor, think, unbound,
       skillBundles, preparationDeadlines, schemaCatalog, embeddingIdentity]) copyFileSync(join(root, 'test/e2e/a.test.ts'), join(root, file));
     const bunArgs = join(root, 'bun-args.txt');
     const outerCaps = join(root, 'outer-caps.txt');
@@ -317,12 +318,12 @@ test('long E2E files get their measured outer caps while overrides and per-test 
     const timeoutWrapper = '#!/bin/sh\nprintf "%s\\n" "$1" >> "$OUTER_CAPS_LOG"\nshift\nexec "$@"\n';
     for (const name of ['timeout', 'gtimeout']) writeFileSync(join(root, 'bin', name), timeoutWrapper, { mode: 0o755 });
     const base = { ...process.env, GBRAIN_NO_SNAPSHOT: '1', DATABASE_URL: '', GBRAIN_DATABASE_URL: '', SHARD: '', COVERAGE_DIR: '', PATH: `${join(root, 'bin')}:${process.env.PATH}`, REAL_BUN: process.execPath, BUN_ARGS_LOG: bunArgs, OUTER_CAPS_LOG: outerCaps };
-    for (const [file, override] of [['test/e2e/a.test.ts', ''], [actions, ''], [chaos, ''], [chronicle, ''], [coalescing, ''], [deadOwner, ''], [liveness, ''], [extractor, ''], [think, ''], [unbound, ''], [skillBundles, ''], [preparationDeadlines, ''], [schemaCatalog, ''], [embeddingIdentity, ''], [liveness, '77'], [actions, '77']]) {
+    for (const [file, override] of [['test/e2e/a.test.ts', ''], [actions, ''], [chaos, ''], [chronicle, ''], [conversationFacts, ''], [coalescing, ''], [deadOwner, ''], [liveness, ''], [extractor, ''], [think, ''], [unbound, ''], [skillBundles, ''], [preparationDeadlines, ''], [schemaCatalog, ''], [embeddingIdentity, ''], [liveness, '77'], [actions, '77']]) {
       const result = spawnSync('bash', ['scripts/run-e2e.sh', file], { cwd: root, encoding: 'utf8', env: { ...base, GBRAIN_E2E_FILE_TIMEOUT: override } });
       expect(result.status, result.stdout + result.stderr).toBe(0);
     }
-    expect(readFileSync(outerCaps, 'utf8').trim().split('\n')).toEqual(['180', '1800', '720', '720', '720', '720', '720', '720', '720', '720', '720', '720', '720', '720', '77', '77']);
-    expect(readFileSync(bunArgs, 'utf8').trim().split('\n').map(line => line.match(/--timeout=(\d+)/)?.[1])).toEqual(['60000', '180000', '300000', '60000', '60000', '60000', '60000', '60000', '60000', '60000', '420000', '300000', '60000', '60000', '60000', '180000']);
+    expect(readFileSync(outerCaps, 'utf8').trim().split('\n')).toEqual(['180', '1800', '720', '720', '720', '720', '720', '720', '720', '720', '720', '720', '720', '720', '720', '77', '77']);
+    expect(readFileSync(bunArgs, 'utf8').trim().split('\n').map(line => line.match(/--timeout=(\d+)/)?.[1])).toEqual(['60000', '180000', '300000', '60000', '60000', '60000', '60000', '60000', '60000', '60000', '60000', '420000', '300000', '60000', '60000', '60000', '180000']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
