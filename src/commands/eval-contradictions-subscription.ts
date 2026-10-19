@@ -73,6 +73,10 @@ async function inputClock(engine: BrainEngine): Promise<string> {
   return row.value;
 }
 
+async function corpusSnapshot(engine: BrainEngine) {
+  return { sources: await sources(engine), pageClock: await pageClock(engine), inputClock: await inputClock(engine) };
+}
+
 /** Close each clock check-to-write window, including new retrieval rows. */
 async function lockCorpus(engine: BrainEngine): Promise<void> {
   await engine.executeRaw("SELECT set_config('lock_timeout','1s',true)");
@@ -91,17 +95,46 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
   assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy);
   if (enclosing) {
     if (hasFlags(flags)) throw usageError('An enclosing host already owns the subscription allowance.', 'Reuse the host allowance without nested Codex flags.');
-    await assertSubscriptionTarget(engine);
+    const scratch = await assertSubscriptionTarget(engine);
     await enclosing.checkAuthority?.();
     const [allowance] = await enclosing.engine.executeRaw<{ current: boolean }>(
       'SELECT deadline > now() AS current FROM codex_subscription_runs WHERE run_id=$1', [enclosing.runId]);
     if (!allowance) throw new SubscriptionAdmissionError('subscription_required');
     if (!allowance.current) throw new SubscriptionAdmissionError('subscription_exhausted');
-    return run();
+    // Scratch brains use the factory-owned cross-database fence. The owner-brain
+    // CLI route can additionally bind its live retrieval inputs without taking
+    // ownership of the host's durable allowance or changing its run ID.
+    if (scratch) return run();
+    const bound = await corpusSnapshot(engine);
+    const assertBound = async (db: BrainEngine) => {
+      const current = readPrivateCodexConfig();
+      if (!current || current.model !== policy.model || current.bin !== policy.bin ||
+          digest(await corpusSnapshot(db)) !== digest(bound)) {
+        throw new SubscriptionAdmissionError('subscription_identity_conflict');
+      }
+    };
+    await engine.transaction(async tx => {
+      await tx.executeRaw("SELECT set_config('statement_timeout','5s',true)");
+      await lockCorpus(tx);
+      await assertBound(tx);
+    });
+    const nested = {
+      ...enclosing,
+      checkAuthority: async () => { await enclosing.checkAuthority?.(); await assertBound(engine); },
+      checkAuthorityInTransaction: async (tx: BrainEngine) => {
+        await enclosing.checkAuthorityInTransaction?.(tx);
+        await lockCorpus(tx);
+        await assertBound(tx);
+      },
+    };
+    return withCodexSubscription(nested, async () => {
+      const result = await run();
+      await nested.checkAuthority();
+      return result;
+    });
   }
   const grant = parseAllowance(flags);
-  const snapshot = await sources(engine), clock = await pageClock(engine), retrievalClock = await inputClock(engine);
-  const claim = { identity, sources: snapshot, pageClock: clock, inputClock: retrievalClock, model: policy.model, bin: policy.bin,
+  const claim = { identity, ...await corpusSnapshot(engine), model: policy.model, bin: policy.bin,
     auxiliaryUsd: grant.maxUsd ?? null };
   const prefix = `codex-eval:${grant.requestId}:`;
   const runId = prefix + digest(claim);
@@ -110,7 +143,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
     await lockCorpus(tx);
     await declareDurablePersistence(tx);
-    if (digest({ ...claim, sources: await sources(tx), pageClock: await pageClock(tx), inputClock: await inputClock(tx) }) !== digest(claim)) {
+    if (digest({ ...claim, ...await corpusSnapshot(tx) }) !== digest(claim)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     const prior = await tx.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`${prefix}%`]);
@@ -124,7 +157,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy);
-    if (digest({ ...claim, sources: await sources(db), pageClock: await pageClock(db), inputClock: await inputClock(db) }) !== digest(claim)) {
+    if (digest({ ...claim, ...await corpusSnapshot(db) }) !== digest(claim)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
   };

@@ -279,6 +279,49 @@ test('an enclosing allowance must exist before the CLI can sweep or run', async 
   expect(started).toBe(false);
 });
 
+test('a host-owned eval allowance pins retrieval inputs before dispatch', async () => {
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  const before = calls().length;
+  const prior = await engine.getConfig('search.mode');
+  try {
+    await run(async id => {
+      await expect(withEvalContradictionSubscription(engine, {}, identity, async () => {
+        await engine.setConfig('search.mode', 'tokenmax');
+        await expect(codexSubscriptionContext()!.checkAuthority!()).rejects
+          .toMatchObject({ code: 'subscription_identity_conflict' });
+        await expect(judgeContradiction(input)).rejects
+          .toMatchObject({ code: 'subscription_identity_conflict' });
+      })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect(Number((await accounting(id)).attempts)).toBe(0);
+      expect(Number((await accounting(id)).accepted_turns)).toBe(0);
+    });
+  } finally { if (prior === null) await engine.unsetConfig('search.mode'); else await engine.setConfig('search.mode', prior); }
+  expect(calls()).toHaveLength(before);
+});
+
+test('a host-owned eval allowance refuses publication after an accepted turn sees a changed input', async () => {
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  const prior = await engine.getConfig('search.mode');
+  try {
+    await run(async id => {
+      let published = false;
+      await expect(withEvalContradictionSubscription(engine, {}, identity, async () => {
+        expect((await judgeContradiction(input)).verdict.verdict).toBe('contradiction');
+        await engine.setConfig('search.mode', 'conservative');
+        await expect(subscriptionTargetTransaction(engine, async () => { published = true; }))
+          .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+      expect(published).toBe(false);
+      expect(Number((await accounting(id)).attempts)).toBe(1);
+      expect(Number((await accounting(id)).accepted_turns)).toBe(1);
+    });
+  } finally { if (prior === null) await engine.unsetConfig('search.mode'); else await engine.setConfig('search.mode', prior); }
+});
+
 test('the private CLI retrieves pages, judges once, persists a run and reuses its cache', async () => {
   await engine.putPage('notes/revenue-a', { title: 'Acme revenue A', type: 'note',
     compiled_truth: input.a.text });
