@@ -57,6 +57,17 @@ async function admission(engine: BrainEngine, slug: string, content = 'new', ext
 }
 
 describe('durable mutation journal', () => {
+  test('BigInt intent metadata is retained as a decimal string on both engines', async () => {
+    for (const engine of engines) {
+      const a = await admission(engine, `bigint-intent-${engine.kind}`);
+      a.intent = { ...a.intent, evidence_revision: 9007199254740993n };
+      const accepted = await admitWrite(engine, a);
+      expect(accepted.intent).toMatchObject({ evidence_revision: '9007199254740993' });
+      expect((await admitWrite(engine, a)).id).toBe(accepted.id);
+      await cancelWriteRequest(engine, a.principal, a.requestId!);
+    }
+  });
+
   test('admission retries a rolled-back transaction with one retained ID and one quota reservation', async () => {
     for (const engine of engines) {
       const a = await admission(engine, `admission-retry-${engine.kind}`);

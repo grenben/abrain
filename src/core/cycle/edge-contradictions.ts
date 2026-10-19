@@ -664,8 +664,9 @@ export async function applyEdgeProposal(engine: BrainEngine, id: number): Promis
   });
   if (!expectedRevision) return { status: 'stale', reason: 'the proposal evidence or source changed; the next dream cycle re-judges it' };
   try {
+    // The PostgreSQL BIGINT row id may be a JS bigint; the publication guard requires a safe integer.
     await appendTimelineLine(engine, p.source_id, p.subject_slug, String(dateKey(p.close_date)), p.generated_line, expectedRevision,
-      { id: p.id, snapshotHash: p.judge_snapshot_hash! });
+      { id, snapshotHash: p.judge_snapshot_hash! });
   } catch (error) {
     if (!['revision_conflict', 'source_changed'].includes((error as { code?: string })?.code ?? '')) throw error;
     await engine.executeRaw(`UPDATE link_edge_proposals SET status='stale', updated_at=now() WHERE id=$1 AND status='proposed'`, [id]);

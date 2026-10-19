@@ -8,7 +8,7 @@ import { assertRecoveryStagingAbsent } from './staging.ts';
 import { OperationError, opError } from '../ops/contract.ts';
 import { readFix } from '../ops/op-fix.ts';
 import type { Action } from '../agent-output.ts';
-import { digest, jsonBytes, requireUuid } from './digest.ts';
+import { digest, jsonBytes, requireUuid, stableJson } from './digest.ts';
 import { authorizeWrite } from './authority.ts';
 import { journalLimitKey, oneYearCapacity, readJournalLimits, readReceiptRetentionDays } from './limits.ts';
 import { outstandingCapacityDetail, retryWriteAdmission } from './admission-retry.ts';
@@ -334,7 +334,7 @@ async function prepareAdmission(engine: BrainEngine, input: WriteAdmission, over
       VALUES($1,$2,$3::uuid,$4,$5,$6::uuid,$7,$8,$9::uuid,$10,$11,$12::text::jsonb,$13::text::jsonb,$14,$15,$16,$17,$18,$19::uuid,$21,true)
       RETURNING *`, [input.principal.kind, input.principal.id, requestId, input.operation, input.sourceId,
       input.sourceIncarnation, input.pageId ?? null, input.slug, input.worktreeId ?? null, input.topologyGeneration ?? null,
-      fingerprint, JSON.stringify(input.intent), JSON.stringify(input.authority), bytes, terminalBytes, input.targetKind ?? 'page', input.protocolVersion ?? 1,
+      fingerprint, stableJson(input.intent), stableJson(input.authority), bytes, terminalBytes, input.targetKind ?? 'page', input.protocolVersion ?? 1,
       stamp.version, stamp.hostId, counters.map(c => c.key), input.clientRequestId ?? null]);
     return row;
   } };
@@ -415,8 +415,8 @@ export async function admitWriteGroupInTransaction(tx: BrainEngine, inputs: Writ
         (e->>'intent_bytes')::bigint,(e->>'terminal_reservation')::bigint,'page',1,$9,$10::uuid,e->>'client_request_id',true
       FROM jsonb_array_elements($11::text::jsonb) WITH ORDINALITY AS t(e,n) ORDER BY n
       RETURNING *`, [first.principal.kind, first.principal.id, first.operation, first.sourceId, first.sourceIncarnation, first.worktreeId ?? null,
-      first.topologyGeneration ?? null, JSON.stringify(first.authority), stamp.version, stamp.hostId,
-      JSON.stringify(fresh.map(item => ({ request_id: item.requestId, page_id: item.input.pageId ?? null, slug: item.input.slug, digest: item.fingerprint,
+      first.topologyGeneration ?? null, stableJson(first.authority), stamp.version, stamp.hostId,
+      stableJson(fresh.map(item => ({ request_id: item.requestId, page_id: item.input.pageId ?? null, slug: item.input.slug, digest: item.fingerprint,
         intent: item.input.intent, intent_bytes: item.bytes, terminal_reservation: item.terminalBytes, client_request_id: item.input.clientRequestId ?? null })))]),
       () => tx.executeRaw(`UPDATE persistence_counters SET outstanding_count=outstanding_count+$4,
       intent_bytes=intent_bytes+$2,lifetime_ids=lifetime_ids+$4,terminal_bytes=terminal_bytes+$3 WHERE key=ANY($1::text[])`,
