@@ -232,6 +232,7 @@ interface CandidateRow {
   source_id: string; from_page_id: number; to_page_id: number; link_type: string;
   valid_ranges: string; last_start: unknown; recorded_at: unknown; evidence_hash: string;
   subject_slug: string; subject_title: string | null; target_slug: string; target_title: string | null;
+  judgeContexts?: string[];
 }
 
 interface SubjectGroup { sourceId: string; fromId: number; slug: string; title: string; linkType: string; rels: CandidateRow[] }
@@ -321,7 +322,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
     pricingOverrides: await loadPricingOverrides(engine), phase: 'edge_contradictions', auditPath: opts.auditPath,
   });
   const judge = opts.judge ?? defaultEdgeJudge;
-  const totals = { subjects: groups.length, judged: 0, proposed: 0, applied: 0, born_closed: 0, undated_unresolved: 0, ambiguous_same_date: 0, compatible: 0, errors: 0, skipped_known: 0, reverted };
+  const totals = { subjects: groups.length, judged: 0, proposed: 0, applied: 0, born_closed: 0, undated_unresolved: 0, ambiguous_same_date: 0, compatible: 0, errors: 0, skipped_known: 0, skipped_unpublished: 0, reverted };
   let budgetExhausted = false;
 
   for (const g of groups) {
@@ -343,13 +344,14 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
     const fresh = pairs.filter(([a, b]) => !known.has(`${a.to_page_id}:${b.to_page_id}`));
     if (fresh.length === 0) { totals.skipped_known++; continue; }
 
-    const relationships: JudgeRelationship[] = await Promise.all(g.rels.map(async (r, i) => ({
-      index: i + 1, link_type: r.link_type, target: r.target_slug, target_title: r.target_title ?? r.target_slug,
-      since: dateKey(r.last_start),
-      contexts: (await engine.executeRaw<{ context: string }>(
-        `SELECT DISTINCT context FROM links WHERE from_page_id = $1 AND to_page_id = $2 AND link_type = $3 AND context <> '' LIMIT 3`,
-        [r.from_page_id, r.to_page_id, r.link_type])).map(c => c.context),
-    })));
+    const relationships: JudgeRelationship[] = await Promise.all(g.rels.map(async (r, i) => {
+      r.judgeContexts = (await engine.executeRaw<{ context: string }>(
+        `SELECT DISTINCT context FROM links WHERE from_page_id = $1 AND to_page_id = $2
+          AND link_type = $3 AND context <> '' ORDER BY context LIMIT 3`,
+        [r.from_page_id, r.to_page_id, r.link_type])).map(c => c.context);
+      return { index: i + 1, link_type: r.link_type, target: r.target_slug,
+        target_title: r.target_title ?? r.target_slug, since: dateKey(r.last_start), contexts: r.judgeContexts };
+    }));
     const prompt = buildEdgeJudgePrompt(g, relationships);
     const check = meter.check({ modelId: model, estimatedInputTokens: Math.ceil(prompt.length / 4), maxOutputTokens: JUDGE_MAX_OUTPUT_TOKENS, label: `edge_contradictions:${g.slug}` });
     if (!check.allowed) { budgetExhausted = true; break; }
@@ -374,27 +376,27 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
         const detail = attempt >= JUDGE_MAX_ATTEMPTS
           ? `held after ${attempt} attempts; ${failure}; reset: gbrain edge-proposals retry --all-held`
           : `attempt ${attempt}/${JUDGE_MAX_ATTEMPTS}; ${failure}`;
-        await recordProposal(engine, g, a, b, hash, { status: 'error', model, detail });
-        totals.errors++;
+        const id = await recordProposal(engine, g, a, b, hash, { status: 'error', model, detail });
+        totals[id === null ? 'skipped_unpublished' : 'errors']++;
         continue;
       }
       const v = verdict.find(p => (p.a === ia && p.b === ib) || (p.a === ib && p.b === ia));
       if (!v) {
-        await recordProposal(engine, g, a, b, hash, { status: 'error', model, detail: 'malformed: missing relationship pair after validation' });
-        totals.errors++;
+        const id = await recordProposal(engine, g, a, b, hash, { status: 'error', model, detail: 'malformed: missing relationship pair after validation' });
+        totals[id === null ? 'skipped_unpublished' : 'errors']++;
         continue;
       }
       if (!v.conflict) {
-        await recordProposal(engine, g, a, b, hash, { status: 'compatible', model, confidence: v.confidence });
-        totals.compatible++;
+        const id = await recordProposal(engine, g, a, b, hash, { status: 'compatible', model, confidence: v.confidence });
+        totals[id === null ? 'skipped_unpublished' : 'compatible']++;
         continue;
       }
       const side = (r: CandidateRow) => ({ lastStart: dateKey(r.last_start), stints: parseMultirange(r.valid_ranges) as Stint[], recordedAt: r.recorded_at instanceof Date ? r.recorded_at : String(r.recorded_at) });
       const outcome = closeContradiction(side(a), side(b));
       if (outcome.action === 'none') {
         const status = outcome.reason === 'already_disjoint' ? 'compatible' : outcome.reason;
-        await recordProposal(engine, g, a, b, hash, { status, model, confidence: v.confidence });
-        totals[status === 'compatible' ? 'compatible' : status]++;
+        const id = await recordProposal(engine, g, a, b, hash, { status, model, confidence: v.confidence });
+        totals[id === null ? 'skipped_unpublished' : status === 'compatible' ? 'compatible' : status]++;
         continue;
       }
       const ending = outcome.side === 'a' ? a : b;
@@ -403,6 +405,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
         status: 'proposed', model, confidence: v.confidence, endingTo: Number(ending.to_page_id), closeDate: outcome.closeDate,
         bornClosed: outcome.bornClosed, line: dreamClosureLine(g.linkType, ending.target_slug, other.target_slug),
       });
+      if (id === null) { totals.skipped_unpublished++; continue; }
       totals.proposed++;
       if (outcome.bornClosed) totals.born_closed++;
       if (config.mode === 'apply' && id !== null) {
@@ -415,7 +418,8 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
   const detail = `judged ${totals.judged}/${groups.length} subject(s): ${totals.proposed} proposal(s)` +
     (config.mode === 'apply' ? `, ${totals.applied} applied` : ' (mode propose: review with gbrain edge-proposals list)') +
     `, ${totals.compatible} compatible, ${totals.undated_unresolved} undated, ${totals.ambiguous_same_date} same-date` +
-    (totals.errors ? `, ${totals.errors} judge error(s)` : '') + (budgetExhausted ? ' (budget exhausted)' : '') +
+    (totals.errors ? `, ${totals.errors} judge error(s)` : '') +
+    (totals.skipped_unpublished ? `, ${totals.skipped_unpublished} pair(s) skipped after judgment` : '') + (budgetExhausted ? ' (budget exhausted)' : '') +
     `. Cost: ${formatCycleCost(meter.totalSpent)} / $${config.budgetUsd.toFixed(2)} with ${model}${declaredDetail}`;
   const status = budgetExhausted || totals.errors ? (totals.judged ? 'partial' : 'failed') : 'complete';
   return done(status, detail, withDeclared(totals));
@@ -500,7 +504,42 @@ async function recordProposal(
   engine: BrainEngine, g: SubjectGroup, a: CandidateRow, b: CandidateRow, hash: string,
   p: { status: string; model: string; confidence?: number | null; endingTo?: number; closeDate?: string; bornClosed?: boolean; line?: string; detail?: string },
 ): Promise<number | null> {
-  const rows = await engine.executeRaw<{ id: number }>(
+  return engine.transaction(async tx => {
+    // The judge saw a snapshot. Lock both live relationships and their pages
+    // before publishing anything inferred from it. A re-derivation, deletion,
+    // title change or changed temporal tie-breaker makes the verdict stale.
+    const current = await tx.executeRaw<{
+      to_page_id: number; evidence_hash: string; valid_ranges: string; last_start: unknown;
+      recorded_at: unknown; subject_title: string | null; target_title: string | null; target_slug: string;
+    }>(`SELECT lr.to_page_id, lr.evidence_hash, lr.valid_ranges::text AS valid_ranges,
+              lr.last_start, lr.recorded_at, f.title AS subject_title, t.title AS target_title, t.slug AS target_slug
+         FROM link_relationships lr
+         JOIN sources s ON s.id=lr.source_id AND s.archived=false AND s.archived_at IS NULL
+         JOIN pages f ON f.id=lr.from_page_id AND f.deleted_at IS NULL
+         JOIN pages t ON t.id=lr.to_page_id AND t.deleted_at IS NULL
+        WHERE lr.source_id=$1 AND lr.from_page_id=$2 AND lr.link_type=$3
+          AND lr.to_page_id=ANY($4::bigint[]) AND lr.scope='all' AND lr.semantics='state'
+          AND lr.valid_ranges @> $5::date AND f.slug=$6
+        FOR SHARE OF lr, s, f, t`,
+      [g.sourceId, g.fromId, g.linkType, [Number(a.to_page_id), Number(b.to_page_id)], utcToday(), g.slug]);
+    const byTarget = new Map(current.map(row => [Number(row.to_page_id), row]));
+    const instant = (value: unknown) => value == null ? null : new Date(value as string).getTime();
+    const matches = (old: CandidateRow) => {
+      const row = byTarget.get(Number(old.to_page_id));
+      return row && row.evidence_hash === old.evidence_hash && row.valid_ranges === old.valid_ranges &&
+        dateKey(row.last_start) === dateKey(old.last_start) && instant(row.recorded_at) === instant(old.recorded_at) &&
+        (row.subject_title ?? g.slug) === g.title && row.target_slug === old.target_slug &&
+        (row.target_title ?? old.target_slug) === (old.target_title ?? old.target_slug);
+    };
+    if (current.length !== 2 || !matches(a) || !matches(b)) return null;
+    for (const old of [a, b]) if (old.judgeContexts) {
+      const contexts = await tx.executeRaw<{ context: string }>(
+        `SELECT context FROM links l WHERE from_page_id=$1 AND to_page_id=$2
+          AND link_type=$3 AND context<>'' ORDER BY context FOR SHARE OF l`,
+        [old.from_page_id, old.to_page_id, old.link_type]);
+      if (JSON.stringify([...new Set(contexts.map(row => row.context))].slice(0, 3)) !== JSON.stringify(old.judgeContexts)) return null;
+    }
+    const rows = await tx.executeRaw<{ id: number }>(
     `INSERT INTO link_edge_proposals (source_id, from_page_id, a_to_page_id, b_to_page_id, link_type, evidence_hash, status,
        ending_to_page_id, close_date, born_closed, model, confidence, generated_line, detail)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, $11, $12, $13, $14)
@@ -512,7 +551,8 @@ async function recordProposal(
      RETURNING id`,
     [g.sourceId, g.fromId, Number(a.to_page_id), Number(b.to_page_id), g.linkType, hash, p.status,
       p.endingTo ?? null, p.closeDate ?? null, p.bornClosed ?? false, p.model, p.confidence ?? null, p.line ?? null, p.detail ?? null]);
-  return rows[0] ? Number(rows[0].id) : null;
+    return rows[0] ? Number(rows[0].id) : null;
+  });
 }
 
 // ─── Apply / undo / revert detection ─────────────────────────────────────

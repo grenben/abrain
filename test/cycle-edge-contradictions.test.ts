@@ -101,6 +101,48 @@ describe('edge_contradictions', () => {
     expect((await proposals()).map(p => p.status)).toEqual(['compatible']);
   });
 
+  test('a relationship changed during judgment cannot publish a proposal', async () => {
+    await seed(DATED);
+    const changed: EdgeJudgeFn = async () => {
+      await engine.executeRaw(`UPDATE link_relationships SET evidence_hash='changed-during-judgment'
+        WHERE from_page_id=(SELECT id FROM pages WHERE slug='people/alice-example')
+          AND to_page_id=(SELECT id FROM pages WHERE slug='companies/acme-example')`);
+      return [{ a: 1, b: 2, conflict: true, confidence: 0.9 }];
+    };
+    const result = await runPhaseEdgeContradictions(engine, { judge: changed });
+    expect(result).toMatchObject({ status: 'complete', totals: { judged: 1, proposed: 0, skipped_unpublished: 1 } });
+    expect(await proposals()).toEqual([]);
+    expect(await liveWorksAt()).toEqual(['companies/acme-example', 'companies/widget-co']);
+  });
+
+  test('archiving the source during judgment cannot publish a proposal', async () => {
+    await seed(DATED);
+    try {
+      const archived: EdgeJudgeFn = async () => {
+        await engine.executeRaw(`UPDATE sources SET archived=true, archived_at=now() WHERE id='default'`);
+        return [{ a: 1, b: 2, conflict: true, confidence: 0.9 }];
+      };
+      const result = await runPhaseEdgeContradictions(engine, { judge: archived });
+      expect(result.totals).toMatchObject({ proposed: 0, skipped_unpublished: 1 });
+      expect(await proposals()).toEqual([]);
+    } finally {
+      await engine.executeRaw(`UPDATE sources SET archived=false, archived_at=NULL WHERE id='default'`);
+    }
+  });
+
+  test('changed prompt context during judgment cannot publish a proposal', async () => {
+    await seed(DATED);
+    const changed: EdgeJudgeFn = async () => {
+      await engine.executeRaw(`UPDATE links SET context='changed after the judge read context'
+        WHERE from_page_id=(SELECT id FROM pages WHERE slug='people/alice-example')
+          AND to_page_id=(SELECT id FROM pages WHERE slug='companies/acme-example')`);
+      return [{ a: 1, b: 2, conflict: true, confidence: 0.9 }];
+    };
+    const result = await runPhaseEdgeContradictions(engine, { judge: changed });
+    expect(result.totals).toMatchObject({ proposed: 0, skipped_unpublished: 1 });
+    expect(await proposals()).toEqual([]);
+  });
+
   test('malformed judge output is an error row, never a closure', async () => {
     await seed(DATED);
     const r = await runPhaseEdgeContradictions(engine, { judge: async () => null });
