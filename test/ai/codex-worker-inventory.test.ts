@@ -22,6 +22,8 @@ test('local process inventory identifies worker, supervisor and child without ex
       [13, ['tini', '-s', '--', '/installed/bin/gbrain', 'jobs', 'run-child', '--job-id', '55'], 'job_child'],
       [14, ['bun', '/tmp/unrelated.ts', 'gbrain'], 'other'],
       [15, ['bun', 'src/cli.ts', 'jobs', 'work'], 'source_worker'],
+      [16, ['/installed/bin/gbrain', 'serve', '--http'], 'server'],
+      [17, ['/installed/bin/gbrain', 'autopilot'], 'autopilot'],
     ];
     for (const [pid, argv] of rows) {
       const dir = join(root, String(pid));
@@ -33,7 +35,7 @@ test('local process inventory identifies worker, supervisor and child without ex
     }
     const found = inventoryLocalGbrainProcesses({ procRoot: root, platform: 'linux' });
     expect(found.local_scan_complete).toBe(true);
-    expect(found.processes.map(row => row.role)).toEqual(['worker', 'supervisor', 'job_child', 'worker']);
+    expect(found.processes.map(row => row.role)).toEqual(['worker', 'supervisor', 'job_child', 'worker', 'server', 'autopilot']);
     expect(found.processes[0]).toMatchObject({ pid: 11, start_ticks: '1100',
       environment: { fingerprints: { GBRAIN_MODEL: sha('SECRET_MODEL'), GBRAIN_SUPERVISED: sha('1') },
         connection_keys_present: ['DATABASE_URL'] } });

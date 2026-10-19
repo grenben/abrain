@@ -30,7 +30,9 @@ function gbrainArgIndex(argv: string[]): number {
   return -1;
 }
 
-function role(argv: string[], index: number): 'worker' | 'supervisor' | 'job_child' | 'other_gbrain' {
+function role(argv: string[], index: number): 'worker' | 'supervisor' | 'job_child' | 'server' | 'autopilot' | 'other_gbrain' {
+  if (argv[index + 1] === 'serve') return 'server';
+  if (argv[index + 1] === 'autopilot') return 'autopilot';
   if (argv[index + 1] !== 'jobs') return 'other_gbrain';
   switch (argv[index + 2]) {
     case 'work': return 'worker';

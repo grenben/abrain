@@ -30,7 +30,7 @@ parking previews. The output keeps `workers: uninspected` and
 are separately qualified.
 
 `jobs workers` is an engine-free, read-only Linux process scan in the current
-PID namespace. It reports candidate GBrain worker/supervisor/child PIDs,
+PID namespace. It reports candidate GBrain worker/supervisor/child/server/autopilot PIDs,
 kernel start ticks, and hashes of launcher arguments, executable path and
 selected noncredential environment values. It never prints argument or
 environment values. Unreadable process metadata is counted as incomplete;
