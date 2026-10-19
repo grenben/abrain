@@ -13,6 +13,9 @@ import { judgeContradiction, type JudgeInput } from '../../src/core/eval-contrad
 import { runContradictionProbe } from '../../src/core/eval-contradictions/runner.ts';
 import { withEvalContradictionSubscription } from '../../src/commands/eval-contradictions-subscription.ts';
 import { runEvalSuspectedContradictions } from '../../src/commands/eval-suspected-contradictions.ts';
+import { hybridSearch } from '../../src/core/search/hybrid.ts';
+import { loadTrend } from '../../src/core/eval-contradictions/trends.ts';
+import { installFixtureChunks } from '../helpers/page-projection.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'codex-contradiction-judge-'));
 const bin = join(root, 'fixture.mjs'), capture = join(root, 'calls.jsonl'), control = join(root, 'response.json');
@@ -46,7 +49,7 @@ beforeAll(async () => {
   for (const key of keys) process.env[key] = root;
   globalThis.fetch = (() => { throw new Error('forbidden network'); }) as unknown as typeof fetch;
   mkdirSync(join(root, '.gbrain'));
-  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ private_codex: {
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ embedding_disabled: true, private_codex: {
     mode: 'strict', model: 'codex-cli:gpt-test', bin,
   } }));
   writeFileSync(capture, '');
@@ -174,4 +177,43 @@ test('an enclosing allowance must exist before the CLI can sweep or run', async 
     }, async () => { started = true; })).rejects.toMatchObject({ code: 'subscription_required' });
   });
   expect(started).toBe(false);
+});
+
+test('the private CLI retrieves pages, judges once, persists a run and reuses its cache', async () => {
+  await engine.putPage('notes/revenue-a', { title: 'Acme revenue A', type: 'note',
+    compiled_truth: input.a.text });
+  await engine.putPage('notes/revenue-b', { title: 'Acme revenue B', type: 'note',
+    compiled_truth: input.b.text });
+  await installFixtureChunks(engine, 'notes/revenue-a', [
+    { chunk_index: 0, chunk_text: input.a.text, chunk_source: 'compiled_truth' },
+  ]);
+  await installFixtureChunks(engine, 'notes/revenue-b', [
+    { chunk_index: 0, chunk_text: input.b.text, chunk_source: 'compiled_truth' },
+  ]);
+  const retrieved = await hybridSearch(engine, input.query, { limit: 2 });
+  expect(retrieved).toHaveLength(2);
+  const quote = (value: string) => value.includes('10 million') ? 'revenue was 10 million' : 'revenue was 20 million';
+  reply({ ...good, source_quote_a: quote(retrieved[0]!.chunk_text),
+    source_quote_b: quote(retrieved[1]!.chunk_text) });
+  const requestId = randomUUID(), deadline = new Date(Date.now() + 600_000).toISOString();
+  const args = ['run', '--query', input.query, '--judge', input.model, '--top-k', '2',
+    '--budget-usd', '100', '--yes', '--codex-max-attempts', '2', '--codex-max-turns', '2',
+    '--codex-deadline', deadline, '--codex-request-id', requestId];
+  const before = calls().length;
+  await runEvalSuspectedContradictions(engine, args);
+  expect(calls()).toHaveLength(before + 1);
+  const first = (await loadTrend(engine, 30))[0]!.report_json;
+  expect(first.run_status).toBe('ok');
+  expect(first.per_query[0]!.pairs_judged).toBe(1);
+  expect(first.verdict_breakdown.contradiction).toBe(1);
+  await runEvalSuspectedContradictions(engine, args);
+  expect(calls()).toHaveLength(before + 1);
+  const second = (await loadTrend(engine, 30))[0]!.report_json;
+  expect(second.per_query[0]!.pairs_cache_hit).toBe(1);
+  expect(second.per_query[0]!.pairs_judged).toBe(0);
+  await engine.executeRaw('INSERT INTO sources(id,name) VALUES ($1,$2)',
+    ['synthetic-revenue-source', 'Synthetic revenue source']);
+  await expect(runEvalSuspectedContradictions(engine, args))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(calls()).toHaveLength(before + 1);
 });
