@@ -175,10 +175,11 @@ describe.skipIf(!hasDatabase())('a lock-blocked preparation read ends at the bud
       result = await performSync(engine, { sourceId: f.id, noPull: true, noEmbed: true, noExtract: true, drain: true, lanes: 1 });
     } finally { intercept.restore(); await watcher.catch(() => undefined); await lock?.drop().catch(() => undefined); await engine.unsetConfig('sync.holds'); }
     expect(intercept.holds()).toBeGreaterThanOrEqual(1);
-    // Released at the budget, charged once (the step reaches the stamp only on a renewal; the stalled receipt in the second variant names it).
+    // The preparation budget starts before this test acquires its table lock, so
+    // some of it may have elapsed by lockedAt under load. Check the deadline
+    // outcome and upper bound here; the budget timer is pinned separately.
     expect(observed.released).toMatchObject({ state: 'queued', blocked_reason: 'preparation_deadline', preparation_attempts: 1 });
     expect(observed.releasedAt! - lockedAt).toBeLessThan(BUDGET_MS + SLACK_MS);
-    expect(observed.releasedAt! - lockedAt).toBeGreaterThanOrEqual(BUDGET_MS * 0.9);
     // The server ended the statements: no origin check of the sync is active while the lock is still held and nothing new is issued,
     // so the released member pins no connection (before the bound, the statement stayed active, waiting on the lock, until it dropped).
     expect(observed.leftover ?? []).toEqual([]);
