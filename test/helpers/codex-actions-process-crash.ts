@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
+import { PostgresEngine } from '../../src/core/postgres-engine.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
 import { runWithJobSpend } from '../../src/core/minions/spend-authorization.ts';
 import { buildJobContext } from '../../src/core/minions/job-context.ts';
@@ -20,8 +21,13 @@ const beforeCommit = mode.endsWith('-before');
 const home = join(root, 'home');
 const config = JSON.parse(readFileSync(join(home, '.gbrain', 'config.json'), 'utf8'));
 const unregister = __registerCodexFixtureForTests(config.private_codex.bin, digest);
-const engine = new PGLiteEngine();
-await engine.connect({ database_path: join(root, 'database') });
+const databaseUrl = process.env.CODEX_ACTION_CRASH_DATABASE_URL;
+const engine = databaseUrl ? new PostgresEngine() : new PGLiteEngine();
+if (databaseUrl) {
+  await (engine as PostgresEngine).connect({ database_url: databaseUrl, poolSize: 2 });
+} else {
+  await (engine as PGLiteEngine).connect({ database_path: join(root, 'database') });
+}
 const queue = new MinionQueue(engine);
 const handler = makeSubagentHandler({ engine, makeAnthropic: () => { throw new Error('forbidden Anthropic construction'); } });
 try {
