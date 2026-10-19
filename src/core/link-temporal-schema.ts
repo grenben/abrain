@@ -94,6 +94,14 @@ ${rls('link_edge_proposals')}
 CREATE SEQUENCE IF NOT EXISTS graph_generation_seq;
 `;
 
+// v204 must retain the SQL applied before v289 added the proposal snapshot.
+// The migration-record golden pins this exact historical text; fresh schema
+// creation uses LINK_TEMPORAL_SCHEMA_SQL above.
+export const LINK_TEMPORAL_SCHEMA_V204_SQL = LINK_TEMPORAL_SCHEMA_SQL.replace(
+  '  judge_snapshot_hash TEXT,\n',
+  '',
+);
+
 /** Assertion tense on links rows; applied by the migration and mirrored in schema.sql. */
 export const LINK_ASSERTION_TENSE_SQL = `
 ALTER TABLE links ADD COLUMN IF NOT EXISTS assertion_tense TEXT;

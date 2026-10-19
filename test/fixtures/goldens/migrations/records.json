@@ -1,6 +1,6 @@
 {
   "golden": {
-    "count": 283,
+    "count": 285,
     "gaps": [
       17,
       18,
@@ -69,7 +69,7 @@
       "tableRows": "906d2413b13d76a06d5910885e47ed5c544be4ff3a2266e83146715721b24270",
       "verifyProjectionStatistics": "0d231b04ecfbc5a4109d6fca9567bf4e8c9e9db6c3fbbb35212e026579ed6f67"
     },
-    "latest": 288,
+    "latest": 290,
     "records": [
       {
         "handler": {
@@ -4459,6 +4459,32 @@
         "transaction": "absent",
         "verify": "absent",
         "version": 288
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "edge_proposal_snapshot",
+        "sql": {
+          "length": 82,
+          "sha256": "2091c48e8e19eccc651a27873a5f784546b35ab731463e99320ebdb712ec74c6"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 289
+      },
+      {
+        "handler": "absent",
+        "idempotent": true,
+        "name": "codex_eval_input_clock",
+        "sql": {
+          "length": 4664,
+          "sha256": "d7b8c557bbe5ffb6d25c3ebbba906c32eb7b62ed5dbf10fd2c9b935eb30e240f"
+        },
+        "sqlFor": "absent",
+        "transaction": "absent",
+        "verify": "absent",
+        "version": 290
       }
     ],
     "versions": [
@@ -4744,7 +4770,9 @@
       285,
       286,
       287,
-      288
+      288,
+      289,
+      290
     ]
   },
   "normalizer": "migrations-record-v1"
