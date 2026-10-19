@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
 import { MinionWorker } from '../../src/core/minions/worker.ts';
+import { makeEnrichHandler } from '../../src/core/minions/handlers/enrich.ts';
 import { runWithJobSpend, jobSpendAuthorization } from '../../src/core/minions/spend-authorization.ts';
 import type { MinionJob, MinionJobContext } from '../../src/core/minions/types.ts';
 import { chat, configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
@@ -58,8 +59,9 @@ beforeAll(async () => {
   const script = `#!${Bun.which('node')}
 import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1];
-readFileSync(0,'utf8');appendFileSync(${JSON.stringify(capture)},'call\\n');
-const text=JSON.stringify({text:readFileSync(${JSON.stringify(replyPath)},'utf8')});writeFileSync(arg('--output-last-message'),text);
+const input=readFileSync(0,'utf8');appendFileSync(${JSON.stringify(capture)},'call\\n');
+const slug=(input.match(/people\\/enrich-(?:default|other)-worker/)||[])[0]||'';
+const text=JSON.stringify({text:readFileSync(${JSON.stringify(replyPath)},'utf8').replaceAll('{{slug}}',slug)});writeFileSync(arg('--output-last-message'),text);
 for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:10,cached_input_tokens:2,output_tokens:3}}])console.log(JSON.stringify(e));
 `;
   writeFileSync(bin, script, { mode: 0o700 }); writeFileSync(replyPath, 'fixture');
@@ -222,6 +224,52 @@ test('private background source jobs share one durable subscription and paid cap
     for (const child of children) await withCodexSubscription({ engine, runId: child.run_id }, () => call());
     await expect(withCodexSubscription({ engine, runId: children[0]!.run_id }, () => call()))
       .rejects.toMatchObject({ code: 'subscription_exhausted' });
+    expect(count()).toBe(2);
+  } finally {
+    await engine.executeRaw("DELETE FROM sources WHERE id='other'");
+  }
+});
+test('a real worker publishes both source jobs under their shared parent allowance', async () => {
+  await engine.executeRaw("INSERT INTO sources (id, name) VALUES ('other', 'Other') ON CONFLICT (id) DO NOTHING");
+  const sources = [
+    { id: 'default', slug: 'people/enrich-default-worker' },
+    { id: 'other', slug: 'people/enrich-other-worker' },
+  ];
+  try {
+    for (const source of sources) {
+      await engine.putPage(source.slug, { type: 'person' as never, title: source.slug,
+        compiled_truth: 'Stub page.', timeline: '', frontmatter: {} }, { sourceId: source.id });
+      await engine.executeRaw(`INSERT INTO facts(source_id,entity_slug,fact,source,valid_from)
+        VALUES($1,$2,'This person led a synthetic launch.','test',now())`, [source.id, source.slug]);
+    }
+    writeFileSync(replyPath, '## Overview\nThis person led a synthetic launch. [Source: {{slug}}]');
+    const flags = { maxAttempts: '2', maxTurns: '2', deadline: grant().deadline.toISOString(), requestId: randomUUID() };
+    const spend = jobSpendAuthorization({ consented_effects: ['paid'], cap_usd: 0.02, cap_source: 'user', via: 'yes' },
+      { command: 'enrich', of: 2 });
+    const { jobs } = await queuePrivateEnrich(engine, flags, { sourceIds: sources.map(source => source.id),
+      params: { model: 'codex-cli:gpt-test', limit: 1, minContextChars: 20 }, auxiliaryMaxUsd: 0.02 },
+    sourceId => ({ sourceId, model: 'codex-cli:gpt-test', limit: 1, minContextChars: 20 }),
+    sourceId => `test-worker-enrich:${sourceId}`, spend);
+    const worker = new MinionWorker(engine, { concurrency: 1, pollInterval: 25, healthCheckInterval: 0, maxRssMb: 0 });
+    worker.register('enrich', makeEnrichHandler(engine));
+    const running = worker.start();
+    try {
+      const deadline = Date.now() + 12_000;
+      let states = await Promise.all(jobs.map(job => queue.getJob(job.id)));
+      while (Date.now() < deadline && states.some(job => job?.status !== 'completed' && job?.status !== 'dead')) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        states = await Promise.all(jobs.map(job => queue.getJob(job.id)));
+      }
+      expect(states.map(job => job?.status)).toEqual(['completed', 'completed']);
+      expect(states.map(job => (job?.result as { pages_enriched?: number } | undefined)?.pages_enriched)).toEqual([1, 1]);
+    } finally { worker.stop(); await running; }
+    for (const source of sources) {
+      expect((await engine.readPageSnapshot(source.slug, { sourceId: source.id }))?.page.compiled_truth)
+        .toContain(`[Source: ${source.slug}]`);
+    }
+    const [parent] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+      "SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-enrich-batch:%'");
+    expect(parent).toMatchObject({ attempts: 2, accepted_turns: 2 });
     expect(count()).toBe(2);
   } finally {
     await engine.executeRaw("DELETE FROM sources WHERE id='other'");
