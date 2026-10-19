@@ -35,3 +35,15 @@ describe('parseFlags budgetUsdExplicit', () => {
     expect(f.budgetUsdExplicit).toBe(true);
   });
 });
+
+describe('private Codex allowance flags', () => {
+  test('parses a separate subscription allowance and auxiliary USD cap', () => {
+    expect(parseFlags(['run', '--query', 'Acme revenue', '--codex-max-attempts', '3',
+      '--codex-max-turns', '2', '--codex-deadline', '2026-10-20T10:00:00Z', '--max-usd', '1']).codex)
+      .toEqual({ maxAttempts: '3', maxTurns: '2', deadline: '2026-10-20T10:00:00Z', maxUsd: '1' });
+  });
+  test('rejects duplicate allowances and read-only subcommand allowances', () => {
+    expect(() => parseFlags(['--codex-max-turns', '2', '--codex-max-turns', '3'])).toThrow();
+    expect(() => parseFlags(['trend', '--codex-max-turns', '2'])).toThrow();
+  });
+});

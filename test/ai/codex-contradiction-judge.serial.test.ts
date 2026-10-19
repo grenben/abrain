@@ -1,15 +1,18 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
 import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
+import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { judgeContradiction, type JudgeInput } from '../../src/core/eval-contradictions/judge.ts';
 import { runContradictionProbe } from '../../src/core/eval-contradictions/runner.ts';
+import { withEvalContradictionSubscription } from '../../src/commands/eval-contradictions-subscription.ts';
+import { runEvalSuspectedContradictions } from '../../src/commands/eval-suspected-contradictions.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'codex-contradiction-judge-'));
 const bin = join(root, 'fixture.mjs'), capture = join(root, 'calls.jsonl'), control = join(root, 'response.json');
@@ -127,4 +130,48 @@ test('an admitted private probe cannot substitute a judge or search function', a
       .rejects.toMatchObject({ reason: 'invalid_input' });
   });
   expect(calls()).toHaveLength(before);
+});
+
+test('local eval allowance is durable, reusable only for the same request, and carries the judge', async () => {
+  const flags = { maxAttempts: '2', maxTurns: '2', deadline: new Date(Date.now() + 600_000).toISOString(),
+    requestId: randomUUID() };
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2, sampling: 'deterministic' as const,
+    budgetUsd: 1, maxPairChars: 1500, noCache: true, refreshCache: false };
+  let runId = '';
+  await withEvalContradictionSubscription(engine, flags, identity, async () => {
+    runId = codexSubscriptionContext()!.runId;
+    expect((await judgeContradiction(input)).verdict.verdict).toBe('contradiction');
+    const configFile = join(root, '.gbrain', 'config.json');
+    const original = readFileSync(configFile, 'utf8');
+    try {
+      writeFileSync(configFile, original.replace('codex-cli:gpt-test', 'codex-cli:gpt-other'));
+      await expect(codexSubscriptionContext()!.checkAuthority!()).rejects
+        .toMatchObject({ code: 'subscription_identity_conflict' });
+    } finally { writeFileSync(configFile, original); }
+  });
+  expect(Number((await accounting(runId)).accepted_turns)).toBe(1);
+  await withEvalContradictionSubscription(engine, flags, identity, async () => {
+    expect(codexSubscriptionContext()!.runId).toBe(runId);
+  });
+  await expect(withEvalContradictionSubscription(engine, flags,
+    { ...identity, queries: ['changed query'] }, async () => {}))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+});
+
+test('the CLI refuses a private probe without allowance before retrieval', async () => {
+  const before = calls().length;
+  await expect(runEvalSuspectedContradictions(engine, ['run', '--query', input.query, '--judge', input.model]))
+    .rejects.toMatchObject({ code: 'subscription_required' });
+  expect(calls()).toHaveLength(before);
+});
+
+test('an enclosing allowance must exist before the CLI can sweep or run', async () => {
+  let started = false;
+  await withCodexSubscription({ engine, runId: 'missing-cli-allowance' }, async () => {
+    await expect(withEvalContradictionSubscription(engine, {}, {
+      queries: [input.query], judgeModel: input.model, topK: 2, sampling: 'deterministic',
+      budgetUsd: 1, maxPairChars: 1500, noCache: true, refreshCache: true,
+    }, async () => { started = true; })).rejects.toMatchObject({ code: 'subscription_required' });
+  });
+  expect(started).toBe(false);
 });
