@@ -36,7 +36,8 @@ export const PRIVATE_GENERATION_ROLES = [
   ['longmemeval-synopsis','models.contextual_synopsis','utility','../eval/longmemeval/codex-synopsis-tier.ts'],
   ['longmemeval-extractor',undefined,'utility','../eval/longmemeval/extract.ts'],
   ['longmemeval-judge','models.eval.longmemeval_judge','deep','../eval/shared/judge-runner.ts'],
-  ['contradiction-probe','models.eval.contradictions_judge','utility','cycle/edge-contradictions.ts'],
+  ['contradiction-probe','models.eval.contradictions_judge','utility','eval-contradictions/judge.ts'],
+  ['edge-contradictions','models.dream.edge_contradictions','utility','cycle/edge-contradictions.ts'],
   ['fence-repair','models.fence_repair','deep','fence-repair/'],
   ['iterative-minions','models.subagent','subagent','minions/handlers/subagent.ts'],
 ] as const;
