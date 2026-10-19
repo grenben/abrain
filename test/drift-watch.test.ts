@@ -110,6 +110,29 @@ describe('filesDriftedSince + watchedFilesDrifted probe failure is distinguishab
     expect(watchedFilesDrifted(repo)).toEqual(['src/core/search/hybrid.ts']);
   });
 
+  test('a scoped Git diff keeps directory, exact-file and commit-range watch semantics', () => {
+    const repo = scratchRepoWithStagedSearchFile();
+    mkdirSync(join(repo, 'src/core/searches'), { recursive: true });
+    mkdirSync(join(repo, 'docs'), { recursive: true });
+    writeFileSync(join(repo, 'src/core/searches/sibling.ts'), 'export {};\n');
+    writeFileSync(join(repo, 'src/core/embedding.test.ts'), 'export {};\n');
+    writeFileSync(join(repo, 'docs/unrelated.md'), 'unrelated\n');
+    execSync('git add -A', { cwd: repo, stdio: 'pipe' });
+    expect(filesDriftedSince(repo, undefined, 0, 5000, RETRIEVAL_WATCH_PATTERNS)).toEqual(['src/core/search/hybrid.ts']);
+    expect(watchedFilesDrifted(repo)).toEqual(['src/core/search/hybrid.ts']);
+    execSync('git -c user.email=t@example.com -c user.name=t -c commit.gpgsign=false commit -q -m watched', { cwd: repo, stdio: 'pipe' });
+    expect(watchedFilesDrifted(repo, 'HEAD~1')).toEqual(['src/core/search/hybrid.ts']);
+  });
+
+  test('custom file patterns are literal Git pathspecs', () => {
+    const repo = scratchRepoWithStagedSearchFile();
+    mkdirSync(join(repo, 'docs'), { recursive: true });
+    writeFileSync(join(repo, 'docs/[review].md'), 'literal\n');
+    writeFileSync(join(repo, 'docs/r.md'), 'glob lookalike\n');
+    execSync('git add -A', { cwd: repo, stdio: 'pipe' });
+    expect(watchedFilesDrifted(repo, undefined, ['docs/[review].md'])).toEqual(['docs/[review].md']);
+  });
+
   test('watchedFilesDrifted filters through the same matcher', () => {
     // Smoke test: should not throw on this repo. Could be empty.
     const out = watchedFilesDrifted(process.cwd());
@@ -141,6 +164,13 @@ describe('filesDriftedSince refreshes a racy index after a slow diff', () => {
     const repo = committedRepoWithRacyIndex();
     const before = indexMtime(repo);
     expect(filesDriftedSince(repo, undefined, 60_000)).toEqual([]);
+    expect(indexMtime(repo)).toBe(before);
+  });
+
+  test('a successful scoped diff does not refresh unrelated index entries', () => {
+    const repo = committedRepoWithRacyIndex();
+    const before = indexMtime(repo);
+    expect(filesDriftedSince(repo, undefined, 0, 5000, RETRIEVAL_WATCH_PATTERNS)).toEqual([]);
     expect(indexMtime(repo)).toBe(before);
   });
 
