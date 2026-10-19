@@ -9,6 +9,7 @@ The commands use the existing connection bootstrap with startup migrations disab
 
 ```sh
 gbrain private-codex jobs inventory --json
+gbrain private-codex jobs workers --json
 gbrain private-codex jobs preview --ids 12,34 --json
 ```
 
@@ -22,6 +23,17 @@ time: stop producers and workers, rerun it, then use the IDs for explicit
 parking previews. The output keeps `workers: uninspected` and
 `cutover_ready: false` until worker processes and their launch configuration
 are separately qualified.
+
+`jobs workers` is an engine-free, read-only Linux process scan in the current
+PID namespace. It reports candidate GBrain worker/supervisor/child PIDs,
+kernel start ticks, and hashes of launcher arguments, executable path and
+selected noncredential environment values. It never prints argument or
+environment values. Unreadable process metadata is counted as incomplete;
+the command does not read or prune the best-effort worker registry. A process
+can start immediately after a scan, and other hosts or PID namespaces remain
+outside its view, so `cross_host_complete` and `cutover_ready` are always false.
+Use this as local review evidence, then stop and verify all worker hosts under
+a controlled cutover before trusting the queue snapshot.
 
 Preview reads only an explicit bounded selection (at most 128 IDs) and immediate
 dependencies. Output includes hashes, status, recognized protocol and disposition;
