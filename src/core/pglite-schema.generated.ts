@@ -2236,6 +2236,7 @@ CREATE TABLE IF NOT EXISTS link_edge_proposals (
   detail             TEXT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  judge_snapshot_hash TEXT,
   UNIQUE (from_page_id, a_to_page_id, b_to_page_id, link_type, evidence_hash)
 );
 CREATE INDEX IF NOT EXISTS link_edge_proposals_status_idx ON link_edge_proposals (source_id, status, created_at);

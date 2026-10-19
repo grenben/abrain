@@ -2285,7 +2285,8 @@
           "15 generated_line text/text NULL",
           "16 detail text/text NULL",
           "17 created_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
-          "18 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()"
+          "18 updated_at timestamp with time zone/timestamptz NOT NULL DEFAULT now()",
+          "19 judge_snapshot_hash text/text NULL"
         ],
         "flags": "relkind=r rls=true force_rls=false"
       },

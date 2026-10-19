@@ -289,6 +289,7 @@ import { v285 } from './v285-codex-skillopt-batches.ts';
 import { v286 } from './v286-codex-skillopt-cycles.ts';
 import { v287 } from './v287-codex-skillopt-batch-submissions.ts';
 import { v288 } from './v288-codex-bootstrap-jobs.ts';
+import { v289 } from './v289-edge-proposal-snapshot.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -576,4 +577,5 @@ export const MIGRATIONS: Migration[] = [
   v286,
   v287,
   v288,
+  v289,
 ];

@@ -337,6 +337,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
         WHERE from_page_id = $1 AND link_type = $2 AND evidence_hash = ANY($3::text[])`,
       [g.fromId, g.linkType, pairs.map(([a, b]) => pairHash(a, b))])) {
       const key = `${r.a}:${r.b}`;
+      if (r.status === 'stale') continue; // Re-judge after a refused acceptance, even when the evidence hash is unchanged.
       const attempts = r.status === 'error' ? judgeAttempts(r.detail) : 0;
       if (r.status !== 'error' || r.recent || attempts >= JUDGE_MAX_ATTEMPTS) known.add(key);
       else priorAttempts.set(key, attempts);
@@ -500,6 +501,47 @@ function judgeFailureDetail(e: unknown): string {
   return `${name}: ${message.length > 200 ? `${message.slice(0, 199)}…` : message}`;
 }
 
+interface EdgeSnapshotMember {
+  to_page_id: number; evidence_hash: string; valid_ranges: string; last_start: unknown; recorded_at: unknown;
+  subject_title: string | null; target_title: string | null; target_slug: string; contexts: string[];
+}
+
+/** Re-read exactly the two live relationships and the context snippets used by the judge. */
+async function readEdgeSnapshot(
+  tx: BrainEngine, sourceId: string, fromId: number, linkType: string, targets: [number, number], subjectSlug: string,
+): Promise<EdgeSnapshotMember[] | null> {
+  const rows = await tx.executeRaw<Omit<EdgeSnapshotMember, 'contexts'>>(
+    `SELECT lr.to_page_id, lr.evidence_hash, lr.valid_ranges::text AS valid_ranges,
+            lr.last_start, lr.recorded_at, f.title AS subject_title, t.title AS target_title, t.slug AS target_slug
+       FROM link_relationships lr
+       JOIN sources s ON s.id=lr.source_id AND s.archived=false AND s.archived_at IS NULL
+       JOIN pages f ON f.id=lr.from_page_id AND f.deleted_at IS NULL
+       JOIN pages t ON t.id=lr.to_page_id AND t.deleted_at IS NULL
+      WHERE lr.source_id=$1 AND lr.from_page_id=$2 AND lr.link_type=$3
+        AND lr.to_page_id=ANY($4::bigint[]) AND lr.scope='all' AND lr.semantics='state'
+        AND lr.valid_ranges @> $5::date AND f.slug=$6
+      FOR SHARE OF lr, s, f, t`,
+    [sourceId, fromId, linkType, targets, utcToday(), subjectSlug]);
+  if (rows.length !== 2 || new Set(rows.map(row => Number(row.to_page_id))).size !== 2) return null;
+  const members: EdgeSnapshotMember[] = [];
+  for (const row of rows) {
+    const contextRows = await tx.executeRaw<{ context: string }>(
+      `SELECT context FROM links l WHERE from_page_id=$1 AND to_page_id=$2
+        AND link_type=$3 AND context<>'' ORDER BY context FOR SHARE OF l`,
+      [fromId, row.to_page_id, linkType]);
+    members.push({ ...row, contexts: [...new Set(contextRows.map(item => item.context))].slice(0, 3) });
+  }
+  return members.sort((a, b) => Number(a.to_page_id) - Number(b.to_page_id));
+}
+
+function edgeSnapshotHash(sourceId: string, fromId: number, linkType: string, subjectSlug: string, members: EdgeSnapshotMember[]): string {
+  const normalized = members.map(row => ({ to: Number(row.to_page_id), evidence: row.evidence_hash,
+    ranges: row.valid_ranges, start: dateKey(row.last_start), recorded: new Date(row.recorded_at as string).toISOString(),
+    subject: row.subject_title ?? subjectSlug, target: row.target_slug, title: row.target_title ?? row.target_slug,
+    contexts: row.contexts }));
+  return createHash('sha256').update(JSON.stringify({ sourceId, fromId, linkType, subjectSlug, members: normalized })).digest('hex');
+}
+
 async function recordProposal(
   engine: BrainEngine, g: SubjectGroup, a: CandidateRow, b: CandidateRow, hash: string,
   p: { status: string; model: string; confidence?: number | null; endingTo?: number; closeDate?: string; bornClosed?: boolean; line?: string; detail?: string },
@@ -508,20 +550,9 @@ async function recordProposal(
     // The judge saw a snapshot. Lock both live relationships and their pages
     // before publishing anything inferred from it. A re-derivation, deletion,
     // title change or changed temporal tie-breaker makes the verdict stale.
-    const current = await tx.executeRaw<{
-      to_page_id: number; evidence_hash: string; valid_ranges: string; last_start: unknown;
-      recorded_at: unknown; subject_title: string | null; target_title: string | null; target_slug: string;
-    }>(`SELECT lr.to_page_id, lr.evidence_hash, lr.valid_ranges::text AS valid_ranges,
-              lr.last_start, lr.recorded_at, f.title AS subject_title, t.title AS target_title, t.slug AS target_slug
-         FROM link_relationships lr
-         JOIN sources s ON s.id=lr.source_id AND s.archived=false AND s.archived_at IS NULL
-         JOIN pages f ON f.id=lr.from_page_id AND f.deleted_at IS NULL
-         JOIN pages t ON t.id=lr.to_page_id AND t.deleted_at IS NULL
-        WHERE lr.source_id=$1 AND lr.from_page_id=$2 AND lr.link_type=$3
-          AND lr.to_page_id=ANY($4::bigint[]) AND lr.scope='all' AND lr.semantics='state'
-          AND lr.valid_ranges @> $5::date AND f.slug=$6
-        FOR SHARE OF lr, s, f, t`,
-      [g.sourceId, g.fromId, g.linkType, [Number(a.to_page_id), Number(b.to_page_id)], utcToday(), g.slug]);
+    const current = await readEdgeSnapshot(tx, g.sourceId, g.fromId, g.linkType,
+      [Number(a.to_page_id), Number(b.to_page_id)], g.slug);
+    if (!current) return null;
     const byTarget = new Map(current.map(row => [Number(row.to_page_id), row]));
     const instant = (value: unknown) => value == null ? null : new Date(value as string).getTime();
     const matches = (old: CandidateRow) => {
@@ -531,25 +562,21 @@ async function recordProposal(
         (row.subject_title ?? g.slug) === g.title && row.target_slug === old.target_slug &&
         (row.target_title ?? old.target_slug) === (old.target_title ?? old.target_slug);
     };
-    if (current.length !== 2 || !matches(a) || !matches(b)) return null;
-    for (const old of [a, b]) if (old.judgeContexts) {
-      const contexts = await tx.executeRaw<{ context: string }>(
-        `SELECT context FROM links l WHERE from_page_id=$1 AND to_page_id=$2
-          AND link_type=$3 AND context<>'' ORDER BY context FOR SHARE OF l`,
-        [old.from_page_id, old.to_page_id, old.link_type]);
-      if (JSON.stringify([...new Set(contexts.map(row => row.context))].slice(0, 3)) !== JSON.stringify(old.judgeContexts)) return null;
-    }
+    if (!matches(a) || !matches(b) || [a, b].some(old => old.judgeContexts &&
+      JSON.stringify(byTarget.get(Number(old.to_page_id))!.contexts) !== JSON.stringify(old.judgeContexts))) return null;
+    const snapshotHash = edgeSnapshotHash(g.sourceId, g.fromId, g.linkType, g.slug, current);
     const rows = await tx.executeRaw<{ id: number }>(
-    `INSERT INTO link_edge_proposals (source_id, from_page_id, a_to_page_id, b_to_page_id, link_type, evidence_hash, status,
+    `INSERT INTO link_edge_proposals (source_id, from_page_id, a_to_page_id, b_to_page_id, link_type, evidence_hash, judge_snapshot_hash, status,
        ending_to_page_id, close_date, born_closed, model, confidence, generated_line, detail)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, $11, $12, $13, $14)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13, $14, $15)
      ON CONFLICT (from_page_id, a_to_page_id, b_to_page_id, link_type, evidence_hash) DO UPDATE SET
-       status = EXCLUDED.status, ending_to_page_id = EXCLUDED.ending_to_page_id, close_date = EXCLUDED.close_date,
+       status = EXCLUDED.status, judge_snapshot_hash = EXCLUDED.judge_snapshot_hash,
+       ending_to_page_id = EXCLUDED.ending_to_page_id, close_date = EXCLUDED.close_date,
        born_closed = EXCLUDED.born_closed, model = EXCLUDED.model, confidence = EXCLUDED.confidence,
        generated_line = EXCLUDED.generated_line, detail = EXCLUDED.detail, updated_at = now()
-     WHERE link_edge_proposals.status = 'error'
+     WHERE link_edge_proposals.status IN ('error','stale')
      RETURNING id`,
-    [g.sourceId, g.fromId, Number(a.to_page_id), Number(b.to_page_id), g.linkType, hash, p.status,
+    [g.sourceId, g.fromId, Number(a.to_page_id), Number(b.to_page_id), g.linkType, hash, snapshotHash, p.status,
       p.endingTo ?? null, p.closeDate ?? null, p.bornClosed ?? false, p.model, p.confidence ?? null, p.line ?? null, p.detail ?? null]);
     return rows[0] ? Number(rows[0].id) : null;
   });
@@ -569,12 +596,14 @@ export type ApplyOutcome = { status: 'applied' | 'stale' | 'not_found' | 'refuse
 
 interface ProposalRow {
   id: number; source_id: string; status: string; from_page_id: number; ending_to_page_id: number | null;
+  a_to_page_id: number; b_to_page_id: number; judge_snapshot_hash: string | null;
   link_type: string; close_date: unknown; generated_line: string | null; subject_slug: string; ending_slug: string | null;
 }
 
 async function loadProposal(engine: BrainEngine, id: number): Promise<ProposalRow | null> {
   const [row] = await engine.executeRaw<ProposalRow>(
-    `SELECT p.id, p.source_id, p.status, p.from_page_id, p.ending_to_page_id, p.link_type, p.close_date::text AS close_date,
+    `SELECT p.id, p.source_id, p.status, p.from_page_id, p.a_to_page_id, p.b_to_page_id, p.judge_snapshot_hash,
+            p.ending_to_page_id, p.link_type, p.close_date::text AS close_date,
             p.generated_line, f.slug AS subject_slug, t.slug AS ending_slug
        FROM link_edge_proposals p JOIN pages f ON f.id = p.from_page_id LEFT JOIN pages t ON t.id = p.ending_to_page_id
       WHERE p.id = $1`, [id]);
@@ -602,19 +631,25 @@ export async function applyEdgeProposal(engine: BrainEngine, id: number): Promis
   if (!p) return { status: 'not_found' };
   if (p.status === 'applied') return { status: 'applied', reason: 'already applied' };
   if (p.status !== 'proposed') return { status: 'refused', reason: `proposal is ${p.status}` };
-  if (!p.ending_slug || !p.generated_line) return { status: 'refused', reason: 'proposal has no closure to apply' };
-  const [current] = await engine.executeRaw<{ a: string; b: string }>(
-    `SELECT la.evidence_hash AS a, lb.evidence_hash AS b FROM link_edge_proposals pr
-       JOIN link_relationships la ON la.from_page_id = pr.from_page_id AND la.to_page_id = pr.a_to_page_id AND la.link_type = pr.link_type AND la.scope = 'all'
-       JOIN link_relationships lb ON lb.from_page_id = pr.from_page_id AND lb.to_page_id = pr.b_to_page_id AND lb.link_type = pr.link_type AND lb.scope = 'all'
-      WHERE pr.id = $1`, [id]);
-  const [stored] = await engine.executeRaw<{ evidence_hash: string }>(`SELECT evidence_hash FROM link_edge_proposals WHERE id = $1`, [id]);
-  const hashNow = current ? createHash('sha256').update([current.a, current.b].sort().join(':')).digest('hex').slice(0, 32) : null;
-  if (hashNow !== stored?.evidence_hash) {
-    await engine.executeRaw(`UPDATE link_edge_proposals SET status = 'stale', updated_at = now() WHERE id = $1`, [id]);
-    return { status: 'stale', reason: 'the relationships changed since the judgment; the next dream cycle re-judges them' };
+  if (!p.ending_slug || !p.generated_line || !dateKey(p.close_date)) return { status: 'refused', reason: 'proposal has no closure to apply' };
+  const expectedRevision = await engine.transaction(async tx => {
+    const members = await readEdgeSnapshot(tx, p.source_id, Number(p.from_page_id), p.link_type,
+      [Number(p.a_to_page_id), Number(p.b_to_page_id)], p.subject_slug);
+    if (!members || !p.judge_snapshot_hash ||
+        edgeSnapshotHash(p.source_id, Number(p.from_page_id), p.link_type, p.subject_slug, members) !== p.judge_snapshot_hash) {
+      await tx.executeRaw(`UPDATE link_edge_proposals SET status='stale', updated_at=now() WHERE id=$1 AND status='proposed'`, [id]);
+      return null;
+    }
+    return (await tx.readPageSnapshot(p.subject_slug, { sourceId: p.source_id }))?.revision ?? null;
+  });
+  if (!expectedRevision) return { status: 'stale', reason: 'the proposal evidence or source changed; the next dream cycle re-judges it' };
+  try {
+    await appendTimelineLine(engine, p.source_id, p.subject_slug, String(dateKey(p.close_date)), p.generated_line, expectedRevision);
+  } catch (error) {
+    if ((error as { code?: string })?.code !== 'revision_conflict') throw error;
+    await engine.executeRaw(`UPDATE link_edge_proposals SET status='stale', updated_at=now() WHERE id=$1 AND status='proposed'`, [id]);
+    return { status: 'stale', reason: 'the subject page changed during acceptance; the next dream cycle re-judges it' };
   }
-  await appendTimelineLine(engine, p.source_id, p.subject_slug, String(dateKey(p.close_date)), p.generated_line);
   await rederivePage(engine, p.source_id, p.subject_slug);
   const landed = await closureLanded(engine, p);
   await engine.executeRaw(`UPDATE link_edge_proposals SET status = $2, updated_at = now() WHERE id = $1`, [id, landed ? 'applied' : 'proposed']);
@@ -657,10 +692,11 @@ async function trustedCtx(engine: BrainEngine, sourceId: string) {
   } as unknown as import('../operations.ts').OperationContext;
 }
 
-async function appendTimelineLine(engine: BrainEngine, sourceId: string, slug: string, date: string, summary: string): Promise<void> {
+async function appendTimelineLine(engine: BrainEngine, sourceId: string, slug: string, date: string, summary: string, expectedRevision?: string): Promise<void> {
   const { operations } = await import('../operations.ts');
   const op = operations.find(o => o.name === 'add_timeline_entry')!;
-  await op.handler(await trustedCtx(engine, sourceId), { slug, date, summary, source: DREAM_TIMELINE_SOURCE });
+  await op.handler(await trustedCtx(engine, sourceId), { slug, date, summary, source: DREAM_TIMELINE_SOURCE,
+    ...(expectedRevision ? { expected_revision: expectedRevision } : {}) });
 }
 
 async function removeTimelineLine(engine: BrainEngine, sourceId: string, slug: string, date: string, summary: string): Promise<boolean> {

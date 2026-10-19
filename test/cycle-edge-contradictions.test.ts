@@ -66,6 +66,37 @@ describe('edge_contradictions', () => {
     expect(await liveWorksAt()).toEqual(['companies/acme-example', 'companies/widget-co']);
   });
 
+  test('manual accept refuses changed context and re-judges the stale proposal', async () => {
+    await engine.setConfig('dream.edge_contradictions.mode', 'propose');
+    await seed(DATED);
+    await runPhaseEdgeContradictions(engine, { judge: conflict });
+    const [first] = await proposals();
+    await engine.executeRaw(`UPDATE links SET context='changed after proposal'
+      WHERE from_page_id=(SELECT id FROM pages WHERE slug='people/alice-example')
+        AND to_page_id=(SELECT id FROM pages WHERE slug='companies/acme-example')`);
+    expect((await applyEdgeProposal(engine, first.id)).status).toBe('stale');
+    expect((await proposals()).map(p => p.status)).toEqual(['stale']);
+    expect(await liveWorksAt()).toEqual(['companies/acme-example', 'companies/widget-co']);
+    const rerun = await runPhaseEdgeContradictions(engine, { judge: conflict });
+    expect(rerun.totals).toMatchObject({ judged: 1, proposed: 1 });
+    expect((await proposals()).map(p => p.status)).toEqual(['proposed']);
+    expect((await applyEdgeProposal(engine, first.id)).status).toBe('applied');
+  });
+
+  test('manual accept refuses an archived source even when pair evidence hashes match', async () => {
+    await engine.setConfig('dream.edge_contradictions.mode', 'propose');
+    await seed(DATED);
+    await runPhaseEdgeContradictions(engine, { judge: conflict });
+    const [first] = await proposals();
+    try {
+      await engine.executeRaw(`UPDATE sources SET archived=true, archived_at=now() WHERE id='default'`);
+      expect((await applyEdgeProposal(engine, first.id)).status).toBe('stale');
+      expect(await liveWorksAt()).toEqual(['companies/acme-example', 'companies/widget-co']);
+    } finally {
+      await engine.executeRaw(`UPDATE sources SET archived=false, archived_at=NULL WHERE id='default'`);
+    }
+  });
+
   test('apply mode applies; a hand-deleted closure line becomes reverted_by_user and is never re-proposed', async () => {
     await seed(DATED);
     await engine.setConfig('dream.edge_contradictions.mode', 'apply');

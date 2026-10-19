@@ -110,6 +110,17 @@ test('private PostgreSQL edge lifecycle: propose, accept, undo, explicit apply a
   const firstProposal = await proposal(first.subject);
   expect(firstProposal).toMatchObject({ status: 'proposed', model: 'codex-cli:gpt-test' });
   expect(await live(first.subject)).toEqual([first.a, first.b]);
+  await db.executeRaw(`UPDATE links SET context='changed after PostgreSQL proposal'
+    WHERE from_page_id=(SELECT id FROM pages WHERE slug=$1)
+      AND to_page_id=(SELECT id FROM pages WHERE slug=$2)`, [first.subject, first.a]);
+  expect((await applyEdgeProposal(db, Number(firstProposal!.id))).status).toBe('stale');
+  expect(await live(first.subject)).toEqual([first.a, first.b]);
+  await allowance(async runId => {
+    const result = await runPhaseEdgeContradictions(db, { auditPath });
+    expect(result.totals?.proposed).toBeGreaterThanOrEqual(1);
+    expect(Number((await accounting(runId)).accepted_turns)).toBeGreaterThanOrEqual(1);
+  });
+  expect((await proposal(first.subject))?.status).toBe('proposed');
   expect((await applyEdgeProposal(db, Number(firstProposal!.id))).status).toBe('applied');
   expect(await live(first.subject)).toEqual([first.b]);
   expect((await undoEdgeProposal(db, Number(firstProposal!.id))).status).toBe('undone');
