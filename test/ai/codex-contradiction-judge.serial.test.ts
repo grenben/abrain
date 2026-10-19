@@ -3,7 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
+import { configureGateway, resetGateway, embedQuery, rerank, __setEmbedTransportForTests,
+  __setRerankTransportForTests } from '../../src/core/ai/gateway.ts';
 import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
@@ -208,6 +209,55 @@ test('local eval allowance is durable, reusable only for the same request, and c
   await expect(withEvalContradictionSubscription(engine, flags,
     { ...identity, queries: ['changed query'] }, async () => {}))
     .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+});
+
+test('private eval auxiliary embed and rerank need an independent durable USD cap', async () => {
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  const flags = (maxUsd?: string) => ({ maxAttempts: '2', maxTurns: '2',
+    deadline: new Date(Date.now() + 600_000).toISOString(), requestId: randomUUID(), maxUsd });
+  let embedCalls = 0, rerankCalls = 0;
+  configureGateway({ embedding_model: 'openai:text-embedding-3-small', embedding_dimensions: 1536,
+    reranker_model: 'voyage:rerank-2.5', env: { OPENAI_API_KEY: 'sk-fake', VOYAGE_API_KEY: 'sk-fake' } });
+  __setEmbedTransportForTests((async () => {
+    embedCalls++;
+    return { embeddings: [Array.from({ length: 1536 }, (_, i) => i === 0 ? 1 : 0)], usage: { tokens: 3 } };
+  }) as never);
+  __setRerankTransportForTests(async () => {
+    rerankCalls++;
+    return new Response(JSON.stringify({ results: [{ index: 0, relevance_score: 0.9 }] }), { status: 200 });
+  });
+  try {
+    await expect(withEvalContradictionSubscription(engine, flags(), identity, () => embedQuery('uncapped unique query')))
+      .rejects.toMatchObject({ code: 'subscription_auxiliary_budget_required' });
+    expect(embedCalls).toBe(0);
+    await expect(withEvalContradictionSubscription(engine, flags(), identity, async () => {
+      try { await embedQuery('uncapped caught query'); } catch { /* retrieval fallback cannot erase admission refusal */ }
+    })).rejects.toMatchObject({ code: 'subscription_auxiliary_budget_required' });
+    expect(embedCalls).toBe(0);
+    await expect(withEvalContradictionSubscription(engine, flags(), identity, () =>
+      rerank({ query: 'uncapped query', documents: ['one document'] })))
+      .rejects.toMatchObject({ code: 'subscription_auxiliary_budget_required' });
+    expect(rerankCalls).toBe(0);
+
+    let cappedRunId = '';
+    await withEvalContradictionSubscription(engine, flags('10'), identity, async () => {
+      cappedRunId = codexSubscriptionContext()!.runId;
+      expect((await embedQuery('capped unique query')).length).toBe(1536);
+      expect(await rerank({ query: 'capped query', documents: ['one document'] })).toHaveLength(1);
+    });
+    expect(embedCalls).toBe(1);
+    expect(rerankCalls).toBe(1);
+    const reservations = await engine.executeRaw<{ status: string; usage_unknown_reason: string | null }>(
+      `SELECT status,usage_unknown_reason FROM mcp_spend_reservations WHERE budget_key=$1 ORDER BY created_at`, [`group:${cappedRunId}`]);
+    expect(reservations).toHaveLength(2);
+    expect(reservations.map(row => row.status).sort()).toEqual(['pending', 'settled']);
+    expect(reservations.find(row => row.status === 'pending')?.usage_unknown_reason).toBe('provider_usage_unknown');
+  } finally {
+    __setEmbedTransportForTests(null); __setRerankTransportForTests(null);
+    configureGateway({ env: {} });
+  }
 });
 
 test('the CLI refuses a private probe without allowance before retrieval', async () => {
