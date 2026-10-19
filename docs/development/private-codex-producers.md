@@ -65,9 +65,12 @@ calls. In private mode the reader, extractor and three judge slots resolve to th
 configured Codex model; judge proposals run sequentially and are validated before
 acceptance. A one-model judge panel is recorded as `panel_collapsed` and
 `inconclusive`, even when the batch's own score is a pass. This is diagnostic
-coverage, not an independent cross-model quality verdict. The combined native
-LongMemEval reader/embedding path and full daemon entrypoint still need an
-end-to-end fixture before private activation.
+coverage, not an independent cross-model quality verdict. The real daemon step
+has a ten-question end-to-end fixture on PGLite and PostgreSQL: it imports the
+embedded LongMemEval data, uses a metered embedding transport, runs native
+reader/extractor proposals, scores the batch, and records the collapsed panel.
+That fixture uses a synthetic Codex executable and embedding transport; live
+provider/runtime qualification remains separate before private activation.
 
 Source-freshness-only `autopilot-cycle` jobs, deterministic `extract_facts` parsing
 and the result aggregator do not need subscription grants or model configuration.

@@ -9,7 +9,7 @@ import { MinionWorker } from '../../src/core/minions/worker.ts';
 import { makeEnrichHandler } from '../../src/core/minions/handlers/enrich.ts';
 import { runWithJobSpend, jobSpendAuthorization } from '../../src/core/minions/spend-authorization.ts';
 import type { MinionJob, MinionJobContext } from '../../src/core/minions/types.ts';
-import { chat, configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
+import { __setEmbedTransportForTests, chat, configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { withAIInvocationGuard, invokeAI } from '../../src/core/ai/invocation-guard.ts';
 import { runJobInChild } from '../../src/core/minions/child-job-runner.ts';
@@ -33,6 +33,7 @@ import { resolveNightlyProbeSearchConfigSnapshot } from '../../src/core/cycle/ni
 import { runCrossModalBatchForProbe } from '../../src/core/cycle/nightly-probe-adapters.ts';
 import { runNightlyQualityProbe } from '../../src/core/cycle/nightly-quality-probe.ts';
 import { readRecentQualityProbeEvents } from '../../src/core/audit-quality-probe.ts';
+import { runNightlyQualityProbeStep } from '../../src/commands/autopilot-probes.ts';
 
 export function codexJobContract(createEngine: () => Promise<{ engine: BrainEngine; cleanup?: () => Promise<void> }>) {
 const root = mkdtempSync(join(tmpdir(), 'codex-jobs-'));
@@ -68,7 +69,21 @@ const args=process.argv.slice(2),arg=n=>args[args.indexOf(n)+1];
 const input=readFileSync(0,'utf8');appendFileSync(${JSON.stringify(capture)},'call\\n');
 const slug=(input.match(/people\\/enrich-(?:default|other)-worker/)||[])[0]||'';
 const reply=readFileSync(${JSON.stringify(replyPath)},'utf8').replaceAll('{{slug}}',slug);
-const text=reply.startsWith('__RAW_JSON__')?reply.slice('__RAW_JSON__'.length):JSON.stringify({text:reply});writeFileSync(arg('--output-last-message'),text);
+let text=reply.startsWith('__RAW_JSON__')?reply.slice('__RAW_JSON__'.length):JSON.stringify({text:reply});
+if(reply==='__NIGHTLY_SCHEMA__'){
+  const schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8'));
+  const fields=schema.properties||{};
+  let value;
+  if(fields.claims)value={evidence_hash:fields.evidence_hash.enum[0],claims:[]};
+  else if(fields.citations){
+    const hit=input.match(/<chat_session id="([^"]+)"[^>]*>\\n([\\s\\S]*?)\\n<\\/chat_session>/);
+    value=hit?{evidence_hash:fields.evidence_hash.enum[0],answer:'widget-co',status:'answered',citations:[{session_id:hit[1],quote:hit[2].trim().slice(0,20)}]}:
+      {evidence_hash:fields.evidence_hash.enum[0],answer:'The information is not available in the retrieved sessions.',status:'abstained',citations:[]};
+  }else if(fields.scores)value={scores:Object.fromEntries(Object.keys(fields.scores.properties).map(k=>[k,{score:8,feedback:'Synthetic score.'}])),overall:8,improvements:Array.from({length:10},(_,i)=>'Improve detail '+i)};
+  else throw Error('unrecognized nightly schema '+Object.keys(fields).join(','));
+  text=JSON.stringify(value);
+}
+writeFileSync(arg('--output-last-message'),text);
 for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:10,cached_input_tokens:2,output_tokens:3}}])console.log(JSON.stringify(e));
 `;
   writeFileSync(bin, script, { mode: 0o700 }); writeFileSync(replyPath, 'fixture');
@@ -78,6 +93,8 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
 });
 beforeEach(async () => {
   await engine.executeRaw('DELETE FROM codex_proposal_cache');
+  await engine.executeRaw('DELETE FROM codex_eval_results');
+  await engine.executeRaw('DELETE FROM codex_eval_runs');
   await engine.executeRaw('DELETE FROM codex_subscription_attempts');
   await engine.executeRaw('DELETE FROM codex_subscription_runs');
   await engine.executeRaw('DELETE FROM minion_jobs');
@@ -421,6 +438,51 @@ test('the scheduled nightly phase records an honest collapsed-panel result under
     if (priorAudit === undefined) delete process.env.GBRAIN_AUDIT_DIR; else process.env.GBRAIN_AUDIT_DIR = priorAudit;
   }
 });
+test('the daemon step runs the native nightly reader, extractor, embedding and judge adapters under one grant', async () => {
+  const limits = { maxAttempts: 100, maxTurns: 100, windowMs: 600_000, auxiliaryMaxUsd: 1 };
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'nightly-quality-probe': limits } } }));
+  writeFileSync(replyPath, '__NIGHTLY_SCHEMA__');
+  const auditDir = mkdtempSync(join(root, 'nightly-native-audit-'));
+  const priorAudit = process.env.GBRAIN_AUDIT_DIR;
+  const priorOpenAI = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'sk-synthetic';
+  const priorReranker = await engine.getConfig('search.reranker.enabled');
+  await engine.setConfig('search.reranker.enabled', 'false');
+  let embedCalls = 0;
+  configureGateway({ chat_model: 'codex-cli:gpt-test', expansion_model: 'codex-cli:gpt-test',
+    embedding_model: 'openai:text-embedding-3-small', embedding_dimensions: 1536,
+    env: { OPENAI_API_KEY: 'sk-synthetic' } });
+  __setEmbedTransportForTests((async (params: { values: string[] }) => {
+    embedCalls += params.values.length;
+    return { embeddings: params.values.map((_, i) => Array.from({ length: 1536 }, (__, j) => ((i + j) % 7) / 7)),
+      values: params.values, warnings: [], usage: { tokens: params.values.length } };
+  }) as unknown as Parameters<typeof __setEmbedTransportForTests>[0]);
+  process.env.GBRAIN_AUDIT_DIR = auditDir;
+  try {
+    const cfg = { autopilot: { nightly_quality_probe: { enabled: true, max_usd: 1 } } } as unknown as
+      Parameters<typeof runNightlyQualityProbeStep>[1];
+    await runNightlyQualityProbeStep(engine, cfg);
+    const [audit] = readRecentQualityProbeEvents(1);
+    expect(audit).toMatchObject({ outcome: 'inconclusive', reason: 'panel_collapsed',
+      pass_count: 10, fail_count: 0, distinct_judge_models: 1, distinct_judge_providers: 1 });
+    expect(embedCalls).toBeGreaterThan(0);
+    expect(count()).toBeGreaterThan(0);
+    const [parent] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+      "SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE 'codex-nightly-quality:%'");
+    expect(parent!.attempts).toBe(count());
+    expect(parent!.accepted_turns).toBe(parent!.attempts);
+    const [paid] = await engine.executeRaw<{ total: number }>('SELECT count(*)::int AS total FROM mcp_spend_reservations');
+    expect(paid!.total).toBeGreaterThan(0);
+  } finally {
+    __setEmbedTransportForTests(null);
+    if (priorReranker === null) await engine.unsetConfig('search.reranker.enabled');
+    else await engine.setConfig('search.reranker.enabled', priorReranker);
+    if (priorOpenAI === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = priorOpenAI;
+    if (priorAudit === undefined) delete process.env.GBRAIN_AUDIT_DIR; else process.env.GBRAIN_AUDIT_DIR = priorAudit;
+  }
+}, 240_000);
 test('a real worker carries the grant through gateway dispatch and fenced completion', async () => {
   const job = await queue.add('enrich', { sourceId: 'default' }, { max_attempts: 1 }, { codexSubscription: grant() });
   const worker = new MinionWorker(engine, { concurrency: 1, pollInterval: 25, healthCheckInterval: 0, maxRssMb: 0 });
