@@ -56,6 +56,20 @@ async function sources(engine: BrainEngine): Promise<Array<{ id: string; incarna
   return engine.executeRaw('SELECT id,incarnation,archived FROM sources ORDER BY id');
 }
 
+/** Every page write advances this clock, including deletes and writes that later roll back. */
+async function pageClock(engine: BrainEngine): Promise<string> {
+  const [row] = await engine.executeRaw<{ value: string }>(
+    'SELECT last_value::text AS value FROM page_generation_clock_seq');
+  if (!row) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  return row.value;
+}
+
+/** Hold both inventories stable through a durable run or report write. */
+async function lockCorpus(engine: BrainEngine): Promise<void> {
+  await engine.executeRaw("SELECT set_config('lock_timeout','1s',true)");
+  await engine.executeRaw('LOCK TABLE sources,pages IN SHARE MODE');
+}
+
 /** A local CLI allowance binds query, route, options, and source inventory before any private work. */
 export async function withEvalContradictionSubscription<T>(engine: BrainEngine, flags: EvalContradictionAllowance,
   identity: EvalContradictionIdentity, run: () => Promise<T>): Promise<T> {
@@ -77,15 +91,19 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     return run();
   }
   const grant = parseAllowance(flags);
-  const snapshot = await sources(engine);
-  const claim = { identity, sources: snapshot, model: policy.model, bin: policy.bin, auxiliaryUsd: grant.maxUsd ?? null };
+  const snapshot = await sources(engine), clock = await pageClock(engine);
+  const claim = { identity, sources: snapshot, pageClock: clock, model: policy.model, bin: policy.bin,
+    auxiliaryUsd: grant.maxUsd ?? null };
   const prefix = `codex-eval:${grant.requestId}:`;
   const runId = prefix + digest(claim);
   await engine.transaction(async tx => {
     await tx.executeRaw("SELECT set_config('lock_timeout','1s',true),set_config('statement_timeout','5s',true)");
     await tx.executeRaw('SELECT brain_id FROM persistence_brain WHERE singleton=1 FOR UPDATE');
+    await lockCorpus(tx);
     await declareDurablePersistence(tx);
-    if (digest({ ...claim, sources: await sources(tx) }) !== digest(claim)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    if (digest({ ...claim, sources: await sources(tx), pageClock: await pageClock(tx) }) !== digest(claim)) {
+      throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    }
     const prior = await tx.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`${prefix}%`]);
     if (prior.some(row => row.run_id !== runId)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     await createSubscriptionRun(tx, { runId, accountLane: CODEX_JOB_ACCOUNT_LANE,
@@ -97,12 +115,18 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy);
-    if (digest({ ...claim, sources: await sources(db) }) !== digest(claim)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    if (digest({ ...claim, sources: await sources(db), pageClock: await pageClock(db) }) !== digest(claim)) {
+      throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    }
+  };
+  const checkAuthorityInTransaction = async (tx: BrainEngine) => {
+    await lockCorpus(tx);
+    await checkAuthority(tx);
   };
   process.stderr.write(`[eval suspected-contradictions] subscription request ${grant.requestId} ` +
     JSON.stringify({ billing: 'subscription', max_attempts: grant.maxAttempts, max_turns: grant.maxTurns,
       deadline: grant.deadline.toISOString(), auxiliary_cap_usd: grant.maxUsd ?? null }) + '\n');
-  return withCodexSubscription({ engine, runId, checkAuthority, checkAuthorityInTransaction: checkAuthority },
+  return withCodexSubscription({ engine, runId, checkAuthority, checkAuthorityInTransaction },
     () => withSubscriptionAuxiliaryBudget(engine, `group:${runId}`, grant.maxUsd, async () => {
       const result = await run();
       await checkAuthority();

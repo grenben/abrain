@@ -8,6 +8,7 @@ import { configureGateway, resetGateway, embedQuery, rerank, __setEmbedTransport
 import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { codexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
+import { subscriptionTargetTransaction } from '../../src/core/ai/subscription-target.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { judgeContradiction, type JudgeInput } from '../../src/core/eval-contradictions/judge.ts';
@@ -336,4 +337,47 @@ test('invalid native verdict persists a failed report without accepting a turn',
     'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${requestId}:%`]);
   expect(Number(allowance?.attempts)).toBe(1);
   expect(Number(allowance?.accepted_turns)).toBe(0);
+});
+
+test('a page edit invalidates private eval before another turn or report publication', async () => {
+  const requestId = randomUUID();
+  const flags = { maxAttempts: '2', maxTurns: '2', deadline: new Date(Date.now() + 600_000).toISOString(), requestId };
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  const before = calls().length;
+  await expect(withEvalContradictionSubscription(engine, flags, identity, async () => {
+    await engine.executeRaw("UPDATE pages SET title=title || ' revised' WHERE slug='companies/edge-acme'");
+    await expect(codexSubscriptionContext()!.checkAuthority!()).rejects
+      .toMatchObject({ code: 'subscription_identity_conflict' });
+    await expect(judgeContradiction(input)).rejects
+      .toMatchObject({ code: 'subscription_identity_conflict' });
+    let published = false;
+    await expect(subscriptionTargetTransaction(engine, async () => { published = true; }))
+      .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+    expect(published).toBe(false);
+  })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(calls()).toHaveLength(before);
+  await expect(withEvalContradictionSubscription(engine, flags, identity, async () => {}))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+});
+
+test('a page edit after an accepted turn still blocks private eval publication', async () => {
+  const requestId = randomUUID();
+  const flags = { maxAttempts: '2', maxTurns: '2', deadline: new Date(Date.now() + 600_000).toISOString(), requestId };
+  const identity = { queries: [input.query], judgeModel: input.model, topK: 2,
+    sampling: 'deterministic' as const, budgetUsd: 100, maxPairChars: 1500,
+    noCache: true, refreshCache: false };
+  let published = false;
+  await expect(withEvalContradictionSubscription(engine, flags, identity, async () => {
+    expect((await judgeContradiction(input)).verdict.verdict).toBe('contradiction');
+    await engine.executeRaw("UPDATE pages SET title=title || ' again' WHERE slug='companies/edge-acme'");
+    await expect(subscriptionTargetTransaction(engine, async () => { published = true; }))
+      .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(published).toBe(false);
+  const [allowance] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+    'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-eval:${requestId}:%`]);
+  expect(Number(allowance?.attempts)).toBe(1);
+  expect(Number(allowance?.accepted_turns)).toBe(1);
 });
