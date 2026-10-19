@@ -1,15 +1,17 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
 import type { CliDispatchContext } from '../command-table.ts';
-import { writeStdoutFinal } from '../../core/cli-force-exit.ts';
+import { writeStdoutFinal, setCliExitVerdict } from '../../core/cli-force-exit.ts';
 import { previewJobUpgrade, upgradeError, upgradeHash, upgradeIds } from '../../core/minions/codex-upgrade-snapshot.ts';
 import { inventoryQueuedJobs } from '../../core/minions/codex-upgrade-inventory.ts';
 import { inventoryLocalGbrainProcesses } from '../../core/minions/codex-worker-inventory.ts';
+import { reviewPrivateCutover } from '../../core/minions/codex-cutover-preflight.ts';
 import { parkUpgradeJobs, restoreParkedJobs } from '../../core/minions/codex-upgrade-park.ts';
 import { previewUpgradeSubmission, resubmitUpgradeJob, validateUpgradeSubmission } from '../../core/minions/codex-upgrade-resubmit.ts';
 
 export const JOB_UPGRADE_HELP = `gbrain private-codex jobs preview --ids ID,ID --json
 gbrain private-codex jobs inventory --json
 gbrain private-codex jobs workers --json
+gbrain private-codex jobs preflight --json
 gbrain private-codex jobs park --ids ID,ID --expect HASH --yes --json
 gbrain private-codex jobs restore --id UUID --expect HASH --yes --json
 gbrain private-codex jobs resubmit-preview --file REVIEWED.json --json
@@ -32,7 +34,7 @@ function submissionFile(file: string) {
 export async function runJobUpgrade(args: string[], ctx: CliDispatchContext): Promise<void> {
   const command = args[0], flags = new Map<string,string>();
   const commands: Record<string,string[]> = {
-    inventory: ['--json'], workers: ['--json'], preview: ['--ids','--json'], park: ['--ids','--expect','--yes','--json'], restore: ['--id','--expect','--yes','--json'],
+    inventory: ['--json'], workers: ['--json'], preflight: ['--json'], preview: ['--ids','--json'], park: ['--ids','--expect','--yes','--json'], restore: ['--id','--expect','--yes','--json'],
     'resubmit-preview': ['--file','--json'], resubmit: ['--file','--expect','--yes','--json'], receipts: ['--json'],
   };
   const allowed = Object.hasOwn(commands,command!) ? commands[command!] : undefined;
@@ -53,9 +55,11 @@ export async function runJobUpgrade(args: string[], ctx: CliDispatchContext): Pr
     await writeStdoutFinal(JSON.stringify(inventoryLocalGbrainProcesses(),null,2)+'\n');
     return;
   }
+  const localInventory = command === 'preflight' ? inventoryLocalGbrainProcesses() : null;
   const engine = await ctx.connectEngine({ probeOnly: true });
   try {
     const result = command === 'inventory' ? await inventoryQueuedJobs(engine)
+      : command === 'preflight' ? reviewPrivateCutover(await inventoryQueuedJobs(engine),localInventory!,process.pid)
       : command === 'preview' ? await previewJobUpgrade(engine,ids)
       : command === 'park' ? await parkUpgradeJobs(engine,ids,expected!)
       : command === 'restore' ? await restoreParkedJobs(engine,id!,expected!)
@@ -63,5 +67,6 @@ export async function runJobUpgrade(args: string[], ctx: CliDispatchContext): Pr
       : command === 'resubmit' ? await resubmitUpgradeJob(engine,submission,expected!)
       : await engine.executeRaw("SELECT id,plan,state,receipt FROM codex_upgrade_receipts WHERE kind='jobs' ORDER BY sequence DESC LIMIT 256");
     await writeStdoutFinal(JSON.stringify(result,null,2)+'\n');
+    if (command === 'preflight') setCliExitVerdict(1);
   } finally { await engine.disconnect(); }
 }

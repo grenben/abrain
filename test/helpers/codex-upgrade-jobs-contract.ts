@@ -63,6 +63,22 @@ export function codexUpgradeJobsContract(factory: () => Promise<{ engine: BrainE
       expect(await engine.executeRaw('SELECT id FROM codex_upgrade_receipts')).toHaveLength(0);
     } finally {print.mockRestore();disconnect.mockRestore();}
   });
+  test('preflight CLI reports queue blockers through a probe-only connection and stays nonready', async () => {
+    const id=await old(), written:string[]=[], connections:unknown[]=[];
+    const print=spyOn(output,'writeStdoutFinal').mockImplementation(async value=>{written.push(value);}),disconnect=spyOn(engine,'disconnect').mockResolvedValue();
+    const ctx={connectEngine:async (opts:unknown)=>{connections.push(opts);return engine;}} as unknown as CliDispatchContext;
+    try {
+      await run(['jobs','preflight','--json'],ctx);
+      const report=JSON.parse(written.join(''));
+      expect(report).toMatchObject({kind:'cutover_preflight',status:'blocked',cutover_ready:false,snapshots_atomic:false});
+      expect(report.blockers).toContainEqual({code:'pending_jobs_require_disposition',count:1,ids_sample:[id]});
+      expect(report.external_requirements).toContain('all_worker_hosts_and_pid_namespaces_quiesced');
+      expect(connections).toEqual([{probeOnly:true}]);
+      expect(output.currentExitCode()).toBe(1);
+      expect(await engine.executeRaw('SELECT id FROM codex_upgrade_receipts')).toHaveLength(0);
+      expect(written.join('')).not.toContain('SYNTHETIC_PRIVATE_PROMPT');
+    } finally {print.mockRestore();disconnect.mockRestore();output._resetCliExitVerdictForTests();process.exitCode=0;}
+  });
   test('inventory crosses its 128-row page boundary without omitting live jobs', async () => {
     const ids:number[]=[];
     for (let i=0;i<130;i++) ids.push(await old());

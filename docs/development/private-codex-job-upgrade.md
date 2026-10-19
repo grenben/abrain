@@ -10,6 +10,7 @@ The commands use the existing connection bootstrap with startup migrations disab
 ```sh
 gbrain private-codex jobs inventory --json
 gbrain private-codex jobs workers --json
+gbrain private-codex jobs preflight --json
 gbrain private-codex jobs preview --ids 12,34 --json
 ```
 
@@ -39,6 +40,15 @@ can start immediately after a scan, and other hosts or PID namespaces remain
 outside its view, so `cross_host_complete` and `cutover_ready` are always false.
 Use this as local review evidence, then stop and verify all worker hosts under
 a controlled cutover before trusting the queue snapshot.
+
+`jobs preflight` reads the local process inventory and the database queue/lock
+snapshot in sequence and reports actionable blockers: active claims, pending
+jobs needing a disposition, supervisor lock rows and local GBrain processes
+other than the scanning CLI. It exits nonzero and always reports
+`cutover_ready: false`, even with no observed blocker, because the two snapshots
+are not atomic and cannot certify other hosts, producer quiescence, runtime
+qualification, copied-brain custody or feature acceptance. Treat it as a
+review checklist, not an activation command.
 
 Preview reads only an explicit bounded selection (at most 128 IDs) and immediate
 dependencies. Output includes hashes, status, recognized protocol and disposition;
