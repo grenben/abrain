@@ -111,6 +111,17 @@ describe('edge_contradictions', () => {
     expect(parseEdgeJudgeOutput('{"pairs":[{"a":1,"b":2,"conflict":true,"confidence":2}]}', 2)).toEqual([{ a: 1, b: 2, conflict: true, confidence: 1 }]);
   });
 
+  test.each([
+    { verdict: [] },
+    { verdict: [{ a: 1, b: 2, conflict: false, confidence: 0.8 }, { a: 2, b: 1, conflict: false, confidence: 0.8 }] },
+  ])('omitted or duplicate pair verdicts stay retryable errors, never compatible', async ({ verdict }) => {
+    await seed(DATED);
+    const r = await runPhaseEdgeContradictions(engine, { judge: async () => [...verdict] });
+    expect(r).toMatchObject({ status: 'partial', totals: { errors: 1, compatible: 0, proposed: 0 } });
+    expect((await proposals()).map(p => p.status)).toEqual(['error']);
+    expect(await liveWorksAt()).toEqual(['companies/acme-example', 'companies/widget-co']);
+  });
+
   describe('judge errors retry with a bounded backoff (#6311)', () => {
     const age = () => engine.executeRaw(`UPDATE link_edge_proposals SET updated_at = now() - interval '25 hours' WHERE status = 'error'`);
     const errorRows = () => engine.executeRaw<{ status: string; detail: string }>(`SELECT status, detail FROM link_edge_proposals ORDER BY id`);

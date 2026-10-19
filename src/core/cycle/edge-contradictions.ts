@@ -166,6 +166,22 @@ export function parseEdgeJudgeOutput(text: string, maxIndex: number): JudgePair[
   return out;
 }
 
+/** A missing or repeated pair is an unknown judgment, never evidence of compatibility. */
+function completeEdgeJudgeVerdict(verdict: JudgePair[] | null, relationshipCount: number): verdict is JudgePair[] {
+  const expected = relationshipCount * (relationshipCount - 1) / 2;
+  if (!Array.isArray(verdict) || verdict.length !== expected) return false;
+  const seen = new Set<string>();
+  for (const pair of verdict) {
+    if (!pair || typeof pair !== 'object' || !Number.isInteger(pair.a) || !Number.isInteger(pair.b) || pair.a === pair.b ||
+        pair.a < 1 || pair.b < 1 || pair.a > relationshipCount || pair.b > relationshipCount ||
+        typeof pair.conflict !== 'boolean' || !Number.isFinite(pair.confidence) || pair.confidence < 0 || pair.confidence > 1) return false;
+    const key = `${Math.min(pair.a, pair.b)}:${Math.max(pair.a, pair.b)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
 export async function defaultEdgeJudge(input: Parameters<EdgeJudgeFn>[0]): Promise<JudgePair[] | null> {
   const { chat } = await import('../ai/gateway.ts');
   const result = await chat({
@@ -303,6 +319,10 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
       failure = judgeFailureDetail(e);
       process.stderr.write(`[edge_contradictions] judge failed for ${g.slug}: ${failure}\n`);
     }
+    if (verdict && !completeEdgeJudgeVerdict(verdict, relationships.length)) {
+      verdict = null;
+      failure = 'malformed: judge did not provide exactly one valid verdict for every relationship pair';
+    }
     totals.judged++;
     for (const [a, b] of fresh) {
       const hash = pairHash(a, b);
@@ -317,8 +337,13 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
         continue;
       }
       const v = verdict.find(p => (p.a === ia && p.b === ib) || (p.a === ib && p.b === ia));
-      if (!v || !v.conflict) {
-        await recordProposal(engine, g, a, b, hash, { status: 'compatible', model, confidence: v?.confidence ?? null });
+      if (!v) {
+        await recordProposal(engine, g, a, b, hash, { status: 'error', model, detail: 'malformed: missing relationship pair after validation' });
+        totals.errors++;
+        continue;
+      }
+      if (!v.conflict) {
+        await recordProposal(engine, g, a, b, hash, { status: 'compatible', model, confidence: v.confidence });
         totals.compatible++;
         continue;
       }
