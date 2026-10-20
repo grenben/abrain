@@ -470,7 +470,8 @@ for f in "${files[@]}"; do
   case "$f" in
     # graduation-crash-*: one graduation per custody or rollback boundary (5-6 SIGKILL-and-resume cases of ~16 s per file).
     # large-pages-export: five 20 MiB imports per engine on the string path (~240 s on 4 cores, ~340 s on a loaded gate VM).
-    */large-pages-export.test.ts|*/skills.test.ts|*/serve-http-multi-agent.test.ts|*/graduation-cli*.test.ts|*/graduation-crash-*.test.ts|*/graduation-faults.test.ts|*/graduation-copy.test.ts|*/graduation-legacy-copy.test.ts) file_timeout=$((file_timeout * 4)) ;;
+    # mechanical: 78 cases took 236 s on an isolated PostgreSQL rerun, beyond the generic 180 s file cap.
+    */large-pages-export.test.ts|*/mechanical.test.ts|*/skills.test.ts|*/serve-http-multi-agent.test.ts|*/graduation-cli*.test.ts|*/graduation-crash-*.test.ts|*/graduation-faults.test.ts|*/graduation-copy.test.ts|*/graduation-legacy-copy.test.ts) file_timeout=$((file_timeout * 4)) ;;
   esac
   if command -v gtimeout >/dev/null 2>&1; then
     TIMEOUT_CMD="gtimeout $file_timeout"
