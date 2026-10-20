@@ -108,7 +108,7 @@ for (const { backend, databaseUrl } of pathologicalArms()) {
           expect(await state(engine, f.path)).toEqual(before);
           await engine.executeRaw('UPDATE facts SET expired_at=now()');
           const expired = await state(engine, f.path);
-          expect(await __testing.phaseCVerify(engine, OPTS)).toEqual({ name: 'verify', status: 'complete', detail: 'pages_checked=0 skipped_expired_no_page=1' });
+          expect(await __testing.phaseCVerify(engine, OPTS)).toEqual({ name: 'verify', status: 'complete', detail: 'pages_checked=0 skipped_expired_live_page=1' });
           expect(await state(engine, f.path)).toEqual(expired);
         });
       }, 180_000);
