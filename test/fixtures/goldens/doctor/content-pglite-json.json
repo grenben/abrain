@@ -511,18 +511,18 @@
                   "days_to_exhaustion": null,
                   "exhaustion_date": null,
                   "limit": 68719476736,
-                  "max_day_7d": 115490,
-                  "net_per_day_7d": 22378,
+                  "max_day_7d": "<volatile>",
+                  "net_per_day_7d": "<volatile>",
                   "pct": 0,
-                  "per_day_7d": 115490,
-                  "reclaimable_bytes": 16318,
+                  "per_day_7d": "<volatile>",
+                  "reclaimable_bytes": "<volatile>",
                   "recommended_limit": 137438953472,
                   "resource": "terminal_bytes",
                   "scope": "brain",
                   "spike_day": null,
                   "status": "ok",
                   "under_reserved_receipts": 0,
-                  "used": 115490,
+                  "used": "<volatile>",
                   "window_days": 1
                 },
                 {
@@ -548,18 +548,18 @@
                   "days_to_exhaustion": null,
                   "exhaustion_date": null,
                   "limit": 17179869184,
-                  "max_day_7d": 115490,
-                  "net_per_day_7d": 22378,
+                  "max_day_7d": "<volatile>",
+                  "net_per_day_7d": "<volatile>",
                   "pct": 0,
-                  "per_day_7d": 115490,
-                  "reclaimable_bytes": 16318,
+                  "per_day_7d": "<volatile>",
+                  "reclaimable_bytes": "<volatile>",
                   "recommended_limit": 34359738368,
                   "resource": "terminal_bytes",
                   "scope": "principal:local_cli:<uuid>",
                   "spike_day": null,
                   "status": "ok",
                   "under_reserved_receipts": 0,
-                  "used": 115490,
+                  "used": "<volatile>",
                   "window_days": 1
                 }
               ],
@@ -975,14 +975,14 @@
         {
           "category": "meta",
           "elapsed_ms": "<volatile>",
-          "message": "1296 column(s) verified against live schema",
+          "message": "1488 column(s) verified against live schema",
           "name": "schema_columns",
           "status": "ok"
         },
         {
           "category": "meta",
           "elapsed_ms": "<volatile>",
-          "message": "All 152 table(s) the applied migrations create exist.",
+          "message": "All 173 table(s) the applied migrations create exist.",
           "name": "schema_missing_tables",
           "status": "ok"
         },
@@ -3365,7 +3365,7 @@
         {
           "category": "brain",
           "elapsed_ms": "<volatile>",
-          "message": "No retrieval-affecting files changed in working tree.",
+          "message": "<source-tree-state>",
           "name": "eval_drift",
           "status": "ok"
         },

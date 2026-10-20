@@ -3733,7 +3733,7 @@
           {
             "category": "brain",
             "elapsed_ms": "<volatile>",
-            "message": "1 retrieval-affecting file(s) changed since HEAD: src/core/search/vector-statement.ts. Re-run `gbrain eval run-all` after committing these changes.",
+            "message": "<source-tree-state>",
             "name": "eval_drift",
             "status": "ok"
           },
@@ -8072,7 +8072,7 @@
           {
             "category": "brain",
             "elapsed_ms": "<volatile>",
-            "message": "1 retrieval-affecting file(s) changed since HEAD: src/core/search/vector-statement.ts. Re-run `gbrain eval run-all` after committing these changes.",
+            "message": "<source-tree-state>",
             "name": "eval_drift",
             "status": "ok"
           },
