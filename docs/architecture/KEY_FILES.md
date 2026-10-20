@@ -56,8 +56,8 @@ link it here rather than raising the cap.
 | [Core Search (2/2)](key-files/core-search-2.md) | `search/rerank.ts` through `search/vector-pool.ts`, relational and multi-hop modules, `hub-dampening.ts`, `crag.ts`; [CJK keyword](key-files/core-search-cjk.md) |
 | [Core Services (1/3)](key-files/core-services-1.md) | `src/core/advisor/*.ts` through `src/core/connectors/` |
 | [Core Services (1/3, continued)](key-files/core-services-1-continued.md) | `src/core/context/` through `src/core/context/ipc-path.ts` |
-| [Core Services (2/3)](key-files/core-services-2.md) | `src/core/conversation-parser/` through `src/core/ops/sources.ts`, except `src/core/persistence/` |
-| [Core Services (2/3, continued)](key-files/core-services-2-continued.md) | `page-state/`, `page-{body,window}/`, `progressive-batch/` |
+| [Core Services (2/3)](key-files/core-services-2.md) | `src/core/conversation-parser/` through `src/core/ops/search.ts`, except `src/core/persistence/` |
+| [Core Services (2/3, continued)](key-files/core-services-2-continued.md) | sources, summaries, facts, notifier, page state/body/window |
 | [Commit notifier](key-files/commit-notifier.md) | `src/core/notifier/` |
 | [Core Services (3/3)](key-files/core-services-3.md) | `src/core/think/index.ts` through `src/core/verbs/usage-log.ts` |
 | [Core Utilities (1/2)](key-files/core-utilities-1.md) | `archive-crawler-config.ts` through `remediation-checkpoint.ts`; [`cycle.ts`](key-files/core-cycle-primitive.md) |
