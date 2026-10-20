@@ -493,6 +493,44 @@ describe('phaseCVerify', () => {
     expect(r.detail).toContain('pages_checked=1');
   });
 
+  test('ignores expired indexed rows withdrawn from a live page fence', async () => {
+    await seedLegacyFact({ entity_slug: 'people/alice', fact: 'Withdrawn' });
+    await seedLegacyFact({ entity_slug: 'people/alice', fact: 'Still active' });
+    await __testing.phaseBFenceFacts(engine, OPTS);
+    await engine.executeRaw(
+      `UPDATE facts SET expired_at = now()
+       WHERE source_id = 'default' AND source_markdown_slug = 'people/alice' AND row_num = 1`,
+    );
+
+    const path = join(brainDir, 'people/alice.md');
+    const body = readFileSync(path, 'utf-8');
+    const rows = parseFactsFence(body).facts;
+    const active = rows.filter(f => f.rowNum === 2);
+    writeFileSync(path, replaceOrInsertFactsFence(body, renderFactsTable([{ ...rows[0], active: false }, ...active])));
+    expect(await __testing.phaseCVerify(engine, OPTS))
+      .toMatchObject({ status: 'complete', detail: 'pages_checked=1' });
+
+    writeFileSync(path, replaceOrInsertFactsFence(body, renderFactsTable(active)));
+    expect(await __testing.phaseCVerify(engine, OPTS))
+      .toMatchObject({ status: 'complete', detail: 'pages_checked=1' });
+
+    writeFileSync(path, '# Existing page\n');
+    expect((await __testing.phaseCVerify(engine, OPTS)).status).toBe('failed');
+  });
+
+  test('skips a live page when all indexed fence rows were withdrawn', async () => {
+    await seedLegacyFact({ entity_slug: 'people/alice', fact: 'Withdrawn' });
+    await __testing.phaseBFenceFacts(engine, OPTS);
+    await engine.executeRaw(
+      `UPDATE facts SET expired_at = now()
+       WHERE source_id = 'default' AND source_markdown_slug = 'people/alice'`,
+    );
+    writeFileSync(join(brainDir, 'people/alice.md'), '# Existing page\n');
+
+    expect(await __testing.phaseCVerify(engine, OPTS))
+      .toMatchObject({ status: 'complete', detail: 'pages_checked=0 skipped_expired_live_page=1' });
+  });
+
   test('returns failed when fence row count drifts from DB', async () => {
     await seedLegacyFact({ entity_slug: 'people/alice', fact: 'F1' });
     await __testing.phaseBFenceFacts(engine, OPTS);

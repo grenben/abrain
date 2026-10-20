@@ -244,8 +244,9 @@ async function phaseCVerify(
     // (chat-log shape is the source of truth). Same cli: exclusion as
     // extract_facts reconciliation. Counting them here fails every brain
     // that ran extract-conversation-facts.
-    const groups = await engine.executeRaw<{ source_id: string; source_markdown_slug: string; row_nums: number[]; all_expired: boolean }>(
-      `SELECT source_id, source_markdown_slug, array_agg(row_num ORDER BY row_num) AS row_nums,
+    const groups = await engine.executeRaw<{ source_id: string; source_markdown_slug: string; row_nums: number[] | null; all_expired: boolean }>(
+      `SELECT source_id, source_markdown_slug,
+              array_agg(row_num ORDER BY row_num) FILTER (WHERE expired_at IS NULL) AS row_nums,
               bool_and(expired_at IS NOT NULL) AS all_expired
          FROM facts
         WHERE row_num IS NOT NULL
@@ -255,10 +256,11 @@ async function phaseCVerify(
 
     const mismatches: string[] = [];
     let pagesChecked = 0;
-    // #6685: a page deleted after all of its fenced rows expired leaves
-    // nothing to compare; like the backfill's skipped_no_page, it is not drift.
-    // A missing page that still has a live row is drift.
+    // An expired indexed row may have been withdrawn from the current fence.
+    // With no live rows, neither a live nor a deleted page has anything to
+    // compare. A missing page that still has a live row remains drift.
     let skippedExpiredNoPage = 0;
+    let skippedExpiredLivePage = 0;
     // Managed brains publish the fence through the coordinator, which writes
     // the canonical file in the same publication; the database copy is the
     // one every managed page has, database-only pages included.
@@ -266,6 +268,11 @@ async function phaseCVerify(
     const writeThroughOff = !managed && await isWriteThroughDisabled(engine);
 
     for (const g of groups) {
+      if (g.all_expired) {
+        if (await engine.getPage(g.source_markdown_slug, { sourceId: g.source_id })) skippedExpiredLivePage += 1;
+        else skippedExpiredNoPage += 1;
+        continue;
+      }
       let body: string;
       const target = managed ? null : await resolvePageWriteTarget(engine, g.source_markdown_slug, g.source_id);
       const fileExists = target?.ok === true && existsSync(target.filePath);
@@ -278,8 +285,7 @@ async function phaseCVerify(
       if (databaseOnly) {
         const snapshot = await engine.readPageSnapshot(g.source_markdown_slug, { sourceId: g.source_id });
         if (!snapshot) {
-          if (g.all_expired) skippedExpiredNoPage += 1;
-          else mismatches.push(`${g.source_markdown_slug} (page missing)`);
+          mismatches.push(`${g.source_markdown_slug} (page missing)`);
           continue;
         }
         if (snapshot.page.body_storage === 'segmented') {
@@ -289,16 +295,14 @@ async function phaseCVerify(
         body = serializePageToMarkdown(snapshot.page, snapshot.tags);
       } else {
         if (!target?.ok || !fileExists) {
-          // Skip only an absent file; an unresolvable target is still drift.
-          if (target?.ok && g.all_expired) skippedExpiredNoPage += 1;
-          else mismatches.push(`${g.source_markdown_slug} (file missing)`);
+          mismatches.push(`${g.source_markdown_slug} (file missing)`);
           continue;
         }
         body = readFileSync(target.filePath, 'utf-8');
       }
       const parsed = parseFactsFence(body);
-      const indexed = new Set(g.row_nums.map(Number));
-      const fenced = new Set(parsed.facts.map(f => f.rowNum));
+      const indexed = new Set((g.row_nums ?? []).map(Number));
+      const fenced = new Set(parsed.facts.filter(f => f.active).map(f => f.rowNum));
       // #5814: a duplicate active row may be absent from the index.
       // extract_facts indexes it once (#1781) while the managed publication
       // projection indexes every fence row, so both states are in sync.
@@ -322,7 +326,8 @@ async function phaseCVerify(
         detail: `${mismatches.length} pages drifted: ${mismatches.slice(0, 3).join(' | ')}${mismatches.length > 3 ? '...' : ''}`,
       };
     }
-    const skipped = skippedExpiredNoPage > 0 ? ` skipped_expired_no_page=${skippedExpiredNoPage}` : '';
+    const skipped = (skippedExpiredNoPage > 0 ? ` skipped_expired_no_page=${skippedExpiredNoPage}` : '') +
+      (skippedExpiredLivePage > 0 ? ` skipped_expired_live_page=${skippedExpiredLivePage}` : '');
     return { name: 'verify', status: 'complete', detail: `pages_checked=${pagesChecked}${skipped}` };
   } catch (e) {
     return { name: 'verify', status: 'failed', detail: e instanceof Error ? e.message : String(e) };

@@ -251,6 +251,22 @@ for (const backend of testBackends()) {
     } });
   }, 120_000);
 
+  test(`${backend}: withdrawn indexed facts absent from a live page are not drift`, async () => {
+    await managedBrain(async ({ engine }) => {
+      expect(await __testing.phaseCVerify(engine, OPTS))
+        .toMatchObject({ status: 'complete', detail: 'pages_checked=0 skipped_expired_live_page=1' });
+    }, { databaseUrl, setup: async ({ engine }) => {
+      const slug = 'projects/active-example';
+      await engine.putPage(slug, { type: 'note', title: 'Active Example', compiled_truth: '# Active Example\n' });
+      for (const rowNum of [1, 2]) {
+        await engine.executeRaw(`INSERT INTO facts (source_id, entity_slug, fact, kind, visibility, notability, valid_from, source, confidence,
+            row_num, source_markdown_slug, expired_at)
+          VALUES ('default', $1, $2, 'fact', 'private', 'medium', now(), 'manual', 1.0, $3, $1, now())`,
+        [slug, `Withdrawn claim ${rowNum}`, rowNum]);
+      }
+    } });
+  }, 120_000);
+
   test(`${backend}: a duplicate active fence row reads in sync whichever writer indexed the page last (#5814)`, async () => {
     await managedBrain(async ({ ctx, engine }) => {
       const slug = 'people/dana-example';
