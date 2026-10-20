@@ -1472,6 +1472,8 @@ async function runExtractAndEmbed(
         process.stderr.write(`[github] large sync (${totalChanges} pages); embeds deferred to embed-backfill job ${sub.jobId} — or ${drainHint}\n`);
       } else if (sub.status === 'cooldown' || sub.status === 'spend_capped' || sub.status === 'no_worker_surface' || sub.status === 'stalled') {
         process.stderr.write(`[github] large sync (${totalChanges} pages); embed-backfill not queued (${sub.status}) — ${drainHint}\n`);
+      } else if (sub.status === 'embedding_disabled') {
+        process.stderr.write(`[github] large sync (${totalChanges} pages); embed-backfill not queued: embedding is disabled on this brain (keyless by choice)\n`);
       } else { sub satisfies never; }
     } catch (err) {
       process.stderr.write(`[github] embed-backfill submission failed: ${err instanceof Error ? err.message : String(err)} — ${drainHint}\n`);

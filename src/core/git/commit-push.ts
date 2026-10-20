@@ -209,9 +209,12 @@ function withBranch(ctx: Ctx, branch: string | undefined): Ctx {
   return { ...ctx, mergeRef: `refs/heads/${short}`, trackingRef: `refs/remotes/${ctx.remote}/${short}` };
 }
 
+/** The git-dir entries a rebase, merge, cherry-pick or revert leaves while it is in progress. */
+export const GIT_OPERATION_MARKERS = ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'sequencer'] as const;
+
 /** Refuse while another git operation is mid-flight; never abort it for the user. */
-function assertNoOperationInProgress(root: string): void {
-  for (const marker of ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'sequencer']) {
+export function assertNoOperationInProgress(root: string): void {
+  for (const marker of GIT_OPERATION_MARKERS) {
     if (existsSync(absGitPath(root, marker))) {
       throw opError('git_operation_in_progress', `A git ${marker.startsWith('rebase') ? 'rebase' : marker.toLowerCase().replace(/_head$/, '')} is in progress in ${root}.`,
         `Finish or abort it first. A stuck rebase may hold another writer's autostash: save it with git stash store <sha from .git/${marker}/autostash> before deleting anything. See docs/guides/shared-checkout-git.md#stuck-rebase.`,

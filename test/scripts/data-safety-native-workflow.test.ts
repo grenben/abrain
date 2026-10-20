@@ -137,11 +137,24 @@ describe('data-safety native CI coverage', () => {
       GBRAIN_CI_DISABLE_TEST_ENV_FILE: '1',
       GBRAIN_TEST_REQUIRE_CASE_INSENSITIVE: "${{ runner.os != 'Linux' && '1' || '0' }}",
     });
-    expect(step!.run!.trim().split('\n')).toEqual([
-      'status=0',
-      ...suites.map(suite => `bun --no-env-file test --timeout=180000 ${suite} || status=1`),
-      'exit "$status"',
-    ]);
+    const lines = step!.run!.trim().split('\n');
+    expect(lines[0]).toBe('status=0');
+    expect(lines).toContain('  bun --no-env-file test --timeout=180000 "$1" &');
+    expect(lines.filter(line => line.startsWith('bounded '))).toEqual(suites.map(suite => `bounded ${suite} || status=1`));
+    expect(lines.at(-1)).toBe('exit "$status"');
+  });
+
+  test('a stuck native safety suite is named, sampled and killed inside the job timeout, and the step fails', () => {
+    const step = workflow.jobs.native.steps.find(entry => entry.name === 'Verify native data-safety contracts')!;
+    const stuck = suites[2]!;
+    const result = Bun.spawnSync(['bash', '-e', '-o', 'pipefail', '-c', `
+      bun() { if [[ "$4" == "$GBRAIN_TEST_STUCK_SUITE" ]]; then exec sleep 600; fi; printf '%s\\n' "$4"; }
+      ${step.run}
+    `], { env: { PATH: process.env.PATH ?? '', GBRAIN_TEST_STUCK_SUITE: stuck, GBRAIN_NATIVE_SUITE_BOUND_S: '2' }, timeout: 60_000 });
+    expect(result.exitCode).toBe(1);
+    const stdout = result.stdout.toString();
+    expect(stdout).toContain(`::error::${stuck} was still running after 2 s`);
+    expect(stdout.trim().split('\n').filter(line => line.startsWith('test/'))).toEqual(suites.filter(suite => suite !== stuck));
   });
 
   for (const failed of ['', ...suites]) test(`every native safety suite runs and failures remain fatal (${failed || 'all pass'})`, () => {

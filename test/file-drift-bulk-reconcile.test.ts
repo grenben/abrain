@@ -226,6 +226,21 @@ for (const backend of testBackends()) describe(`C7 bulk file-drift reconcile (${
     expect(await stillDrifted(sourceId, [...CONCEPTS, PERSON])).toEqual([PERSON]);
   }), 240_000);
 
+  test('#6991 --all-drifted and the survey list a conflicted page the live check cannot classify as unknown, never repaired', () => fixture(async ({ root, sourceId, ctx }) => {
+    await driftedPages(root, ctx);
+    rmSync(join(root, `${PERSON}.md`));
+    expect((await liveFileDrift(engine, sourceId, PERSON)).still_present).toBeNull();
+    const preview = (await json(['file-drift', '--source', sourceId, '--all-drifted', '--prefer', 'database'])).results[0]!;
+    expect(preview).toMatchObject({ mode: 'dry_run', affected: 3, residuals: { unknown_canonical_file_missing: 1 } });
+    expect(preview.sample).toEqual(CONCEPTS.map(slug => `${sourceId}:${slug}`));
+    const unknown = (preview.listing as Array<{ item: string; class: string; detail: string }>).filter(entry => entry.class === 'unknown');
+    expect(unknown).toEqual([{ item: `${sourceId}:${PERSON}`, class: 'unknown', detail: expect.stringContaining('canonical_file_missing: Not classified or repaired.') }]);
+    const survey = (await json(['file-drift', '--source', sourceId])).results[0]!;
+    expect(survey.residuals).toMatchObject({ unknown_canonical_file_missing: 1 });
+    expect((survey.listing as Array<{ item: string; class: string }>).find(entry => entry.item === `${sourceId}:${PERSON}`)?.class).toBe('unknown');
+    expect(JSON.stringify((survey.details as { next_actions: string[] }).next_actions)).not.toContain('unknown');
+  }), 240_000);
+
   test('the globs are bound into the preview hash: --skip narrows the set, and an apply under other globs refuses preview_changed', () => fixture(async ({ root, sourceId, ctx }) => {
     await driftedPages(root, ctx);
     const scope = await resolveRepairScope(engine, sourceId);

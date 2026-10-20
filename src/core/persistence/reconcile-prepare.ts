@@ -5,6 +5,7 @@ import type { BrainEngine } from '../engine.ts';
 import type { GBrainConfig } from '../config.ts';
 import { importFromContent, type ParsedPage } from '../import-file.ts';
 import { parseMarkdown, serializePageToMarkdown } from '../markdown.ts';
+import { alignWithStored } from './align-stored.ts';
 import { parseFactsFence, renderFactsTable, replaceOrInsertFactsFence, restoreHiddenFactRows, type ParsedFact } from '../facts-fence.ts';
 import { opError } from '../ops/contract.ts';
 import { readFix, trustedCliRequired } from '../ops/op-fix.ts';
@@ -169,7 +170,7 @@ export async function prepareReconcileMutation(engine: BrainEngine, row: WriteRe
       const scanStateTransferred = final ? await transferLegacyAtomPageState(tx, state.snapshot, final) : false;
       const reading = reconcileFileReading(readFileSync(state.path, 'utf8'), state.importPath, final?.page ?? state.snapshot.page);
       const file = parseMarkdown(reading.content, row.slug);
-      if (reading.inferred && final) file.type = final.page.type;
+      if (final) alignWithStored(file, final.page, reading.inferred);
       if (!sameCanonicalImport(final, prepared.result) || digest(reconcileCanonical(file, file.tags)) !== artifact.result_digest) {
         throw opError('storage_error', 'Reconciliation canonical readback did not match the reviewed result.',
           `After publishing, ${row.slug} in source ${row.source_id} read back differently from the reviewed result, so the database change rolled back and the owner's recovery restores the file. Inspect request ${row.request_id}'s receipt before anything else and do not apply the preview again until it is terminal.`,

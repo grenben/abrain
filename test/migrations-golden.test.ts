@@ -26,7 +26,8 @@ describe('migrations full-record golden', () => {
     expect(golden.count).toBe(MIGRATIONS.length);
     expect(golden.latest).toBe(LATEST_VERSION);
     expectGolden('migrations/records', golden, normalizer);
-  }, 60_000);
+  // Two full TypeScript AST captures now cover 287 migrations after the upstream merge.
+  }, 180_000);
 
   test('versions are unique and the runner applies them ascending; gaps 17-19 and 100 stay gaps', () => {
     const versions = MIGRATIONS.map((m) => m.version);

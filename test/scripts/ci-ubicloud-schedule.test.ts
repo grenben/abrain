@@ -1,11 +1,12 @@
 // ci-ubicloud-schedule.test.ts — the Ubicloud fan-out's work queue:
 // weighting (trusted tables first, lane p75 fallback), heaviest-first
 // same-lane batching with a draining batch target, marker-log parsing, burst
-// fleet sizing from `ubi-runner.sh usage`, and the explicit-file seams the
-// ci:local wrappers expose for it.
+// fleet sizing from `ubi-runner.sh usage`, the explicit-file seams the
+// ci:local wrappers expose for it, and the gate-location refusal (a full gate
+// outside eu-central-h1 is refused before any VM is requested).
 
 import { describe, expect, it } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -179,5 +180,35 @@ describe("explicit-file seams in the ci:local wrappers", () => {
     expect(exclusive.length).toBeGreaterThan(0);
     const all = list("run-serial-tests.sh", "--dry-run-list");
     for (const file of exclusive) expect(all).toContain(file);
+  });
+});
+
+describe("gate location", () => {
+  const run = (...args: string[]) => {
+    const env = { ...process.env };
+    delete env.UBICLOUD_API_KEY;
+    delete env.UBICLOUD_API_TOKEN;
+    const r = spawnSync("bun", [join(REPO_ROOT, "scripts/ci-ubicloud.ts"), ...args], { cwd: REPO_ROOT, env, encoding: "utf8" });
+    return { status: r.status, stderr: r.stderr };
+  };
+  const credentialRefusal = "UBICLOUD_API_KEY (or UBICLOUD_API_TOKEN) is not set";
+
+  it("refuses a full gate outside eu-central-h1 before asking for credentials or VMs", () => {
+    for (const args of [["--location", "us-east-a2"], ["--location", "eu-north-h1", "--diff"]]) {
+      const r = run(...args);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("a full gate runs only in eu-central-h1");
+      expect(r.stderr).toContain("is not gate evidence");
+      expect(r.stderr).not.toContain(credentialRefusal);
+    }
+  });
+
+  it("lets the default location and an explicit diagnostic subset elsewhere through to the credential check", () => {
+    for (const args of [[], ["--location", "eu-central-h1"], ["--location", "us-east-a2", "--lanes", "gitleaks"]]) {
+      const r = run(...args);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain(credentialRefusal);
+      expect(r.stderr).not.toContain("a full gate runs only in");
+    }
   });
 });

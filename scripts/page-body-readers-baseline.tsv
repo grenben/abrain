@@ -487,6 +487,7 @@ src/core/repair/overwritten-edits.ts	versionMarkdown	call:serializePageToMarkdow
 src/core/repair/overwritten-edits.ts	versionMarkdown	field	SEGW	inline versions only: overwriteContent returns null for a segmented version, which answers version_changed
 src/core/repair/overwritten-edits.ts	versionMarkdown	sql	SEGW	selects body_storage; a segmented version answers version_changed
 src/core/repair/safe-chunks.ts	safeChunksRepair	sql	META	
+src/core/repair/segmented-mirror.ts	fileHoldsWithdrawnRows	field	NONE	the overlay result of one file fragment (a facts fence block) for the region digests (body-digests.ts); no page body is read
 src/core/repair/slug-conflicts.ts	pageContent	call:serializePageToMarkdown	SEGW	
 src/core/repair/split-facts.ts	mergeOne	call:serializePageToMarkdown	SEGW	
 src/core/repair/split-facts.ts	mergeSplitFacts	call:serializePageToMarkdown	SEGW	

@@ -67,7 +67,6 @@ export const DEFERRED: ReadonlyArray<readonly [string, string, string]> = [
   ['C-19', 'GBRA-101 (4b)', 'Generic invalid_params refusal, and a writer queue with a null heartbeat'],
   ['C-20', 'GBRA-101 (4b)', 'Holds survive an authorized DB-only delete (#6600)'],
   ['C-21', 'GBRA-101 (4b)', 'On macOS, case-colliding paths: refresh_dirty has no safe recovery'],
-  ['C-22', 'GBRA-95', 'stuck-recovery refuses a large-file recovery: "resolve it by hand"'],
 ];
 
 describe('GBRA-130 inventory rows not yet fixed here', () => {

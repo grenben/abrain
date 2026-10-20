@@ -1035,14 +1035,14 @@
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "1450 column(s) verified against live schema",
+            "message": "1488 column(s) verified against live schema",
             "name": "schema_columns",
             "status": "ok"
           },
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "All 170 table(s) the applied migrations create exist.",
+            "message": "All 173 table(s) the applied migrations create exist.",
             "name": "schema_missing_tables",
             "status": "ok"
           },
@@ -1462,6 +1462,7 @@
               "preparation_policy": {
                 "maintenance_preparation_ms": "<volatile>",
                 "max_preparation_attempts": 2,
+                "max_transient_retries": 5,
                 "preparation_ceiling_ms": "<volatile>",
                 "sync_preparation_ms": "<volatile>"
               },
@@ -2445,6 +2446,7 @@
                 "no_remote": 1,
                 "pages_at_risk": 0,
                 "recoverable_repos": 0,
+                "remote_timeouts": 0,
                 "unpushed": 0
               }
             },
@@ -2600,6 +2602,44 @@
             "elapsed_ms": "<volatile>",
             "message": "No commit→searchable samples in the last 24 h (no managed sync imported a new commit).",
             "name": "managed_sync_latency",
+            "status": "ok"
+          },
+          {
+            "category": "brain",
+            "details": {
+              "docs": "docs/guides/on-commit-sync.md",
+              "sources": [
+                {
+                  "pending_markers": 0,
+                  "reason": null,
+                  "resident": null,
+                  "source_id": "default",
+                  "stalled": false,
+                  "state": null
+                },
+                {
+                  "pending_markers": 0,
+                  "reason": null,
+                  "resident": null,
+                  "source_id": "notes",
+                  "stalled": false,
+                  "state": null
+                },
+                {
+                  "pending_markers": 0,
+                  "reason": null,
+                  "resident": null,
+                  "source_id": "plain",
+                  "stalled": false,
+                  "state": null
+                }
+              ],
+              "sync_on_commit": false
+            },
+            "elapsed_ms": "<volatile>",
+            "message": "sync.on_commit is off; residents still run explicit sync requests. notifier for default: none running; idle; notifier for notes: none running; idle; notifier for plain: none running; idle.",
+            "name": "commit_notifier",
+            "severity": "info",
             "status": "ok"
           },
           {
@@ -3690,7 +3730,7 @@
           {
             "category": "brain",
             "elapsed_ms": "<volatile>",
-            "message": "No retrieval-affecting files changed in working tree.",
+            "message": "1 retrieval-affecting file(s) changed since HEAD: src/core/search/vector-statement.ts. Re-run `gbrain eval run-all` after committing these changes.",
             "name": "eval_drift",
             "status": "ok"
           },
@@ -3967,14 +4007,14 @@
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "Active pack gbrain-base-v2@1.4.0+1c5ba903 is current (no successor declared)",
+            "message": "Active pack gbrain-base-v2@1.5.0+4604112a is current (no successor declared)",
             "name": "pack_upgrade_available",
             "status": "ok"
           },
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "5 distinct typed values (pack gbrain-base-v2 declares 21)",
+            "message": "5 distinct typed values (pack gbrain-base-v2 declares 23)",
             "name": "type_proliferation",
             "status": "ok"
           },
@@ -5333,14 +5373,14 @@
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "1450 column(s) verified against live schema",
+            "message": "1488 column(s) verified against live schema",
             "name": "schema_columns",
             "status": "ok"
           },
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "All 170 table(s) the applied migrations create exist.",
+            "message": "All 173 table(s) the applied migrations create exist.",
             "name": "schema_missing_tables",
             "status": "ok"
           },
@@ -5760,6 +5800,7 @@
               "preparation_policy": {
                 "maintenance_preparation_ms": "<volatile>",
                 "max_preparation_attempts": 2,
+                "max_transient_retries": 5,
                 "preparation_ceiling_ms": "<volatile>",
                 "sync_preparation_ms": "<volatile>"
               },
@@ -6743,6 +6784,7 @@
                 "no_remote": 1,
                 "pages_at_risk": 0,
                 "recoverable_repos": 0,
+                "remote_timeouts": 0,
                 "unpushed": 0
               }
             },
@@ -6898,6 +6940,44 @@
             "elapsed_ms": "<volatile>",
             "message": "No commit→searchable samples in the last 24 h (no managed sync imported a new commit).",
             "name": "managed_sync_latency",
+            "status": "ok"
+          },
+          {
+            "category": "brain",
+            "details": {
+              "docs": "docs/guides/on-commit-sync.md",
+              "sources": [
+                {
+                  "pending_markers": 0,
+                  "reason": null,
+                  "resident": null,
+                  "source_id": "default",
+                  "stalled": false,
+                  "state": null
+                },
+                {
+                  "pending_markers": 0,
+                  "reason": null,
+                  "resident": null,
+                  "source_id": "notes",
+                  "stalled": false,
+                  "state": null
+                },
+                {
+                  "pending_markers": 0,
+                  "reason": null,
+                  "resident": null,
+                  "source_id": "plain",
+                  "stalled": false,
+                  "state": null
+                }
+              ],
+              "sync_on_commit": false
+            },
+            "elapsed_ms": "<volatile>",
+            "message": "sync.on_commit is off; residents still run explicit sync requests. notifier for default: none running; idle; notifier for notes: none running; idle; notifier for plain: none running; idle.",
+            "name": "commit_notifier",
+            "severity": "info",
             "status": "ok"
           },
           {
@@ -7988,7 +8068,7 @@
           {
             "category": "brain",
             "elapsed_ms": "<volatile>",
-            "message": "No retrieval-affecting files changed in working tree.",
+            "message": "1 retrieval-affecting file(s) changed since HEAD: src/core/search/vector-statement.ts. Re-run `gbrain eval run-all` after committing these changes.",
             "name": "eval_drift",
             "status": "ok"
           },
@@ -8265,14 +8345,14 @@
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "Active pack gbrain-base-v2@1.4.0+1c5ba903 is current (no successor declared)",
+            "message": "Active pack gbrain-base-v2@1.5.0+4604112a is current (no successor declared)",
             "name": "pack_upgrade_available",
             "status": "ok"
           },
           {
             "category": "meta",
             "elapsed_ms": "<volatile>",
-            "message": "5 distinct typed values (pack gbrain-base-v2 declares 21)",
+            "message": "5 distinct typed values (pack gbrain-base-v2 declares 23)",
             "name": "type_proliferation",
             "status": "ok"
           },

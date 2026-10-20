@@ -55,6 +55,7 @@ const EXEMPT: Record<string, string> = {
   'src/core/persistence/loop-fact-retirement.ts': 'expires a loop fact (lifecycle)',
   'src/core/persistence/memory-mutations.ts': 'forget (lifecycle); remember is gated in memory-prepare.ts',
   'src/core/repair/captured-facts.ts': 'owner repair of existing rows',
+  'src/core/repair/consolidate-ties.ts': 'owner repair reopening the validity of existing facts (lifecycle)',
   'src/core/repair/extractor-facts.ts': 'owner repair of existing rows',
   'src/core/repair/facts-rehome.ts': 'owner repair moving existing facts onto their entity page (placement)',
   'src/core/repair/frontmatter.ts': 'owner repair of existing frontmatter',

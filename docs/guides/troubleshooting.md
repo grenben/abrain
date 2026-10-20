@@ -12,13 +12,16 @@
 
 | Symptom | Next step | Who acts | Consent | Verify |
 |---|---|---|---|---|
+| A withdrawal committed but a large page's file still shows the withdrawn row; writer status lists its mirror parked with [`segmented_mirror_writer_gate`](write-refusals.md#segmented_mirror_writer_gate), or an effect retrying with [`recovery_version_unsupported`](write-refusals.md#recovery_version_unsupported) (or `effect_unavailable` on v0.60.290.0) holds every write on the worktree | `gbrain upgrade` on the hosts the refusal or a doctor `segmented_storage` warning names (for `recovery_version_unsupported`, the owner host; doctor's information case, this host's own superseded pre-upgrade writes, does not hold the mirror), then restart their serve, sync and worker processes. A gated mirror resumes by itself once the older writes are 7 days old; never delete a recovery record or its staging file | brain host | none | `gbrain sources writer status --source <source> --json` shows no parked or retrying mirror |
 | The dream cycle's purge phase fails every night with `managed_purge_failed` (`42P01`, relation `query_cache` does not exist), or doctor `schema_missing_tables` warns | upgrade (#6911: the purge skips a missing rebuildable cache), then preview recreating it: `gbrain repair missing-tables` ([missing tables](repair.md#missing-tables)); apply the printed `--apply --expect <hash>` command. Pages parked by the earlier failures: `gbrain pages purge-deleted --retry-parked --dry-run`, then without `--dry-run` | agent, after the user agrees | `destructive` (the parked-page retry purges them) | `gbrain doctor --only schema_missing_tables --json` reports ok |
 | A managed source's autopilot freshness `sync` jobs each land about one page, or `sources status` says `parked` while a sync job runs | upgrade (#6706: sync jobs drain to their deadline and count as the source's live drain), then restart `gbrain jobs work` / the supervisor so the worker loads the handler; a job result with `incomplete: true` names its follow-up (`continuation_job_id`) or the next step in `next` | agent | none | `gbrain sync status --source <id> --json` shows `live_job_id` or a cursor at `done`; `gbrain jobs get <id> --json` shows `outcome` |
+| A classic `gbrain sync` with pull returns `partial` / `pull_failed` on every run after the upstream was force-pushed, and doctor `sync_failures` names `upstream_rewritten`, `upstream_unknown` or `upstream_diverged` | follow the check's `fix` ([upstream rewritten](#upstream-rewritten)): `upstream_diverged` runs `gbrain git commit-push --pull --path <checkout>`; `upstream_rewritten` and `upstream_unknown` preview `gbrain sources reset-upstream <id> --expect-local <sha> --expect-upstream <sha> --dry-run`, then run it without `--dry-run`; then `gbrain sync --source <id>` | agent; the reset after the user agrees | `destructive` (the reset; the old history is kept under a backup ref) | `gbrain doctor --only sync_failures --json` no longer names the source |
 | Doctor `sync_freshness` says a source has "no successful sync recorded" or "first sync running" | follow the check's `fix`: `first sync running` (code `sync_first_run_in_progress`, warn) means wait; `no successful sync recorded` (code `sync_no_successful_sync`, fail) names the last attempt and its `reason`: wait for a queued job, inspect holds (`gbrain sync status --source <id> --json`), or retry (`gbrain sync --source <id>`) ([details](#sync-freshness-no-successful-sync)) | agent | none | `gbrain doctor --only sync_freshness --json` |
 | Recall returns conversation facts like "Date said …", "Attendees said …" or "Summary said …" | `gbrain repair conversation-labels` previews them ([conversation labels](repair.md#conversation-labels)); apply the printed command with `--yes` | agent, after the user agrees | `destructive` | `gbrain doctor --only conversation_label_facts --json` is ok |
 | Conversation facts are dated 1970-01-01 | same preview: `gbrain repair conversation-labels` (an undated page's pre-fix facts carry a `segment 1970-01-01` context); add a `date:` to the page frontmatter before re-extracting it | agent, after the user agrees | `destructive` | `gbrain doctor --only conversation_label_facts --json` is ok |
 | `remember` or `put_page` refused `source_changed` "The canonical file contains an uncoordinated local edit" on many pages nobody edited, or doctor `lost_caller_writes` warns | upgrade to v0.60.157.0 or later (a database-only v0.13.1 `validate: false` stamp was read as a file edit, #6429); then `gbrain repair failed-writes --source <id>` previews the refused writes and prints the apply command ([failed writes](repair.md#failed-writes)) | agent; the apply after the user agrees | none to preview | `gbrain doctor --only lost_caller_writes --json` is ok |
 | A write (`add_timeline_entry`, `put_page`, `remember`, any `mutating` tool) refused `invalid_params` "unknown parameter … write operations always reject unknown parameters; nothing was written" | the call named a parameter the tool does not declare (for example `content` instead of `detail`); the `suggestion` names the submitted key and the declared one; resend with the declared name. Reads keep the `mcp.strict_params` warn grace period | agent | none | the resent call returns no `invalid_params` and no `unknown_param` warning |
+| `gbrain config set chat_model` (or `expansion_model`) printed `[config] WARN: … outranks it, so the model in use does not change`, or its `--json` says `effective: false` | the value is stored in the database, but `shadowed_by` names what wins at runtime (never its value): a `models.*` key (`gbrain config unset <that key>`, after asking: it may select other models too), an environment variable (`GBRAIN_MODEL`, `GBRAIN_CHAT_MODEL`, `GBRAIN_EXPANSION_MODEL`: the user removes it from their shell profile or service environment), or the `config.json` pin (`gbrain config unset chat_model --file` removes only the pin) | agent for the config changes, after the user agrees; user for an environment variable | none | `gbrain config get chat_model` reports `source: db plane`, and a repeat `config set … --json` says `effective: true` |
 | Facts extraction or embedding reports `(cause=AIConfigError model_not_found)` or `gbrain models doctor` says `model_not_found` while the key is valid | the provider refused the model, not the key (a 404, or a 403 "project does not have access to model"): the fix text names the config key that selected the model when the gateway knows it ("Selected via models.tier.reasoning. Fix: gbrain config set …"; an env var or config.json pin says what to clear); otherwise check the model id with `gbrain models`, enable the model for the project in the provider console or set another model (`gbrain config set models.facts <provider:model>`) | user (provider console); agent for the config change, after the user agrees | none | `gbrain models doctor` reports the model `ok` |
 | Doctor `links_extraction_lag` or sync says "N page(s) have un-extracted edges" | `gbrain extract --stale --dry-run --json`, then on the host `gbrain extract --stale --catch-up [--source-id <id>]` | user above 120 s, else agent | none | dry run: `actionable: 0` |
 | Doctor `links_extraction_lag` says "N page(s) failed link extraction 3 runs in a row and are held", or `extract --stale` lists failed pages | Read each page's code (`unknown_source`: the page's source row is gone; restore the source or delete the page), fix the cause, then `gbrain extract --stale [--source-id <id>] --retry-held` | agent | none | `gbrain extract --stale --dry-run --json`: `held: 0` |
@@ -117,6 +120,8 @@ Turning the `preparation_deadlines` switch off (`gbrain config set persistence.p
 <a id="pglite-aborted"></a>**PGLite crashes at startup with `RuntimeError: Aborted()` (often right after a macOS upgrade)?** Not a macOS incompatibility — the OS-upgrade reboot killed gbrain mid-write and tore the data dir's WAL. gbrain repairs this automatically on the next command (data preserved, backup kept); if auto-repair is disabled or skipped, run `gbrain pglite-repair --dry-run` to diagnose and `gbrain pglite-repair --yes` to repair in place. Full recovery ladder (repair → rebuild → engine switch) in [`docs/ENGINES.md` — Troubleshooting: startup abort](../ENGINES.md#troubleshooting-startup-abort-runtimeerror-aborted) and [`docs/INSTALL.md`](../INSTALL.md#pglite-crashes-at-startup-runtimeerror-aborted).
 
 <a id="embedding-dimensions"></a>**`gbrain import` fails with `expected N dimensions, not M`?** Run `gbrain doctor`. It will print the exact `gbrain config set ...` or `gbrain migrate embeddings` command to repair the mismatch (`migrate embeddings` re-embeds through the provider: effect `paid`, ask the user first). You should not need to delete `~/.gbrain`. Fresh `gbrain init --pglite` auto-detects your embedding provider from API keys: set `VOYAGE_API_KEY` (or `OPENAI_API_KEY` / another provider key) in the environment — or in `~/.gbrain/config.json`, which init also reads — before running init, or pass `--embedding-model <provider>:<model>` explicitly. With multiple keys set, init fires an interactive picker (non-TTY auto-picks the Voyage default when its key is present). With no keys at all, init continues keyless (keyword-only search) with a loud notice; add a key later and re-run `gbrain init --force --embedding-model voyage:voyage-4` to enable embeddings (effects: `credentials` and `paid`, since every page is embedded through the provider; it needs the brain's writer lock, so stop a running `gbrain serve` first; pages and facts are kept), or pass `--no-embedding` up front to make keyless explicit. `gbrain config get embedding_disabled` reports whether embedding is off and which plane says so (the config file and the database setting; `true` on either turns it off); `gbrain config set embedding_disabled true|false` and `gbrain config unset embedding_disabled` change both, and the `init --force --embedding-model` enable path clears both. See [`docs/integrations/embedding-providers.md`](../integrations/embedding-providers.md) for the full provider matrix and [`docs/operations/headless-install.md`](../operations/headless-install.md) for Docker/CI sequencing.
+
+<a id="embed-backfill-skipped"></a>**A sync job or `embed-backfill` job reports `embed_backfill_skipped` (reason `embedding_disabled`)?** Nothing is wrong: the brain is keyless by choice (`embedding_disabled`), so sync queues no embed-backfill and a backfill already queued ends on its first attempt without reading a page. Search stays keyword-only. The notice appears once per brain state (the first skip after the brain became keyless); its fix is the optional step that turns embedding on and names the provider key it needs (effects `credentials` and `paid`: ask the user first).
 
 **`gbrain doctor` warns `default_source_local_path`?** Your `default` source has no `local_path` AND that null pointer is provably breaking write-through (the repo fallback is another source's own working tree, or file-backed default pages have no resolvable root). A null `local_path` on its own is the designed fallback topology and reports ok. The repair is a pointer update, never a file move: `gbrain sources set-path default <path>` prints the prior value before changing it and refuses a path that nests inside or swallows another source's tree (exit 6; `--force` bypasses). **Say to your agent:** *"Run a brain health check and fix what you find"* — the maintain skill runs `gbrain doctor` and applies the printed repair.
 
@@ -618,6 +623,46 @@ Automatic event extraction is on by default. See the
 three-step check, and the skip codes. `gbrain doctor` reports it as the
 `auto_chronicle` check. To turn it off, run
 `gbrain config set auto_chronicle false`.
+
+## Upstream rewritten
+
+<a id="upstream-rewritten"></a>
+
+**Say to your agent:** *"My brain repo's remote was force-pushed and sync keeps saying the pull failed. Fix it without losing anything."*
+
+A classic source that syncs with pull fast-forwards its checkout to the
+upstream. When that is impossible, the sync still imports local HEAD (nothing
+is blocked) and records what it found; the sync result (`upstream` in
+`gbrain sync --json`), `gbrain sources status <id> --json` and doctor
+`sync_failures` report it with the next step. It is never a sync-failure ledger
+row, and the next pull that fast-forwards (or finds nothing to do) clears it.
+Before every fetch the sync records the upstream commit the checkout contains,
+so the cases are told apart:
+
+- `upstream_rewritten`: the upstream commit the checkout last contained is not in
+  the new upstream history, so someone force-pushed. A merge would bring back
+  the commits that push removed, so the fix is a reset after the user agrees:
+  preview `gbrain sources reset-upstream <id> --expect-local <sha> --expect-upstream <sha> --dry-run`
+  (doctor prints the exact command), then run it without `--dry-run` and
+  `gbrain sync --source <id>`.
+- `upstream_unknown`: the checkout and upstream diverged and nothing usable was
+  recorded (the first pull after an upgrade, after an earlier fetch already
+  brought the rewrite in). Same fix; the preview names any local commit that
+  was never on the upstream.
+- `upstream_diverged`: the checkout has its own commits and the upstream moved
+  forward normally. Run `gbrain git commit-push --pull --path <checkout>`, then
+  `gbrain sync --source <id>`.
+
+Nothing is classified while a rebase, merge, cherry-pick or revert is in
+progress in the checkout. `reset-upstream` takes the checkout's commit lock
+and changes nothing (`reset_upstream_refused`) when HEAD or the upstream moved
+since the command was printed (`expect_mismatch`: sync again for a fresh
+command), when tracked files have uncommitted edits (`dirty_tree`), or when a
+local commit was never on the upstream (`local_commits`: it names them and the
+backup ref a reset would create; push or re-apply them first). Otherwise it
+keeps the old HEAD under `refs/gbrain/backup/<UTC stamp>-<sha>`, runs
+`git reset --keep` to the upstream and verifies HEAD before it reports
+`reset`. To get the old history back: `git log <backup ref>`.
 
 ## Sync freshness: no successful sync recorded
 

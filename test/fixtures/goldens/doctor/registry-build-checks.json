@@ -771,6 +771,10 @@
       },
       {
         "category": "brain",
+        "name": "commit_notifier"
+      },
+      {
+        "category": "brain",
         "name": "git_convergence"
       },
       {

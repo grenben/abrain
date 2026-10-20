@@ -183,8 +183,9 @@ function readArtifact(hash: string, command: string): Map<string, PlannedPage> {
  * path (`not_selected` counts the pages they leave out), before the class check and the bound; an exact selection
  * is narrowed by the plan from the same live check.
  */
-async function selectSlugs(engine: BrainEngine, sourceId: string, opts: RepairPlanOptions): Promise<{ slugs: string[]; classes: Map<string, DriftClass>; notSelected: number }> {
+async function selectSlugs(engine: BrainEngine, sourceId: string, opts: RepairPlanOptions): Promise<{ slugs: string[]; classes: Map<string, DriftClass>; notSelected: number; unknown: UnknownDrift[] }> {
   const classes = new Map<string, DriftClass>();
+  const unknown: UnknownDrift[] = [];
   if (opts.allDrifted) {
     const drifted: string[] = [];
     let notSelected = 0;
@@ -192,8 +193,9 @@ async function selectSlugs(engine: BrainEngine, sourceId: string, opts: RepairPl
     do {
       const page = await auditDriftConflicts(engine, sourceId, { trusted: true, excludePrivate: false }, { limit: 100, cursor });
       for (const row of page.conflicts) {
-        if (row.still_present.value !== true) continue;
+        if (row.still_present.value === false) continue;
         if (!selectedByGlobs(row.path, opts) || !sinceSelects(row.last_seen, opts.since)) { notSelected++; continue; }
+        if (row.still_present.value === null) { unknown.push({ slug: row.slug, reason: row.still_present.reason }); continue; }
         drifted.push(row.slug); classes.set(row.slug, row.class ?? 'error');
       }
       cursor = page.next ?? undefined;
@@ -206,7 +208,7 @@ async function selectSlugs(engine: BrainEngine, sourceId: string, opts: RepairPl
         `Preview one class at a time: ${previewCommand(sourceId, { ...opts, driftClass: [...counts.keys()][0] })}, and so on for each class; or name pages with --slug.`,
         { fix: readFix('Lists the drifted pages with their drift class, read-only.', { argv: ['gbrain', 'sources', 'reconcile', sourceId, '--brain', 'host', '--audit', '--conflicts', '--json'] }) });
     }
-    return { slugs: drifted.filter(slug => !opts.driftClass || classes.get(slug) === opts.driftClass), classes, notSelected };
+    return { slugs: drifted.filter(slug => !opts.driftClass || classes.get(slug) === opts.driftClass), classes, notSelected, unknown };
   }
   const slugs = new Set(opts.slugs ?? []);
   if (opts.requests?.length) {
@@ -219,7 +221,19 @@ async function selectSlugs(engine: BrainEngine, sourceId: string, opts: RepairPl
       { fix: readFix('Lists the conflict receipts of this source grouped by slug, read-only.', { argv: ['gbrain', 'sources', 'reconcile', sourceId, '--brain', 'host', '--audit', '--conflicts', '--json'] }) });
     for (const row of rows) slugs.add(row.slug);
   }
-  return { slugs: [...slugs].sort(), classes, notSelected: 0 };
+  return { slugs: [...slugs].sort(), classes, notSelected: 0, unknown };
+}
+
+/** #6991: a conflicted page the live check could not classify; it is listed and counted, never repaired. */
+interface UnknownDrift { slug: string; reason: string }
+
+function unknownDriftDetail(sourceId: string, { slug, reason }: UnknownDrift): string {
+  const kept = 'Not classified or repaired.';
+  if (reason === 'not_owner_host') return `${reason}: ${kept} Run the drift audit for source ${sourceId} on its active canonical owner host.`;
+  if (reason === 'page_missing') return `${reason}: ${kept} The page is gone from the database; decide its content by hand, no --prefer applies to it.`;
+  if (reason === 'canonical_file_missing') return `${reason}: ${kept} Its canonical file is missing; preview it alone with --slug ${slug} to choose a side.`;
+  if (reason === 'error') return `${reason}: ${kept} The live check failed unexpectedly; rerun gbrain sources reconcile ${sourceId} --audit --conflicts --json.`;
+  return `${reason}: ${kept} The live check refused; preview it alone with --slug ${slug} to see the refusal.`;
 }
 
 function validateOptions(scope: RepairScope, opts: RepairPlanOptions | undefined): asserts opts is RepairPlanOptions & { prefer: DriftSide } {
@@ -263,7 +277,12 @@ async function survey(engine: BrainEngine, scope: RepairScope, opts: Pick<Repair
     do {
       const page = await auditDriftConflicts(engine, sourceId, { trusted: true, excludePrivate: false }, { limit: 100, cursor });
       for (const row of page.conflicts) {
-        if (row.still_present.value !== true || !sinceSelects(row.last_seen, opts.since)) continue;
+        if (row.still_present.value === false || !sinceSelects(row.last_seen, opts.since)) continue;
+        if (row.still_present.value === null) {
+          residuals[`unknown_${row.still_present.reason}`] = (residuals[`unknown_${row.still_present.reason}`] ?? 0) + 1;
+          listing.push({ item: `${sourceId}:${row.slug}`, class: 'unknown', detail: unknownDriftDetail(sourceId, { slug: row.slug, reason: row.still_present.reason }) });
+          continue;
+        }
         const kind = row.class ?? 'error';
         counts.set(kind, (counts.get(kind) ?? 0) + 1);
         residuals[`drifted_${kind}`] = (residuals[`drifted_${kind}`] ?? 0) + 1;
@@ -373,12 +392,16 @@ export const fileDriftRepair: RepairHandler = {
       const items = approved.items.map((page, index) => item(page, index, opts.expect!, index === approved.items.length - 1, opts.prefer));
       return { items: items.filter(entry => afterCursor(entry.cursor, after)), preview_hash: opts.expect, residuals: {} };
     }
-    const { slugs, classes, notSelected } = await selectSlugs(engine, sourceId, opts);
+    const { slugs, classes, notSelected, unknown } = await selectSlugs(engine, sourceId, opts);
     const assessmentAt = new Date().toISOString();
     const pages: PlannedPage[] = [];
     const listing: NonNullable<RepairPlan['listing']> = [];
     const residuals: Record<string, number> = notSelected ? { not_selected: notSelected } : {};
     const count = (key: string) => { residuals[key] = (residuals[key] ?? 0) + 1; };
+    for (const row of unknown) {
+      count(`unknown_${row.reason}`);
+      listing.push({ item: `${sourceId}:${row.slug}`, class: 'unknown', detail: unknownDriftDetail(sourceId, row) });
+    }
     await asLocalCli(engine, async () => {
       for (const slug of slugs) {
         try {

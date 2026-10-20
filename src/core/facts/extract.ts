@@ -676,6 +676,10 @@ export async function extractFactsFromTurnWithOutcome(
       maxTokens,
       abortSignal: input.abortSignal,
       responseSchema,
+      // The system prompt is identical across consecutive calls (everything
+      // per-call rides in userContent), so bulk extraction reads it from the
+      // provider's prompt cache instead of paying full input for it each time.
+      cacheSystem: true,
     });
     // #2113: never checked pre-fix — a truncated response (stopReason
     // 'length', e.g. reasoning tokens eating the cap on mandatory-reasoning
@@ -695,6 +699,7 @@ export async function extractFactsFromTurnWithOutcome(
         maxTokens: effectiveMaxTokens,
         abortSignal: input.abortSignal,
         responseSchema,
+        cacheSystem: true,
       });
       if (result.stopReason === 'length') {
         process.stderr.write(
@@ -729,6 +734,8 @@ export async function extractFactsFromTurnWithOutcome(
       'retrying once with an explicit JSON-only reminder\n',
     );
     try {
+      // No cacheSystem: the appended note makes this system block differ from
+      // every other call's, so a cache write here would never be read.
       result = await chat({
         model,
         system: `${extractorSystem}\nThe previous attempt returned invalid JSON or an invalid facts schema. ` +

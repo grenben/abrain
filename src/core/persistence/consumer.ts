@@ -784,14 +784,14 @@ export class PersistenceConsumer implements PersistenceConsumerLike {
   }
   status() {
     const drain = this.draining;
-    const { deadlines, syncMs, maintenanceMs, ceilingMs, maxAttempts } = this.policy;
+    const { deadlines, syncMs, maintenanceMs, ceilingMs, maxAttempts, transientRetries } = this.policy;
     return { accepting: !this.stopping, active_preparations: this.active.size, active_worktrees: this.activeRoots.size,
       sampled_at: new Date().toISOString(), observation_scope: 'current_process_reset_on_restart',
       preparation_attempts: this.preparationAttempts,
       phase: this.phaseObservation ? { ...this.phaseObservation, ...this.phaseTiming(this.phaseObservation, this.phaseStartedAt) } : null,
       preparations: [...this.preparing.values()].map(value => ({ ...value })),
       // #6278: deadlines in effect, preparations whose claim was released while they still ran, and the zombies past the ceiling.
-      preparation_policy: { deadlines, sync_preparation_ms: syncMs, maintenance_preparation_ms: maintenanceMs, preparation_ceiling_ms: ceilingMs, max_preparation_attempts: maxAttempts },
+      preparation_policy: { deadlines, sync_preparation_ms: syncMs, maintenance_preparation_ms: maintenanceMs, preparation_ceiling_ms: ceilingMs, max_preparation_attempts: maxAttempts, max_transient_retries: transientRetries },
       abandoned_preparations: this.abandoned.size,
       outlived_ceiling: [...this.zombies.values()].map(value => ({ ...value })),
       restart_required: this.restartRequired(),
@@ -1070,8 +1070,9 @@ export class PersistenceConsumer implements PersistenceConsumerLike {
       // A managed import batch also groups on PGLite: its members share one transaction's guards there too.
       if (!group || this.engine.kind !== 'postgres' && !group.startsWith('import:')) return this.execute(row, root);
       // #6007: a put_pages or import batch publishes in groups of at most PAGE_BATCH_GROUP_MAX pages.
-      const followers = await claimGroupFollowers(this.engine, row, group, syncGroup(group) ? 63 : PAGE_BATCH_GROUP_MAX - 1);
-      if (!followers.length && !lane) return this.execute(row, root);
+      const charged = (row.transient_interruptions ?? 0) > 0;
+      const followers = charged ? [] : await claimGroupFollowers(this.engine, row, group, syncGroup(group) ? 63 : PAGE_BATCH_GROUP_MAX - 1);
+      if (!followers.length && !lane && !charged) return this.execute(row, root);
       claimed.push(...followers);
       const rows = [row, ...followers];
       for (const member of rows) this.executing.add(member.id);

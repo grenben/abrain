@@ -33,6 +33,7 @@ import { schemaAdmissionRefusal } from './schema-admission.ts';
 import { CAPACITY_VERIFY } from './capacity-verify.ts';
 import { readManagedMode } from './managed-mode.ts';
 import { localHostId } from './identity.ts';
+import { BACKOFF_ELAPSED } from './transient-retry.ts';
 import { segmentWriteScope } from '../page-body/ingest.ts';
 import {
   isTerminal, principalKey, requestPrincipal, recoveryFiles,
@@ -463,9 +464,11 @@ export async function claimGroupFollowers(engine: BrainEngine, head: WriteReques
     // #5984 G6: only the group's candidate prefix is locked. Locking every next row also held a foreground write's row
     // (the first non-member) for the claim's round trips, so its recovery record and reads waited on the lane.
     const next = await tx.executeRaw<{ id: string; state: string; grp: string | null; recovering: boolean; claim_phase: unknown }>(`WITH next AS (
-        SELECT id,sequence,state,${GROUP_KEY_SQL} AS grp,recovery IS NOT NULL AS recovering FROM persistence_requests
+        SELECT id,sequence,state,${GROUP_KEY_SQL} AS grp,recovery IS NOT NULL AS recovering,NOT ${BACKOFF_ELAPSED('persistence_requests')} AS backoff,transient_interruptions>0 AS charged FROM persistence_requests
         WHERE worktree_id=$1::uuid AND sequence>$2 AND (state IN ('queued','running','recovering') OR recovery IS NOT NULL) ORDER BY sequence LIMIT $3),
-      bound AS (SELECT min(sequence) AS sequence FROM next WHERE grp IS DISTINCT FROM $4 OR state<>'queued' OR recovering)
+      -- v291: a member still in its transient backoff ends the group's prefix like a non-member, and so does one already
+      -- charged a transient interruption: it publishes alone, so a batch that overruns only as a whole is not retried as one.
+      bound AS (SELECT min(sequence) AS sequence FROM next WHERE grp IS DISTINCT FROM $4 OR state<>'queued' OR recovering OR backoff OR charged)
       SELECT r.id,r.state,${GROUP_KEY_SQL} AS grp,r.recovery IS NOT NULL AS recovering,r.claim_phase
       FROM persistence_requests r WHERE r.id IN (SELECT id FROM next WHERE sequence<COALESCE((SELECT sequence FROM bound),9223372036854775807))
       ORDER BY r.sequence FOR UPDATE OF r`, [head.worktree_id, head.sequence, max, group]);
@@ -630,6 +633,7 @@ export const claimableWriteSql = (priority: string, laneRoots = "'{}'::text[]") 
         AND mirror.kind='withdrawal-mirror' AND mirror.state IN ('queued','running')
         AND (NOT (mirror.data ? 'targets') OR mirror.data->'targets' @> jsonb_build_array(jsonb_build_object('slug',r.slug))))
       AND NOT EXISTS (SELECT 1 FROM persistence_requests blocked WHERE blocked.worktree_id=r.worktree_id AND blocked.recovery IS NOT NULL)
+      AND ${BACKOFF_ELAPSED('r')}
       AND NOT EXISTS (SELECT 1 FROM persistence_requests earlier
         WHERE r.worktree_id IS NOT NULL AND earlier.worktree_id=r.worktree_id AND ${EARLIER_HEAD('earlier', 'r', priority, laneRoots)})
       AND NOT EXISTS (SELECT 1 FROM persistence_requests earlier
@@ -759,7 +763,7 @@ export async function claimNextLaneHead(engine: BrainEngine, hostId: string, wor
     await declarePersistenceProtocol(tx);
     const [row] = await tx.executeRaw<WriteRequest>(`SELECT r.* FROM persistence_requests r
       JOIN persistence_worktrees w ON w.id=r.worktree_id
-      WHERE r.worktree_id=$2::uuid AND r.state='queued' AND r.intent->>'lane'=$3 AND r.intent->>'group'=r.request_id::text
+      WHERE r.worktree_id=$2::uuid AND r.state='queued' AND ${BACKOFF_ELAPSED('r')} AND r.intent->>'lane'=$3 AND r.intent->>'group'=r.request_id::text
         AND w.owner_host_id=$1::uuid AND w.state='active' AND ${refreshFenceClear('r')}
         AND NOT EXISTS (SELECT 1 FROM persistence_effects blocked WHERE blocked.worktree_id=r.worktree_id AND blocked.recovery IS NOT NULL)
         AND NOT EXISTS (SELECT 1 FROM persistence_effects mirror WHERE mirror.worktree_id=r.worktree_id
@@ -892,12 +896,13 @@ export async function clearResolvedRecoveries(engine: BrainEngine, rows: WriteRe
   for (const row of resolved) if (!cleared.has(row.id)) await clearResolvedRecovery(engine, row.id);
 }
 
-/** #6007: claims again a request this owner pass released to the queue itself, while it still holds the worktree's native lock. */
+/** #6007: claims again a request this owner pass released to the queue itself, while it still holds the worktree's native lock; never before its backoff (LPH b). */
 export async function reclaimReleasedWrite(engine: BrainEngine, id: string, leaseMs = 30_000): Promise<WriteRequest | null> {
   const token = randomUUID();
   const [claimed] = await engine.executeRawDirect<WriteRequest>(`UPDATE persistence_requests SET state='running',execution_token=$2::uuid,
     claim_expires_at=now()+($3::double precision*interval '1 millisecond'),updated_at=now(),blocked_reason=NULL,claim_phase=$4::text::jsonb
-    WHERE id=$1::uuid AND state='queued' AND recovery IS NULL AND ${PERSISTENCE_PROTOCOL_PREDICATE} RETURNING *`, [id, token, leaseMs, claimPhaseStamp(startClaimPhase(), token)]);
+    WHERE id=$1::uuid AND state='queued' AND recovery IS NULL AND ${BACKOFF_ELAPSED('persistence_requests')} AND ${PERSISTENCE_PROTOCOL_PREDICATE} RETURNING *`,
+  [id, token, leaseMs, claimPhaseStamp(startClaimPhase(), token)]);
   return claimed ?? null;
 }
 

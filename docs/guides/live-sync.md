@@ -112,7 +112,8 @@ Timing knobs the drain uses:
 | `persistence.maintenance_preparation_ms` | One maintenance write's preparation (fact-fence adoption, maintenance page writes). | 120000 | As above; a maintenance write gets a terminal `preparation_stalled` receipt (no hold). |
 | `persistence.preparation_ceiling_ms` | Hard ceiling for a preparation that ignores cancellation (any kind), from claim start. | 600000 (60000–3600000, at least the largest budget plus 30 s) | The owner frees the root, sets the request's attempts to the limit (its next claim finishes it `preparation_stalled`), and stops claiming once it holds one such stuck preparation (`restart_required` in its log line). |
 | `persistence.max_preparation_attempts` | Deadline releases (and reclaims after a kill while preparing) one request may spend. | 2 (1–10) | The next claim finishes it `preparation_stalled` without preparing again. |
-| `preparation_deadlines` write switch (`persistence.preparation_deadlines`, `GBRAIN_PREPARATION_DEADLINES`) | Kill switch for the four keys above and the attempt counter. `remember`, `put_page` and `edit_page` keep their own 30 s budget either way. | on | `gbrain config set persistence.preparation_deadlines false` (or `GBRAIN_PREPARATION_DEADLINES=0`) restores the previous behaviour exactly: no deadline on sync or maintenance writes, no counter, no `preparation_stalled` holds. A running `serve` picks the change up within 5 seconds. |
+| `persistence.max_transient_retries` | Transient interruptions one request is retried after: a statement the database ended with `57014`, or a publication cancelled past `persistence.publication_ceiling_ms`. Lock timeouts, serialization failures, deadlocks and lost connections are never counted. | 5 (0–20) | Each interruption schedules the next claim after 1 s, 2 s, 4 s, 8 s, then 15 s (no claim is held while it waits); the next one past the limit finishes the request `write_interrupted` and the sync holds the file. |
+| `preparation_deadlines` write switch (`persistence.preparation_deadlines`, `GBRAIN_PREPARATION_DEADLINES`) | Kill switch for the five keys above and both counters. `remember`, `put_page` and `edit_page` keep their own 30 s budget either way. | on | `gbrain config set persistence.preparation_deadlines false` (or `GBRAIN_PREPARATION_DEADLINES=0`) restores the previous behaviour exactly: no deadline on sync or maintenance writes, no counter, no `preparation_stalled` holds. A running `serve` picks the change up within 5 seconds. |
 | Page write wait | One page's (or group's) publication before the drain re-checks. | 30 s inside a drain (5 s, checkpoint 8 s, for a single pass) | The drain re-enters; this is not a stop. |
 | `sync` job deadline | A managed `sync` Minions job's drain: its `timeout_ms` (autopilot stamps `max(2 × --interval, 300 s)`), or the queue's wall-clock limit for a job without one, capped at an hour, less a 60 s reserve. `sync.job_drain=false` (or job data `drain: false`) keeps the single pass. | per job | Stops as `resumable` / `deadline`; on a worker-backed brain a stop that is safe to repeat queues one follow-up job (`continuation_job_id`). |
 | `GBRAIN_SYNC_BULK_MAX_TXN_MS` (was `sync.bulk_max_txn_ms`, retired in 0.60.266.0) | Target time per bulk group; sizes the next group from the last one's time per page. | 15000 | A smaller next group. |
@@ -167,6 +168,8 @@ therefore prefers one full consumer per host:
   `sources`, `cli`) keep their own consumer for the life of their write, because
   the owner's wake is in-process only and a waiter-only `gbrain put` would often
   return `writer_pending`.
+- An idle `gbrain jobs work` on Postgres starts its consumer at boot (#7002), so
+  it takes over queued writes when the host's `serve` stops.
 - This is a preference, not a fenced role. Two processes that start within one
   heartbeat of each other can both start full, and a sync CLI that took its
   consumer before the `serve` started keeps it for that run; doctor reports the
@@ -291,6 +294,11 @@ on repeated failures.
 ```bash
 gbrain sync --watch --repo /data/brain
 ```
+
+### Autopilot and the jobs worker
+
+The autopilot daemon is HEAD-driven and an idle `gbrain jobs work` wakes on a queued sync; see
+[on-commit-sync.md](on-commit-sync.md#autopilot-and-the-jobs-worker).
 
 ### Approach 3: Git Hook / Webhook
 

@@ -57,6 +57,7 @@ import { capturedFactsRepair } from './captured-facts.ts';
 import { loopFactsRepair } from './loop-facts.ts';
 import { ontologyFactsRepair } from './ontology-facts.ts';
 import { factsRehomeRepair } from './facts-rehome.ts';
+import { consolidateTiesRepair } from './consolidate-ties.ts';
 import { orphanChildrenRepair } from './orphan-children.ts';
 import { failedWritesRepair } from './failed-writes.ts';
 import { frontmatterRepair } from './frontmatter.ts';
@@ -76,6 +77,7 @@ import { renameIdentityRepair, RENAME_IDENTITY_CONSENT_TEXT } from './rename-ide
 import { overwrittenEditsRepair } from './overwritten-edits.ts';
 import { missingTablesRepair } from './missing-tables.ts';
 import { urlCloneFencesRepair } from './url-clone-fences.ts';
+import { segmentedMirrorRepair } from './segmented-mirror.ts';
 import { ERROR_CATALOGUE, catalogueError } from '../error-catalogue.ts';
 import type { OperationError } from '../ops/contract.ts';
 
@@ -245,6 +247,14 @@ const SPECS: Record<RepairKind, Omit<RepairKindSpec, 'kind'>> = {
       + 'page-less slug with its class; ambiguous, unverified, unresolved and fence-owned slugs are listed and never moved. Preview-bound: --apply '
       + '--expect <hash> moves exactly the previewed database-only facts; a slug that gained a page, lost its target or whose facts changed reports '
       + 'changed_since_preview. Database-only; no page is rewritten.',
+  },
+  'consolidate-ties': {
+    handler: consolidateTiesRepair, embeds: 'none', checks: [], explicit_only: true, preview_bound: true,
+    summary: 'Reopen typed facts that dream consolidation closed at their own effective time (#6023): before this release a cluster whose typed claims '
+      + 'stated one metric, unit and period for the same instant was promoted anyway, and the fact that lost the confidence tie got a zero-length '
+      + 'validity. The preview lists each such fact with its tied partners and take. Preview-bound: --apply --expect <hash> sets exactly the previewed '
+      + 'facts back to open validity and keeps their consolidation mark; a fact that was expired, edited or reopened reports changed_since_preview. '
+      + 'Database-only; no page is rewritten.',
   },
   'orphan-children': {
     handler: orphanChildrenRepair, embeds: 'none', checks: ['child_table_orphans'], explicit_only: true,
@@ -436,6 +446,22 @@ const SPECS: Record<RepairKind, Omit<RepairKindSpec, 'kind'>> = {
       + 'rows gbrain appended; any other difference (a user edit, a staged change, a deleted file) is named and left untouched. --apply --expect <hash> --yes, '
       + 'per previewed file: back it up, keep its appended rows database-only in one transaction, import HEAD\'s bytes as the page, then restore the file '
       + 'from HEAD. Unmanaged brains only (a managed brain uses gbrain sources mirror-readonly). Runs only when named.',
+  },
+  'segmented-mirror': {
+    handler: segmentedMirrorRepair, embeds: 'none', checks: [], explicit_only: true, preview_bound: true, consent: 'destructive',
+    consentText: {
+      what: 'Rewrite the previewed canonical files of pages stored in segments without their withdrawn or purged rows',
+      why: 'The preview listed each file an older binary left holding a row a withdrawal or purge removed from the database; the apply rewrites each one to the page\'s canonical render through the withdrawal mirror.',
+      risk: 'Each listed file is replaced by the bytes gbrain export writes for its page (other formatting differences in it are normalized the same way). A file that changed since the preview refuses the apply (preview_changed), and one that differs from the database for any other reason is never rewritten. The Git effect commits the change; the old bytes stay in earlier commits.',
+      user_message: 'Rewrite the previewed page files without their withdrawn rows? Each becomes the page\'s canonical render',
+    },
+    summary: 'Re-mirror the canonical files of pages stored in segments whose withdrawal mirror an older binary (before v0.60.299.0) passed by '
+      + '(skipped page_body_segmented), so the file still holds a row forget, forget_fact or purge_fact removed from the database. The preview, '
+      + 'on the source\'s owner host and in bounded memory, lists each file-backed segmented page whose file is an older render: it passes the '
+      + 'mirror\'s own file/database check and still holds a withdrawn or purged row; it prints the path, the file\'s SHA-256 and size and those '
+      + 'of the canonical render (gbrain export\'s bytes). A file that differs from the database for another reason is listed held '
+      + '(file_database_drift) and never rewritten. Preview-bound and destructive: --apply --expect <hash> --yes re-checks each page and commits, per '
+      + 'page, one receipted request whose withdrawal-mirror and Git effects rewrite and commit the file. Runs only when named; never on upgrade.',
   },
 };
 

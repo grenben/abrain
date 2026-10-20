@@ -126,6 +126,7 @@ import { missingRecordedFilesEntry } from './checks/missing-recorded-files.ts';
 import { overwrittenEditsEntry } from './checks/overwritten-edits.ts';
 import { managedSyncMovementEntry } from './checks/managed-sync-movement.ts';
 import { managedSyncLatencyEntry } from './checks/managed-sync-latency.ts';
+import { commitNotifierEntry } from './checks/commit-notifier.ts';
 import { managedSyncConvergenceEntry } from './checks/managed-sync-convergence.ts';
 import { managedSyncBlockedEntry } from './checks/managed-sync-blocked.ts';
 import { atomHeldFailedEntry } from './checks/atom-holds.ts';
@@ -230,6 +231,7 @@ export const DOCTOR_CHECK_REGISTRY: readonly DoctorEntry[] = [
   imageEmbeddingCoverageEntry,
   syncFreshnessEntry,
   managedSyncLatencyEntry,
+  commitNotifierEntry,
   gitConvergenceEntry,
   decideHealthEntry,
   unlinkedFactsEntry,

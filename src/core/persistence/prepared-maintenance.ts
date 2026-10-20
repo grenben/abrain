@@ -32,6 +32,7 @@ import { isConnectorSourceKind } from './connector-identity.ts';
 import { MaintenanceWriteWait } from './maintenance-wait.ts';
 import { auditConflictsCommand, FILE_DRIFT_MESSAGE, liveFileDrift } from './drift-conflicts.ts';
 import { declaredWriteTrust, lowerToDerivedTier, readDerivationDeclaration, recordTaintEdges, type DerivationDeclaration } from '../trust/taint.ts';
+import { sameInstantTies } from '../facts/claim-ties.ts';
 
 export interface MaintenanceAuthority {
   writer: WriteAuthority;
@@ -545,6 +546,11 @@ async function prepareMaintenanceKind(engine: BrainEngine, row: WriteRequest, co
   const p = row.intent;
   const facts = p.facts as FactSnapshot[];
   const pages = p.pages as EvidencePage[];
+  if (sameInstantTies(facts.map(f => ({ id: f.id, at: Date.parse(String(f.value.valid_from)), metric: (f.value.claim_metric as string | null) ?? null,
+    unit: (f.value.claim_unit as string | null) ?? null, period: (f.value.claim_period as string | null) ?? null }))).length) {
+    return { observedRevision: p.expected_revision as string, noop: true, apply: async () => ({ status: 'skipped', reason: 'same_instant_typed_claims', noop: true,
+      facts_consolidated: 0, takes_written: 0 }) };
+  }
   const [existing] = await engine.executeRaw<{ id: number; row_num: number; active: boolean; resolved_at: unknown }>(
     "SELECT id,row_num,active,resolved_at FROM takes WHERE page_id=$1 AND claim=$2 AND kind='fact' AND holder='self' ORDER BY id LIMIT 1", [row.page_id, p.claim]);
   if (existing && (!existing.active || existing.resolved_at)) {

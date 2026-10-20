@@ -4,6 +4,7 @@ import type { BrainEngine } from '../engine.ts';
 import { loadConfig, loadConfigWithEngine } from '../config.ts';
 import { loadOperatorLiterals } from '../content-sanity-literals.ts';
 import { parseMarkdown } from '../markdown.ts';
+import { alignWithStored } from './align-stored.ts';
 import { parseDataFrontmatter } from '../data-frontmatter.ts';
 import { OperationError, opError } from '../ops/contract.ts';
 import { readFix } from '../ops/op-fix.ts';
@@ -214,7 +215,7 @@ export async function readReconcileState(engine: BrainEngine, sourceId: string, 
   const importPath = scannerSourcePath(root, path, mode);
   const reading = reconcileFileReading(text, importPath, snapshot.page);
   const parsed = parseMarkdown(reading.content, `${slug}.md`, { validate: true, expectedSlug: slug });
-  if (reading.inferred) parsed.type = snapshot.page.type;
+  alignWithStored(parsed, snapshot.page, reading.inferred);
   const errors = parsed.errors?.filter(e => !['MISSING_OPEN', 'MISSING_CLOSE', 'EMPTY_FRONTMATTER'].includes(e.code)) ?? [];
   if (!errors.length && !parsed.errors?.some(e => e.code === 'MISSING_CLOSE') && parsed.slug !== slug) {
     // #5966 (W14 P1.7): a well-formed file whose path derives another slug is a legacy render of a slug the
