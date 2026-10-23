@@ -12,7 +12,7 @@ export async function privateGradeMode(engine: BrainEngine, model: string, ensem
   const policy = readPrivateCodexConfig();
   if (!policy) return false;
   assertPrivateRoute(model, 'grade_takes.model', policy);
-  await resolvePrivateModel(engine, { cliFlag: model, tier: 'utility', fallback: policy.model }, policy);
+  await resolvePrivateModel(engine, { privateRole: 'take-grading', cliFlag: model, tier: 'utility', fallback: 'unused' }, policy);
   for (const judge of ensemble ?? []) assertPrivateRoute(judge.modelId, 'grade_takes.ensemble.model', policy);
   return true;
 }

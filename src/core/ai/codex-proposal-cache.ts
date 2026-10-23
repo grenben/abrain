@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { chat, type ChatOpts, type ChatResult } from './gateway.ts';
-import { assertPrivateRoute, readPrivateCodexConfig } from './private-policy.ts';
+import { assertPrivateRoute, readPrivateCodexConfig, requirePrivateRole, privateModelForRole, privatePolicyFingerprint, PrivateRoutingError } from './private-policy.ts';
 import { codexSubscriptionContext } from './subscription-context.ts';
 import { SubscriptionAdmissionError } from './subscription-admission.ts';
 import { prepareCodexSchema } from './providers/codex-schema.ts';
@@ -31,14 +31,16 @@ export function withCodexProposalCache<T>(scope: CodexProposalCacheScope, run: (
 export async function cachedCodexProposal(original: ChatOpts): Promise<CachedCodexProposal> {
   const policy = readPrivateCodexConfig();
   if (!policy) throw new SubscriptionAdmissionError('subscription_required');
-  assertPrivateRoute(original.model ?? policy.model, 'proposal_cache:model', policy);
+  const role = requirePrivateRole(policy, original.privateRole), model = privateModelForRole(policy, role);
+  const policyFingerprint = privatePolicyFingerprint(policy);
+  assertPrivateRoute(original.model ?? model, 'proposal_cache:model', policy, role);
   const spec = original.responseSchema;
   if (!spec?.validateCodexProposal || !/^[A-Za-z0-9._:-]{1,120}$/.test(spec.name) || original.tools?.length ||
       original.providerOptions || original.messages.some(m => typeof m.content !== 'string')) throw new CodexProposalError('invalid_input');
   const prepared = prepareCodexSchema(spec.schema);
   const validateSemantic = spec.validateCodexProposal;
   // Snapshot all wire inputs before an asynchronous lookup. Host semantics remain mandatory.
-  const opts: ChatOpts = { ...original, model: policy.model, allowFallback: false,
+  const opts: ChatOpts = { ...original, privateRole: role, model, allowFallback: false,
     messages: JSON.parse(JSON.stringify(original.messages)), responseSchema: { ...spec, schema: prepared.schema } };
   if (Buffer.byteLength(JSON.stringify([opts.system, opts.messages])) > 180000 ||
       opts.maxTokens !== undefined && (!Number.isSafeInteger(opts.maxTokens) || opts.maxTokens < 16 || opts.maxTokens > 8192) ||
@@ -53,10 +55,16 @@ export async function cachedCodexProposal(original: ChatOpts): Promise<CachedCod
   opts.responseSchema!.validateCodexProposal = validate;
   const context = codexSubscriptionContext();
   if (!context) throw new SubscriptionAdmissionError('subscription_required');
-  const assertAuthority = async () => {
+  const assertPolicy = () => {
     if (context.signal?.aborted || opts.abortSignal?.aborted) throw new CodexProposalError('aborted');
-    assertPrivateRoute(opts.model!, 'proposal_cache:model');
+    const current = readPrivateCodexConfig();
+    if (!current || privatePolicyFingerprint(current) !== policyFingerprint) throw new PrivateRoutingError('proposal_cache:policy_changed');
+    assertPrivateRoute(opts.model!, 'proposal_cache:model', current, role);
+  };
+  const assertAuthority = async () => {
+    assertPolicy();
     await context.checkAuthority?.();
+    assertPolicy();
   };
   const fence = async (tx: BrainEngine) => {
     await context.checkAuthorityInTransaction?.(tx);
@@ -64,7 +72,7 @@ export async function cachedCodexProposal(original: ChatOpts): Promise<CachedCod
       'SELECT deadline > now() AS current FROM codex_subscription_runs WHERE run_id=$1 FOR SHARE', [context.runId]);
     if (!run) throw new SubscriptionAdmissionError('subscription_required');
     if (!run.current) throw new SubscriptionAdmissionError('subscription_exhausted');
-    if (context.signal?.aborted || opts.abortSignal?.aborted) throw new CodexProposalError('aborted');
+    assertPolicy();
   };
   await assertAuthority();
   const scope = scopes.getStore();
@@ -72,9 +80,10 @@ export async function cachedCodexProposal(original: ChatOpts): Promise<CachedCod
   if (!scope) {
     const result = await chat(opts);
     validate(result.text);
+    await assertAuthority();
     return { text: result.text, usage: result.usage, cacheHit: false, billing };
   }
-  const requestHash = digest({ protocol: 'codex-proposal-cache-v1', model: opts.model, system: opts.system,
+  const requestHash = digest({ protocol: 'codex-proposal-cache-v2', role, policyFingerprint, model: opts.model, system: opts.system,
     messages: opts.messages, schema: prepared.schema, version: opts.responseSchema!.name, maxTokens: opts.maxTokens,
     temperature: opts.temperature, thinking: opts.thinking });
   const keys = [scope.namespace, scope.bindingHash, requestHash];

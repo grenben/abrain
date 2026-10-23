@@ -20,7 +20,8 @@
  * AND lose to new-key config when both are set.
  */
 
-import { readPrivateCodexConfig, resolvePrivateModel } from './ai/private-policy.ts';
+import { readPrivateCodexConfig, resolvePrivateModel, privateModelForTier } from './ai/private-policy.ts';
+import type { PrivateRole } from './ai/private-roles.ts';
 import type { ConfigReader } from './config-snapshot.ts';
 import { openrouterModelSupportsSubagentLoop } from './ai/openrouter-families.ts';
 import { splitProviderModelId } from './model-id.ts';
@@ -33,6 +34,8 @@ import { latestOpenAITiers, rankOpenAIChatModels } from './ai/openai-latest.ts';
 export type ModelTier = 'utility' | 'reasoning' | 'deep' | 'subagent';
 
 export interface ResolveModelOpts {
+  /** Trusted feature identity for strict private activation and tier selection. */
+  privateRole?: PrivateRole;
   /** CLI flag value (e.g. `--model opus` → 'opus'). Highest precedence. */
   cliFlag?: string;
   /** New-key config name (e.g. 'models.dream.synthesize'). */
@@ -187,7 +190,7 @@ export function resolveTierDefault(
   env?: Record<string, string | undefined>,
 ): string {
   const privatePolicy = readPrivateCodexConfig();
-  if (privatePolicy) return privatePolicy.model;
+  if (privatePolicy) return privateModelForTier(privatePolicy, tier);
   const fileCfg = env ? null : throwSafeLoadConfig();
   const merged = env ? realEnv(env) : mergedProviderEnv(fileCfg, process.env);
   for (const entry of PROVIDER_TIER_DEFAULTS) {
@@ -436,7 +439,7 @@ export function describeResolveOrigin(
     case 'tier_config': return `models.tier.${opts.tier}`;
     case 'models_default': return 'models.default';
     case 'env': return opts.envVar ?? 'GBRAIN_MODEL';
-    case 'private_default': return 'file:private_codex.model';
+    case 'private_default': return 'file:private_codex';
     case 'tier_default':
     case 'fallback': return 'built-in default';
   }

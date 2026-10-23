@@ -13,7 +13,7 @@ import type { SkillOptOpts } from '../skillopt/types.ts';
 export interface SharedOptimizerInput {
   controls: Record<string, unknown>; target: NonNullable<SkillOptOpts['sharedSkill']>; stageRoot: string;
   files: StoredSkillFile[]; metadata: SkillMetadata; skillText: string; evaluationInputs: string[];
-  mutate: boolean; bundled: boolean; skillsDir: string; model: string; bin: string;
+  mutate: boolean; bundled: boolean; skillsDir: string; model: string; bin: string; policy_fingerprint?: string;
 }
 export interface SharedOptimizerRow {
   run_id: string; request_id: string; protocol: number; input: SharedOptimizerInput; input_hash: string;

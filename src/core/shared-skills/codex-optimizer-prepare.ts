@@ -2,7 +2,7 @@ import { join, resolve } from 'node:path';
 import type { SkillOptOpts } from '../skillopt/types.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privatePolicyBinding, privatePolicyMatchesBinding, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { configDir } from '../config.ts';
 import { digest, requireUuid } from '../persistence/digest.ts';
 import { getSharedSkill } from './catalog.ts';
@@ -29,7 +29,7 @@ export async function prepareCodexSharedSkill(original: SkillOptOpts) {
   let input: SharedOptimizerInput;
   if (prior) {
     input = prior.input;
-    if (digest(input.controls) !== digest(controls) || input.model !== policy.model || input.bin !== policy.bin ||
+    if (digest(input.controls) !== digest(controls) || !privatePolicyMatchesBinding(policy, input) ||
         input.stageRoot !== join(configDir(), 'skillopt-proposals', `codex-${digest(host.runId)}`)) sharedOptimizerConflict();
     await authorizeSharedOptimizer(ctx, opts);
     if (await sharedOptimizerSkillsDir(ctx, target.source_id, target.source_incarnation) !== input.skillsDir) sharedOptimizerConflict();
@@ -42,7 +42,7 @@ export async function prepareCodexSharedSkill(original: SkillOptOpts) {
     input = { controls, target, stageRoot: join(configDir(), 'skillopt-proposals', `codex-${digest(host.runId)}`),
       files: prepared.files, metadata: prepared.stored!.metadata, skillText: prepared.skill.body,
       evaluationInputs: prepared.evaluationInputs.map(b => b.toString('base64')), mutate: prepared.mutate, bundled: prepared.bundled.isBundled,
-      skillsDir: prepared.skillsDir, model: policy.model, bin: policy.bin };
+      skillsDir: prepared.skillsDir, ...privatePolicyBinding(policy) };
   }
   const { cap, modelsPlan, strict } = await preflightNativeOptimizer({ ...opts, operationContext: ctx, sharedSkill: undefined }, {
     skillText: input.skillText, benchmarkText: Buffer.from(input.evaluationInputs[0]!, 'base64').toString('utf8'), benchmarkPath: opts.benchmarkPath,

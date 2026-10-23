@@ -7,7 +7,7 @@ import { digest, jsonBytes } from '../persistence/digest.ts';
 import { ensureLocalOptimizerGrant } from './codex-local-grant.ts';
 import type { BootstrapFiles } from './codex-bootstrap-files.ts';
 import type { BootstrapResult } from './bootstrap-benchmark.ts';
-export interface BootstrapInput { controls: Record<string, unknown>; files: BootstrapFiles; sourceId: string; incarnation: string; model: string; bin: string }
+export interface BootstrapInput { controls: Record<string, unknown>; files: BootstrapFiles; sourceId: string; incarnation: string; model: string; bin: string; policy_fingerprint?: string }
 export interface BootstrapAccepted { output: string; result: BootstrapResult }
 export interface BootstrapRun { run_id: string; protocol: number; input: BootstrapInput; input_hash: string;
   request_id?: string | null; job_id?: number | string | null; owner_token: string | null; lease_until: Date | string | null; result: BootstrapAccepted | null; result_hash: string | null; completed: boolean }

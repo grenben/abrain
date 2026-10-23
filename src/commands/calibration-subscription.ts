@@ -2,7 +2,7 @@ import { declareDurablePersistence } from '../core/persistence/protocol.ts';
 import { digest } from '../core/persistence/digest.ts';
 import { randomUUID } from 'node:crypto';
 import type { OperationContext } from '../core/ops/contract.ts';
-import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { privatePolicyBinding, readPrivateCodexConfig } from '../core/ai/private-policy.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
 import { codexSubscriptionContext, withCodexSubscription, hasAdmittedCodexAttempt } from '../core/ai/subscription-context.ts';
 import { withAIInvocationGuard } from '../core/ai/invocation-guard.ts';
@@ -42,7 +42,7 @@ export async function regenerateCalibration(ctx: OperationContext, args: string[
     const [source] = await tx.executeRaw<{ incarnation: string }>('SELECT incarnation FROM sources WHERE id=$1 AND NOT archived FOR SHARE', [ctx.sourceId ?? 'default']);
     if (!source) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     const prefix = `codex-calibration:${requestId.toLowerCase()}:`;
-    const id = `${prefix}${digest({ holder, sourceId: ctx.sourceId ?? 'default', sourceIncarnation: source.incarnation, model: policy.model, bin: policy.bin })}`;
+    const id = `${prefix}${digest({ holder, sourceId: ctx.sourceId ?? 'default', sourceIncarnation: source.incarnation, ...privatePolicyBinding(policy) })}`;
     const prior = await tx.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`${prefix}%`]);
     if (prior.some(row => row.run_id !== id)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     await createSubscriptionRun(tx, { ...codexSubscription, runId: id, accountLane: CODEX_JOB_ACCOUNT_LANE });

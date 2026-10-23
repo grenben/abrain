@@ -3,7 +3,7 @@ import type { BrainEngine } from '../engine.ts';
 import type { MinionJobContext } from '../minions/types.ts';
 import type { EvalAllowance } from '../../eval/longmemeval/codex-allowance-flags.ts';
 import { loadConfig, loadConfigWithEngine } from '../config.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privatePolicyFingerprint, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { MinionQueue } from '../minions/queue.ts';
@@ -58,7 +58,7 @@ export async function submitCodexSkillOpt(engine: BrainEngine, input: SkillOptJo
     const [source] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [original.sourceId]);
     if (!source || source.archived || source.incarnation !== prepared.source.incarnation) conflict();
     const policy = readPrivateCodexConfig();
-    if (!policy || policy.model !== prepared.policy.model || policy.bin !== prepared.policy.bin) conflict();
+    if (!policy || privatePolicyFingerprint(policy) !== privatePolicyFingerprint(prepared.policy)) conflict();
     const [saved] = await tx.executeRaw<Binding>('SELECT * FROM codex_skillopt_submissions WHERE request_id=$1::uuid FOR UPDATE', [requestId]);
     const queue = new MinionQueue(tx);
     if (saved) {

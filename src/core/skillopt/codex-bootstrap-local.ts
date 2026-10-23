@@ -3,7 +3,7 @@ import type { GuardedBootstrapOpts } from './bootstrap-run.ts';
 import type { EvalAllowance } from '../../eval/longmemeval/codex-allowance-flags.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privatePolicyBinding, privatePolicyMatchesBinding, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { digest } from '../persistence/digest.ts';
 import { assertLegacySkillWriter } from '../skillpack/writer-guard.ts';
 import { BOOTSTRAP_PENDING_REVIEW } from './types.ts';
@@ -28,7 +28,7 @@ export async function runLocalCodexBootstrap(original: GuardedBootstrapOpts, mod
   const [source] = await engine.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1', [sourceId]);
   if (!source || source.archived) bootstrapConflict();
   const input = { controls: { ...opts, skillsDir: resolve(opts.skillsDir), modelPlan, allowance }, files: prepared.files,
-    sourceId, incarnation: source!.incarnation, model: policy.model, bin: policy.bin };
+    sourceId, incarnation: source!.incarnation, ...privatePolicyBinding(policy) };
   if (expectedInputHash !== undefined && digest(input) !== expectedInputHash) bootstrapConflict();
   if (prior && digest(input) !== prior.input_hash) bootstrapConflict();
   if (opts.dryRun) return;
@@ -38,7 +38,7 @@ export async function runLocalCodexBootstrap(original: GuardedBootstrapOpts, mod
     await fenceBootstrapRun(tx, { ...host, signal }, claim, requireTime);
     const current = readPrivateCodexConfig();
     const [source] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [sourceId]);
-    if (!source || source.archived || source.incarnation !== input.incarnation || !current || current.model !== input.model || current.bin !== input.bin) bootstrapConflict();
+    if (!source || source.archived || source.incarnation !== input.incarnation || !current || !privatePolicyMatchesBinding(current, input)) bootstrapConflict();
   };
   try {
     reportOptimizerAllowance();

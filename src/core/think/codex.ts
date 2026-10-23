@@ -2,7 +2,7 @@ import type { BrainEngine } from '../engine.ts';
 import type { RunThinkOpts, ThinkResponse, ThinkResult } from './index.ts';
 import type { ThinkGatherResult } from './gather.ts';
 import { chat } from '../ai/gateway.ts';
-import { readPrivateCodexConfig, PrivateRoutingError } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, PrivateRoutingError, privateModelForTier } from '../ai/private-policy.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { hasAIInvocationGuard, withAIInvocationPreflight, isAIInvocationPolicyError } from '../ai/invocation-guard.ts';
@@ -28,8 +28,9 @@ export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, 
   if (context.signal?.aborted) throw new CodexProposalError('aborted');
   const decide = readDecideConfig(pickDecideConfig(await loadConfigSnapshot(engine)) ?? {});
   const policy = readPrivateCodexConfig()!;
-  if (Object.values(decide.slots).some(slot => slot.mode !== 'off' && slot.provider !== `llm:${policy.model}`) ||
-    decide.egressFallback !== 'none' && decide.egressFallback !== `llm:${policy.model}`)
+  const classifierModel = privateModelForTier(policy, 'utility');
+  if (Object.values(decide.slots).some(slot => slot.mode !== 'off' && slot.provider !== `llm:${classifierModel}`) ||
+    decide.egressFallback !== 'none' && decide.egressFallback !== `llm:${classifierModel}`)
     throw new PrivateRoutingError('think:decide.slots');
   const auxiliaryAuthorized = hasAIInvocationGuard();
   let denied: SubscriptionAdmissionError | undefined;
@@ -57,7 +58,7 @@ export async function proposeCodexThink(input: { model: string; system: string; 
   for (const take of input.gather.takes) {
     const set = sources.get(take.page_slug) ?? new Set<number>(); set.add(take.page_id); sources.set(take.page_slug, set);
   }
-  const result = await chat({ model: input.model, allowFallback: false, timeoutMs: 120000, maxTokens: 4096,
+  const result = await chat({ privateRole: 'think', model: input.model, allowFallback: false, timeoutMs: 120000, maxTokens: 4096,
     system: input.system, messages: [{ role: 'user', content: input.prompt }], responseSchema: {
       name: 'codex-think-v1', schema: { type: 'object', additionalProperties: false, required: ['evidence_hash','answer','citations','gaps'], properties: {
         evidence_hash: { type: 'string', enum: [evidenceHash] }, answer: { type: 'string', maxLength: 24000 },

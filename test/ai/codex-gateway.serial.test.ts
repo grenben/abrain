@@ -18,6 +18,7 @@ import { runDecide } from '../../src/core/ai/decide/index.ts';
 import { readDecideConfig } from '../../src/core/ai/decide/config.ts';
 import { llmCapability } from '../../src/core/ai/decide/providers/llm-structured.ts';
 import { PNG_PIXEL, JPEG_PIXELS, WEBP_PIXELS, syntheticPng } from '../helpers/codex-image-fixtures.ts';
+import { cachedCodexProposal, withCodexProposalCache } from '../../src/core/ai/codex-proposal-cache.ts';
 const root=mkdtempSync(join(tmpdir(),'codex-gateway-')); const bin=join(root,'fixture.mjs'), capture=join(root,'capture.jsonl');
 const saved=Object.fromEntries(['GBRAIN_HOME','HOME','CODEX_HOME'].map(k=>[k,process.env[k]]));
 const originalFetch=globalThis.fetch;
@@ -29,6 +30,15 @@ const withRun = async <T>(run:()=>Promise<T>,maxAttempts=5) => {
   await createSubscriptionRun(engine,{runId,accountLane:'fixture-account',maxAttempts,maxTurns:maxAttempts,deadline:new Date(Date.now()+600_000)});
   return withCodexSubscription({engine,runId},run);
 };
+const tieredPolicy = () => ({ mode: 'strict', bin, models: {
+  utility: 'codex-cli:utility-test', reasoning: 'codex-cli:reasoning-test',
+  deep: 'codex-cli:deep-test', subagent: 'codex-cli:action-test',
+}, enabled_roles: ['chat', 'think', 'query-expansion', 'ocr', 'iterative-minions'] });
+const savePolicy = (private_codex: unknown) => {
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ embedding_disabled: true, private_codex }));
+  configureGateway({ env: {}, embedding_model: 'openai:text-embedding-3-small' });
+};
+const restoreScalarPolicy = () => savePolicy({ mode: 'strict', model: 'codex-cli:gpt-test', bin });
 beforeAll(async()=>{
   engine=new PGLiteEngine();
   process.env.GBRAIN_HOME=root;process.env.HOME=root;process.env.CODEX_HOME=root;
@@ -59,6 +69,84 @@ afterAll(async()=>{
   await engine.disconnect();unregister?.();globalThis.fetch=originalFetch;
   for(const [k,v] of Object.entries(saved)) if(v===undefined) delete process.env[k];else process.env[k]=v;
   resetGateway();rmSync(root,{recursive:true,force:true});
+});
+// Public gateway + actual fake executable prove that tier selection survives
+// dispatch, and revoked roles cannot accept or replay a proposal. Scalar tests
+// cannot expose this regression; existing executable registration is sufficient.
+test('tiered adapter passes the role model to the executable, including expansion and OCR', async () => {
+  savePolicy(tieredPolicy());
+  try {
+    for (const [role, expected] of [['chat', 'reasoning-test'], ['think', 'deep-test'], ['iterative-minions', 'action-test']] as const) {
+      const result = await withRun(() => chat({ privateRole: role, messages: [{ role: 'user', content: 'synthetic' }] }));
+      expect(result.model).toBe(`codex-cli:${expected}`);
+      const last = JSON.parse(readFileSync(capture, 'utf8').trim().split('\n').at(-1)!);
+      expect(last.args[last.args.indexOf('--model') + 1]).toBe(expected);
+    }
+    await withRun(() => expand('synthetic'));
+    await withRun(() => generateOcrText(PNG_PIXEL, 'image/png'));
+    for (const line of readFileSync(capture, 'utf8').trim().split('\n').slice(-2)) {
+      const { args } = JSON.parse(line);
+      expect(args[args.indexOf('--model') + 1]).toBe('utility-test');
+    }
+  } finally { restoreScalarPolicy(); }
+});
+test('a role revoked during inference is billed as attempted but never accepted', async () => {
+  savePolicy(tieredPolicy());
+  try {
+    await withRun(async () => {
+      const before = readFileSync(capture, 'utf8').trim().split('\n').length;
+      const pending = chat({ privateRole: 'think', messages: [{ role: 'user', content: 'hold-first' }] })
+        .then(result => ({ result }), error => ({ error }));
+      const deadline = Date.now() + 3000;
+      while (readFileSync(capture, 'utf8').trim().split('\n').length === before && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 5));
+      expect(readFileSync(capture, 'utf8').trim().split('\n').length).toBe(before + 1);
+      savePolicy({ ...tieredPolicy(), enabled_roles: ['chat'] });
+      expect(await pending).toMatchObject({ error: { source: 'dispatch:policy_changed' } });
+    });
+    const [row] = await engine.executeRaw<{ attempts: number; accepted_turns: number }>(
+      'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [`gateway-${seq - 1}`]);
+    expect(row).toMatchObject({ attempts: 1, accepted_turns: 0 });
+  } finally { restoreScalarPolicy(); }
+});
+test('cached proposals cannot bypass role activation, even when two tiers share a model', async () => {
+  const shared = { ...tieredPolicy(), models: { ...tieredPolicy().models, deep: 'codex-cli:reasoning-test' } };
+  savePolicy(shared);
+  const options = { privateRole: 'think' as const, messages: [{ role: 'user' as const, content: 'cached synthetic' }],
+    responseSchema: { name: 'role-cache-fixture', schema: { type: 'object', properties: { answer: { type: 'string' } },
+      required: ['answer'], additionalProperties: false }, validateCodexProposal: (text: string) => { expect(JSON.parse(text).answer).toBe('bounded'); } } };
+  try {
+    await withRun(() => withCodexProposalCache({ namespace: 'role-cache', bindingHash: 'a'.repeat(64) }, async () => {
+      expect((await cachedCodexProposal(options)).cacheHit).toBe(false);
+      expect((await cachedCodexProposal(options)).cacheHit).toBe(true);
+      savePolicy({ ...shared, enabled_roles: ['chat'] });
+      await expect(cachedCodexProposal(options)).rejects.toMatchObject({ code: 'private_role_disabled' });
+    }));
+  } finally { restoreScalarPolicy(); }
+});
+// A revocation inside an awaited authority check happens after the initial
+// policy read; the preceding synchronous revocation case cannot expose it.
+// The existing host authority hook is sufficient; no test-only runtime seam.
+test('cached acceptance rechecks permission after awaited authority work', async () => {
+  savePolicy(tieredPolicy());
+  const options = { privateRole: 'think' as const, messages: [{ role: 'user' as const, content: 'cached async synthetic' }],
+    responseSchema: { name: 'role-cache-await-fixture', schema: { type: 'object', properties: { answer: { type: 'string' } },
+      required: ['answer'], additionalProperties: false }, validateCodexProposal: (text: string) => { expect(JSON.parse(text).answer).toBe('bounded'); } } };
+  const scope = { namespace: 'role-cache-await', bindingHash: 'b'.repeat(64) };
+  try {
+    await withRun(() => withCodexProposalCache(scope, () => cachedCodexProposal(options)));
+    const before = readFileSync(capture, 'utf8');
+    const runId = `gateway-${seq++}`;
+    await createSubscriptionRun(engine, { runId, accountLane: 'fixture-account', maxAttempts: 1, maxTurns: 1,
+      deadline: new Date(Date.now() + 600_000) });
+    let checks = 0;
+    await expect(withCodexSubscription({ engine, runId, checkAuthority: async () => {
+      await Promise.resolve();
+      if (++checks === 2) savePolicy({ ...tieredPolicy(), enabled_roles: ['chat'] });
+    } }, () => withCodexProposalCache(scope, () => cachedCodexProposal(options))))
+      .rejects.toMatchObject({ source: 'proposal_cache:policy_changed' });
+    expect(readFileSync(capture, 'utf8')).toBe(before);
+  } finally { restoreScalarPolicy(); }
 });
 test('USD-only admission never starts unpriced inference',async()=>{
   await expect(chat({messages:[{role:'user',content:'synthetic'}]})).rejects.toMatchObject({code:'subscription_required'});

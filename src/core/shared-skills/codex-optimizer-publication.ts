@@ -5,7 +5,7 @@ import { admitWrite, admitWriteInTransaction, type WriteAdmission } from '../per
 import { declareDurablePersistence } from '../persistence/protocol.ts';
 import { OperationError } from '../ops/contract.ts';
 import { digest } from '../persistence/digest.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privatePolicyMatchesBinding, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { readSharedOptimizer, sharedOptimizerConflict, type SharedOptimizerClaim } from './codex-optimizer-store.ts';
 const publication = new AsyncLocalStorage<{ engine: BrainEngine; claim: SharedOptimizerClaim; fence(tx: BrainEngine): Promise<void> }>();
 export function withSharedOptimizerPublication<T>(scope: NonNullable<ReturnType<typeof publication.getStore>>, run: () => Promise<T>): Promise<T> {
@@ -43,7 +43,7 @@ export async function authorizeSharedOptimizerWrite(engine: SqlEngine, input: Wr
   const [live] = await engine.executeRaw(`SELECT p.run_id FROM codex_shared_skill_optimizations p JOIN codex_subscription_runs r USING(run_id)
     WHERE p.run_id=$1 AND p.owner_token IS NOT NULL AND p.lease_until>now() AND r.deadline>now()${lock ? ' FOR SHARE OF p,r' : ''}`, [row!.run_id]);
   const policy = readPrivateCodexConfig();
-  if (!live || !policy || policy.model !== row!.input.model || policy.bin !== row!.input.bin) lost();
+  if (!live || !policy || !privatePolicyMatchesBinding(policy, row!.input)) lost();
 }
 export async function authorizeSharedOptimizerRequest(engine: SqlEngine, row: WriteRequest, lock: boolean): Promise<void> {
   if (typeof row.intent?.codex_shared_optimizer !== 'string') {

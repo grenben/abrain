@@ -6,7 +6,7 @@ import { buildSkillOptJobData, skillOptJobOptions } from './job.ts';
 import { collectSkillsWithBenchmarks } from './batch.ts';
 import { prepareCodexSkillOpt } from './codex-run.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privatePolicyFingerprint, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { loadConfig, loadConfigWithEngine } from '../config.ts';
 import { resolveSourceWithTier } from '../source-resolver.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
@@ -108,7 +108,7 @@ export async function submitCodexSkillOptBatch(engine: BrainEngine, original: Co
       return job!;
     }
     const policy = readPrivateCodexConfig();
-    if (!policy || boundPolicy && (policy.model !== boundPolicy.model || policy.bin !== boundPolicy.bin)) conflict();
+    if (!policy || boundPolicy && (privatePolicyFingerprint(policy) !== privatePolicyFingerprint(boundPolicy))) conflict();
     if (sourceIncarnation) {
       const [currentSource] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [originalScope.sourceId]);
       if (!currentSource || currentSource.archived || currentSource.incarnation !== sourceIncarnation) conflict();

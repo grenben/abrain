@@ -1,7 +1,7 @@
 import type { SkillOptOpts } from '../skillopt/types.ts';
 import type { RunSkillOptResult } from '../skillopt/orchestrator.ts';
 import { withCodexSubscription } from '../ai/subscription-context.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privatePolicyFingerprint, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { getWriteRequest, assertReplayIntent, intentDigest } from '../persistence/journal.ts';
 import { authorizeStoredRequest } from '../persistence/authority.ts';
 import { waitForWrite, writeResponse } from '../persistence/service.ts';
@@ -22,7 +22,7 @@ export async function optimizeCodexSharedSkill(original: SkillOptOpts, run: (opt
   const fence = async (tx: typeof engine) => {
     await fenceSharedOptimizer(tx, host, claim);
     await authorizeSharedOptimizer({ ...ctx, engine: tx }, { ...opts, engine: tx });
-    const current = readPrivateCodexConfig(); if (!current || current.model !== policy.model || current.bin !== policy.bin) sharedOptimizerConflict();
+    const current = readPrivateCodexConfig(); if (!current || privatePolicyFingerprint(current) !== privatePolicyFingerprint(policy)) sharedOptimizerConflict();
   };
   try {
     if (prior?.response) return prior.response;

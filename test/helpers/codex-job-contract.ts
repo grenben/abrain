@@ -540,6 +540,32 @@ test('source incarnation, payload and configured route changes invalidate the bi
   await expect(runWithJobSpend(engine, job, ctxFor(job), call)).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
   expect(count()).toBe(0);
 });
+// Scalar route changes above cannot catch revocation or a different tier moving
+// while the reasoning model stays unchanged. Exercise the real queue binding.
+// Existing queue/worker entrypoints suffice; no additional production seam.
+test('tiered job binding rejects changed activation and non-reasoning model pins', async () => {
+  const models = { utility: 'codex-cli:utility-test', reasoning: 'codex-cli:gpt-test',
+    deep: 'codex-cli:deep-test', subagent: 'codex-cli:action-test' };
+  const setPolicy = (enabled_roles = ['chat', 'enrichment'], deep = models.deep) =>
+    writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ private_codex: {
+      mode: 'strict', bin, models: { ...models, deep }, enabled_roles,
+    } }));
+  setPolicy();
+  const job = await claimed();
+  let entered = 0;
+  const run = () => runWithJobSpend(engine, job, ctxFor(job), async () => { entered++; });
+  // Reordering the same set is not a policy change.
+  setPolicy(['enrichment', 'chat']);
+  await run(); expect(entered).toBe(1);
+  setPolicy(['chat']);
+  await expect(run()).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  setPolicy(['chat', 'enrichment'], 'codex-cli:deep-other');
+  await expect(run()).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  // Reverting to the legacy scalar shape cannot adopt tiered work either.
+  config();
+  await expect(run()).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(entered).toBe(1); expect(count()).toBe(0);
+});
 test('disabling private mode does not reinterpret an authorized job as API work', async () => {
   const job = await claimed(); config(false);
   let ran = false;

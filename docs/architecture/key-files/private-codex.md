@@ -7,6 +7,15 @@
 
 ## Experimental private Codex source
 
+The [role development workstreams](../../development/private-codex-role-workstreams.md)
+define the 21-core/18-extended split and the tiered policy contract.
+`private-policy.ts` accepts explicit tier pins and enabled roles while retaining
+legacy scalar identities; `private-roles.ts` assigns each role a tier.
+Gateway `ChatOpts.privateRole` and direct dispatcher `role` carry trusted caller
+identity. Dispatch acceptance and proposal caches bind role and complete policy;
+queue/recovery bindings use the policy fingerprint for tiered configurations.
+This shared foundation does not establish feature-level or live acceptance.
+
 - `src/core/skillopt/codex-cycle.ts` — private scheduled phase through the real batch coordinator, explicit trusted source/read scope and inherited subscription admission. `codex-cycle-config.ts` validates configuration; `codex-cycle-store.ts` retains frozen selection and source/incarnation cooldowns backed by actual batch receipts; `codex-cycle-context.ts` prevents unrelated workflows from adopting cycle identities. Migration v286 (`codex-cycle-schema.ts`) has storage parity. `cycle-phase.ts` retains default-off and legacy behavior; `cycle.ts` threads explicit source/deadline. `test/helpers/codex-skillopt-cycle-contract.ts` covers dispatcher, queued maintenance, partial publication and honest stamp behavior. See [scheduled cycles](../../development/private-codex-skillopt-cycles.md).
 
 - `src/core/ai/providers/codex-proposal.ts` — ephemeral structured proposal adapter; native schema/image files, validated lifecycle, typed failures and conservative scratch cleanup. `codex-input.ts` snapshots/validates input before admission, `codex-schema.ts` rejects unsupported schemas and validates results, `codex-images.ts` and `codex-image-containers.ts` validate full containers, `codex-image-decode.ts` verifies JPEG/WebP pixels; `codex-png.ts` checks PNG chunks, bounded inflation and decoded pixels before admission, `codex-lifecycle.ts` separates transport events from application JSON, `codex-process.ts` settles process groups and places production Linux runtimes in a PID namespace, `codex-contract.ts` owns limits/failure types, `codex-runtime.ts` owns fixed argv and host instructions, and `codex-model-catalog.ts` writes the per-call direct-mode, no-native-action model profile. `codex-qualification.ts` has no qualified production runtime; its Linux production admission checks root-owned system and namespace-launcher paths and absence of `/etc/codex`, while fake-executable hashes are registered only by tests.

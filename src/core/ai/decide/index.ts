@@ -19,7 +19,7 @@ import {
   applyOpenAICompatConfig, applyResolveAuth, authToHeaders, chat, decideTransport, getCurrentBudgetTracker, requireConfig,
 } from '../gateway.ts';
 import { invokeAI, isAIInvocationPolicyError, responseInvocationUsage } from '../invocation-guard.ts';
-import { readPrivateCodexConfig, PrivateRoutingError, assertPrivateRoute } from '../private-policy.ts';
+import { readPrivateCodexConfig, PrivateRoutingError, assertPrivateRoute, privateModelForRole } from '../private-policy.ts';
 import { SubscriptionAdmissionError } from '../subscription-admission.ts';
 import { CodexProposalError } from '../providers/codex-contract.ts';
 import { recordOnTracker } from '../budget-record.ts';
@@ -88,9 +88,10 @@ export async function runDecide(req: DecideRequest, ctx: DecideContext): Promise
   const provider = req.provider ?? cfg.slots[req.slot].provider;
   const privateCodex = readPrivateCodexConfig();
   if (privateCodex) {
-    if (provider !== `llm:${privateCodex.model}` || cfg.egressFallback !== 'none' && cfg.egressFallback !== provider)
+    const model = privateModelForRole(privateCodex, 'classifiers');
+    if (provider !== `llm:${model}` || cfg.egressFallback !== 'none' && cfg.egressFallback !== provider)
       throw new PrivateRoutingError('decide:provider');
-    assertPrivateRoute(privateCodex.model, 'decide:provider', privateCodex);
+    assertPrivateRoute(model, 'decide:provider', privateCodex, 'classifiers');
   }
   const lane = req.lane ?? SLOT_SPECS[req.slot].lane;
   const kind = providerKind(provider);
@@ -277,6 +278,7 @@ async function runLlm(req: DecideRequest, cfg: DecideConfig, a: RunArgs): Promis
     await runBatches(plan.length, async (i) => {
       const questions = plan[i]!.indices.map((j) => a.ordered[j]!);
       const reply = await chat({
+        privateRole: 'classifiers',
         model, system: LLM_SYSTEM_PROMPT, messages: [{ role: 'user', content: buildLlmPrompt(a.state, questions) }],
         ...(capability === 'structured' ? { responseSchema: model.startsWith('codex-cli:') ? codexDecideSchema(questions) : LLM_ANSWER_SCHEMA } : {}),
         temperature: 0, abortSignal: signal, purpose: `decide:${req.slot}`, maxTokens: 64 + questions.length * 96,

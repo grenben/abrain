@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../core/engine.ts';
-import { readPrivateCodexConfig, resolvePrivateModel } from '../core/ai/private-policy.ts';
+import { privatePolicyBinding, privatePolicyFingerprint, readPrivateCodexConfig, resolvePrivateModel } from '../core/ai/private-policy.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../core/ai/subscription-context.ts';
 import { assertSubscriptionTarget } from '../core/ai/subscription-target.ts';
@@ -76,7 +76,7 @@ export async function withEnrichSubscription<T>(engine: BrainEngine, flags: Enri
   const bound = await selectedSources(engine, sourceIds);
   const sourceCheck = async (db: BrainEngine) => {
     const current = readPrivateCodexConfig();
-    if (!current || current.model !== policy.model || current.bin !== policy.bin ||
+    if (!current || privatePolicyFingerprint(current) !== privatePolicyFingerprint(policy) ||
         digest(await selectedSources(db, sourceIds)) !== digest(bound)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     await resolvePrivateModel(db, { cliFlag: identity.params.model as string | undefined,
       configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, current);
@@ -106,7 +106,7 @@ export async function withEnrichSubscription<T>(engine: BrainEngine, flags: Enri
   }
   const grant = parseGrant(flags);
   const claim = { protocol: 'codex-enrich-cli-v1', identity, sourceIds, sources: bound,
-    model: policy.model, bin: policy.bin, auxiliaryMaxUsd: identity.auxiliaryMaxUsd ?? null };
+    ...privatePolicyBinding(policy), auxiliaryMaxUsd: identity.auxiliaryMaxUsd ?? null };
   const prefix = `codex-enrich:${grant.requestId}:`;
   const runId = prefix + digest(claim);
   await engine.transaction(async tx => {
@@ -157,12 +157,12 @@ export async function queuePrivateEnrich(engine: BrainEngine, flags: EnrichAllow
     await lockSources(tx, sourceIds);
     const sources = await selectedSources(tx, sourceIds);
     const current = readPrivateCodexConfig();
-    if (!current || current.model !== policy.model || current.bin !== policy.bin) {
+    if (!current || privatePolicyFingerprint(current) !== privatePolicyFingerprint(policy)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     const prefix = `codex-enrich-batch:${grant.requestId}:`;
     const runId = prefix + digest({ protocol: 'codex-enrich-batch-v1', identity, sources,
-      model: policy.model, bin: policy.bin, auxiliaryMaxUsd: identity.auxiliaryMaxUsd ?? null });
+      ...privatePolicyBinding(policy), auxiliaryMaxUsd: identity.auxiliaryMaxUsd ?? null });
     const prior = await tx.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`${prefix}%`]);
     if (prior.some(row => row.run_id !== runId)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
     await createSubscriptionRun(tx, { ...grant, runId, accountLane: CODEX_JOB_ACCOUNT_LANE });

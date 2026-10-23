@@ -2,7 +2,7 @@ import type { BrainEngine } from '../engine.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError, type SubscriptionEnvelope } from '../ai/subscription-admission.ts';
 import { withCodexSubscription, hasAdmittedCodexAttempt, codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { withAIInvocationGuard } from '../ai/invocation-guard.ts';
-import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, PrivateRoutingError } from '../ai/private-policy.ts';
+import { privatePolicyBinding, readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, PrivateRoutingError } from '../ai/private-policy.ts';
 import { authorityDigest, authorizeJobExecution } from './submission-authority.ts';
 import { rowToMinionJob, type MinionJob, type MinionJobContext } from './types.ts';
 import { jobMayGenerate } from './subscription-job-kinds.ts';
@@ -76,7 +76,7 @@ async function runIdentity(engine: BrainEngine, job: MinionJob): Promise<string>
     sourceIncarnation = source.incarnation;
   }
   return `codex-job:${job.id}:${contextual ? 'v2' : 'v1'}:${authorityDigest({ name: job.name, data, authority: job.submission_authority,
-    model: policy.model, bin: policy.bin, sourceCreatedAt, sourceIncarnation })}`;
+    ...privatePolicyBinding(policy), sourceCreatedAt, sourceIncarnation })}`;
 }
 
 /** Must run inside the queue insertion transaction, including every coalescing path. */

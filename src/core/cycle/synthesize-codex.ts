@@ -2,7 +2,7 @@ import { remainingSynthesisSubmissions, reserveSynthesisSubmission } from './syn
 import { resolve } from 'node:path';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
-import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, privateModelForRole } from '../ai/private-policy.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { maintenanceCallerPreflight, maintenancePreflight, validateMaintenance } from '../persistence/prepared-maintenance.ts';
@@ -72,7 +72,7 @@ export async function runPrivateSynthesize(engine: BrainEngine, opts: Synthesize
       if (triage.judged > 0 || verdict?.worth) processed++;
       if (!verdict || verdict.deferred || verdict.unreliable || verdict.score === null) { deferred++; continue; }
       if (!verdict.worth) continue;
-      const pages = await proposeSynthesis({ ...input, config, model: policy.model, date, identity,
+      const pages = await proposeSynthesis({ ...input, config, model: privateModelForRole(policy, 'dream-synthesis'), date, identity,
         signal: opts.signal, yieldDuringPhase: opts.yieldDuringPhase,
         beforeCall: () => reserveSynthesisSubmission(engine, authority, config.maxSubmissionsPerSourcePerDay) });
       await addSynthesisSummary(engine, opts, config, input, pages, identity, date);

@@ -37,7 +37,7 @@ import { BudgetMeter, loadAllowUnpriced, loadPricingOverrides, parseBudgetUsd } 
 import { resolveModel } from '../model-config.ts';
 import { closeContradiction, parseMultirange, utcToday, dateKey, type Stint } from '../link-validity.ts';
 import { declaredSingleValueTypes, planSingleValueClosures } from '../link-single-value.ts';
-import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, privateModelForRole } from '../ai/private-policy.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { OperationError } from '../ops/contract.ts';
@@ -221,10 +221,11 @@ function completeEdgeJudgeVerdict(verdict: JudgePair[] | null, relationshipCount
 export async function defaultEdgeJudge(input: Parameters<EdgeJudgeFn>[0]): Promise<JudgePair[] | null> {
   const { chat } = await import('../ai/gateway.ts');
   const policy = readPrivateCodexConfig();
-  if (policy) assertPrivateRoute(input.modelHint ?? policy.model, 'edge_contradictions:judge', policy);
+  if (policy) assertPrivateRoute(input.modelHint ?? privateModelForRole(policy, 'edge-contradictions'), 'edge_contradictions:judge', policy, 'edge-contradictions');
   const result = await chat({
+    privateRole: 'edge-contradictions',
     messages: [{ role: 'user', content: buildEdgeJudgePrompt(input.subject, input.relationships) }],
-    ...(input.modelHint ? { model: input.modelHint } : {}),
+    ...(policy ? { model: input.modelHint ?? privateModelForRole(policy, 'edge-contradictions') } : input.modelHint ? { model: input.modelHint } : {}),
     maxTokens: input.maxOutputTokens ?? JUDGE_MAX_OUTPUT_TOKENS,
     allowFallback: false,
     ...(policy ? { responseSchema: privateEdgeJudgeSchema(input.relationships.length) } : {}),

@@ -1,6 +1,7 @@
 import { openAIPromptCacheKey } from './chat-format.ts';
 export { openAIPromptCacheKey } from './chat-format.ts';
-import { assertPrivateRoute, readPrivateCodexConfig } from './private-policy.ts';
+import { assertPrivateRoute, readPrivateCodexConfig, privateModelForTier, PrivateRoutingError } from './private-policy.ts';
+import type { PrivateRole } from './private-roles.ts';
 /**
  * AI Gateway — unified seam for every AI call gbrain makes.
  *
@@ -462,8 +463,15 @@ export function configureGateway(config: AIGatewayConfig): void {
   const privatePolicy = readPrivateCodexConfig();
   if (privatePolicy) {
     for (const key of ['chat_model', 'expansion_model', 'embedding_image_ocr_model'] as const)
-      if (config[key]) assertPrivateRoute(config[key]!, `config:${key}`, privatePolicy);
-    for (const pin of config.chat_fallback_chain ?? []) assertPrivateRoute(pin, 'config:chat_fallback_chain', privatePolicy);
+      if (config[key]) {
+        assertPrivateRoute(config[key]!, `config:${key}`, privatePolicy);
+        if (config[key] !== privateModelForTier(privatePolicy, key === 'chat_model' ? 'reasoning' : 'utility'))
+          throw new PrivateRoutingError(`config:${key}`);
+      }
+    for (const pin of config.chat_fallback_chain ?? []) {
+      assertPrivateRoute(pin, 'config:chat_fallback_chain', privatePolicy);
+      if (pin !== privateModelForTier(privatePolicy, 'reasoning')) throw new PrivateRoutingError('config:chat_fallback_chain');
+    }
   }
   _config = {
     embedding_model: config.embedding_model,
@@ -476,8 +484,8 @@ export function configureGateway(config: AIGatewayConfig): void {
     embedding_dimensions: config.embedding_dimensions,
     embedding_multimodal_model: config.embedding_multimodal_model,
     embedding_image_ocr_model: config.embedding_image_ocr_model,
-    expansion_model: config.expansion_model ?? privatePolicy?.model ?? DEFAULT_EXPANSION_MODEL,
-    chat_model: config.chat_model ?? privatePolicy?.model ?? DEFAULT_CHAT_MODEL,
+    expansion_model: config.expansion_model ?? (privatePolicy ? privateModelForTier(privatePolicy, 'utility') : DEFAULT_EXPANSION_MODEL),
+    chat_model: config.chat_model ?? (privatePolicy ? privateModelForTier(privatePolicy, 'reasoning') : DEFAULT_CHAT_MODEL),
     chat_fallback_chain: normalizeChatFallbackChain(config.chat_fallback_chain),
     chat_fallback_on_refusal: config.chat_fallback_on_refusal,
     // v0.35.0.0+: reranker_model stays undefined when unset — reranker is
@@ -3119,6 +3127,8 @@ export interface ChatResult {
 }
 
 export interface ChatOpts {
+  /** Host-supplied role; required for a tiered private rollout. Never model-authored. */
+  privateRole?: PrivateRole;
   /** "provider:modelId" — defaults to config.chat_model. */
   model?: string;
   /** System prompt. */
@@ -3524,8 +3534,8 @@ export function toAISDKTools(tools: ChatToolDef[] | undefined): Record<string, a
 }
 
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
-  assertPrivateRoute(opts.model ?? getChatModel(), 'gateway.chat');
   const privatePolicy = readPrivateCodexConfig();
+  assertPrivateRoute(opts.model ?? getChatModel(), 'gateway.chat', privatePolicy);
   if (privatePolicy) return (await import('./codex-chat.ts')).codexChat(opts, privatePolicy);
   await discoverBeforeOpenAICall(opts.model ?? _config?.chat_model);
   const fallbackChain = opts.allowFallback === false ? undefined : _config?.chat_fallback_chain;

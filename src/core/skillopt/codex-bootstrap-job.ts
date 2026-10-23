@@ -11,7 +11,7 @@ import { digest } from '../persistence/digest.ts';
 import { isWriteRequestId } from '../persistence/types.ts';
 import { loadConfig, loadConfigWithEngine } from '../config.ts';
 import { resolveSourceWithTier } from '../source-resolver.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { privatePolicyBinding, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { CODEX_JOB_ACCOUNT_LANE } from '../minions/subscription-jobs.ts';
@@ -56,7 +56,7 @@ async function prepareInput(engine: BrainEngine, opts: GuardedBootstrapOpts, mod
   const [source] = await engine.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1', [sourceId]);
   if (!source || source.archived) bootstrapConflict();
   return { controls: { ...normalized, skillsDir: normalized.skillsDir, modelPlan, allowance: structuredClone(allowance) },
-    files: prepared.files, sourceId, incarnation: source.incarnation, model: policy.model, bin: policy.bin };
+    files: prepared.files, sourceId, incarnation: source.incarnation, ...privatePolicyBinding(policy) };
 }
 
 /** Queue a prevalidated standalone draft under the same durable bootstrap plan used by foreground runs. */

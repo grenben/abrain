@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../core/engine.ts';
-import { assertPrivateRoute, readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { privatePolicyBinding, privatePolicyFingerprint, assertPrivateRoute, readPrivateCodexConfig } from '../core/ai/private-policy.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../core/ai/subscription-context.ts';
 import { assertSubscriptionTarget } from '../core/ai/subscription-target.ts';
@@ -109,7 +109,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     const bound = await corpusSnapshot(engine);
     const assertBound = async (db: BrainEngine) => {
       const current = readPrivateCodexConfig();
-      if (!current || current.model !== policy.model || current.bin !== policy.bin ||
+      if (!current || privatePolicyFingerprint(current) !== privatePolicyFingerprint(policy) ||
           digest(await corpusSnapshot(db)) !== digest(bound)) {
         throw new SubscriptionAdmissionError('subscription_identity_conflict');
       }
@@ -135,7 +135,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     }));
   }
   const grant = parseAllowance(flags);
-  const claim = { identity, ...await corpusSnapshot(engine), model: policy.model, bin: policy.bin,
+  const claim = { identity, ...await corpusSnapshot(engine), ...privatePolicyBinding(policy),
     auxiliaryUsd: grant.maxUsd ?? null };
   const prefix = `codex-eval:${grant.requestId}:`;
   const runId = prefix + digest(claim);
@@ -154,7 +154,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
   });
   const checkAuthority = async (db: BrainEngine = engine) => {
     const current = readPrivateCodexConfig();
-    if (!current || current.model !== policy.model || current.bin !== policy.bin) {
+    if (!current || privatePolicyFingerprint(current) !== privatePolicyFingerprint(policy)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy);
