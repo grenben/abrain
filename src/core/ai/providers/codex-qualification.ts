@@ -4,6 +4,7 @@ import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from '../../spawn.ts';
 import { CodexProposalError } from './codex-contract.ts';
+import { codexNamespaceLaunch } from './codex-namespace.ts';
 
 /**
  * Intentionally empty until a pinned official build proves pre-execution denial,
@@ -22,7 +23,7 @@ async function assertLinuxHostBoundary(root: string, trustedUid: number, callerU
       throw new Error('mutable system path');
     }
   }
-  for (const name of ['unshare', 'true']) {
+  for (const name of ['unshare', 'true', 'setpriv', 'dash']) {
     const executable = await lstat(join(root, 'usr', 'bin', name));
     if (!executable.isFile() || executable.uid !== trustedUid
       || (executable.mode & 0o022) || !(executable.mode & 0o111)) {
@@ -40,8 +41,8 @@ async function assertLinuxHostBoundary(root: string, trustedUid: number, callerU
 
 /** Refuse an unsupported namespace host before reserving a subscription call. */
 export function assertCodexNamespaceAvailable(launcher = '/usr/bin/unshare', proof = '/usr/bin/true'): void {
-  const result = spawnSync(launcher, ['--user', '--map-root-user', '--pid', '--fork', '--kill-child',
-    '--mount-proc', '--propagation', 'private', '--', proof],
+  const launch = codexNamespaceLaunch(proof, [], launcher);
+  const result = spawnSync(launch.command, launch.args,
   { timeout: 2_000, stdio: 'ignore', env: { PATH: '/usr/bin:/bin' } });
   if (result.error || result.status !== 0 || result.signal) throw new Error('Codex namespace unavailable');
 }

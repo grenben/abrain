@@ -1,5 +1,6 @@
 import { spawn } from '../../spawn.ts';
 import { CodexProposalError, type CodexProposalFailure } from './codex-contract.ts';
+import { codexNamespaceLaunch } from './codex-namespace.ts';
 
 export interface CodexProcessInput {
   runtimeFd: number; args: string[]; cwd: string; env: NodeJS.ProcessEnv;
@@ -26,11 +27,8 @@ export function runCodexProcess(input: CodexProcessInput): Promise<string> {
   // The real runtime is PID 1 inside a private namespace. Killing that init
   // tears down descendants even if a native child escaped our process group.
   const namespace = input.isolation === 'pid-namespace';
-  const command = namespace ? '/usr/bin/unshare' : pinnedBin;
-  const args = namespace
-    ? ['--user', '--map-root-user', '--pid', '--fork', '--kill-child', '--mount-proc',
-      '--propagation', 'private', '--', pinnedBin, ...input.args]
-    : input.args;
+  const { command, args } = namespace ? codexNamespaceLaunch(pinnedBin, input.args)
+    : { command: pinnedBin, args: input.args };
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try { child = spawn(command, args, { cwd: input.cwd, env: input.env, stdio: ['pipe', 'pipe', 'pipe', input.runtimeFd], detached: true }); }

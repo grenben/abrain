@@ -7,6 +7,8 @@
 
 ## Experimental private Codex source
 
+- `src/core/ai/providers/codex-namespace.ts` — trusted Linux parent-death launch chain with a startup parent-PID check, followed by PID-namespace containment. `codex-process.ts` uses it for production execution and `codex-qualification.ts` uses the same chain for host availability. Admission requires protected `setpriv`, `dash`, `unshare` and `true` executables; unsupported hosts refuse before subscription admission.
+
 The [role development workstreams](../../development/private-codex-role-workstreams.md)
 define the 21-core/18-extended split and the tiered policy contract.
 `private-policy.ts` accepts explicit tier pins and enabled roles while retaining

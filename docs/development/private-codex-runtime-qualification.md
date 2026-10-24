@@ -6,6 +6,24 @@ Codex dispatch before reserving a subscription attempt until the runtime's
 pre-execution isolation is proven. Post-hoc rejection of native-action events
 does not prove those actions were prevented.
 
+## Staging a protected copy without activation
+
+`scripts/codex-runtime-stage.py --source /absolute/path/to/codex` verifies the
+pinned 0.162.0 Linux build without writes. With an operator's sudo and `--stage`,
+it copies only those exact bytes into `/usr/local/lib/gbrain-codex/<sha256>/codex`.
+It rejects source symlinks, non-regular or oversized files, changed bytes,
+unprotected destination ancestors and conflicting existing destinations. It
+never changes an existing file or directory's permissions. The final file is
+root-owned, mode 0555, and published without overwriting an existing path.
+Re-running against the same protected copy verifies it and reports already staged.
+
+The staging helper does not execute Codex, change authentication, select a live
+model, modify GBrain configuration, install a service or admit a production
+hash. Run the credential-free boundary, abort and timeout probes against the
+new copy afterward, followed by the separately scoped real-model acceptance.
+Its unprivileged contracts cover source admission and read-only behavior;
+actual privileged staging and native host acceptance require operator evidence.
+
 ## Read-only local evidence
 
 The inspected local standalone package identifies version **0.162.0**, target
@@ -148,6 +166,23 @@ admitted configuration on such a host. It is not mount-level isolation against
 privileged host changes; the production hash registry remains empty.
 
 ## Linux process-tree containment
+
+The production launcher binds the namespace supervisor to the GBrain process.
+A trusted `/usr/bin/setpriv --pdeathsig KILL` installs the kernel parent-death
+signal, then trusted `/usr/bin/dash` verifies the expected parent PID before
+execing `/usr/bin/unshare`. If GBrain died before signal setup, the parent check
+refuses startup; if it dies later, the kernel kills the supervisor and
+`--kill-child` tears down the namespace. Host admission checks ownership and
+permissions of `setpriv` and `dash` as well as `unshare` and `true`, and its
+availability probe uses this same launch chain.
+
+A native bounded heartbeat regression kills only its synthetic GBrain parent
+with SIGKILL and checks that a detached namespace descendant stops. Normal
+abort/timeout checks cannot establish this crash behavior. A second native
+contract supplies a mismatched parent identity and requires refusal before
+the executable runs. These checks do not activate a runtime hash or settle an
+interrupted subscription ledger; unresolved attempts retain their existing
+recovery requirements.
 
 The local host permits unprivileged user and PID namespaces. A disposable
 `unshare --user --map-root-user --pid --fork --kill-child --mount-proc` wrapper

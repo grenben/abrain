@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { codexNamespaceLaunch } from '../../src/core/ai/providers/codex-namespace.ts';
 import { __assertCodexHostBoundaryForTests, __registerCodexFixtureForTests, assertCodexNamespaceAvailable, assertTrustedCodexExecutable, openQualifiedCodexRuntime } from '../../src/core/ai/providers/codex-qualification.ts';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { access, chmod, mkdir, mkdtemp, open, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
@@ -141,6 +142,57 @@ sleep 3
     await expect(access(capture)).rejects.toThrow();
     await expect(runCodexProposal(input('/synthetic/unqualified-codex'))).rejects.toMatchObject({reason:'runtime_unqualified'});
   });
+  // Native crash acceptance: ordinary abort tests cannot detect an orphaned
+  // namespace supervisor after SIGKILL. Reverting the parent-death launch leaves
+  // this bounded heartbeat running; no production-only test seam is needed.
+  test.skipIf(process.platform !== 'linux')('GBrain parent death tears down the namespace and detached descendants', async () => {
+    assertCodexNamespaceAvailable();
+    const bin = join(root, `codex-orphan-${sequence++}.sh`), beat = `${bin}.beat`;
+    const parentFile = `${bin}.parent.ts`;
+    await writeFile(bin, `#!/bin/sh
+setsid sh -c 'i=0; while [ "$i" -lt 80 ]; do printf x >> "$1"; i=$((i+1)); sleep 0.05; done' sh "$1" >/dev/null 2>&1 &
+cat >/dev/null
+sleep 5
+`, { mode: 0o700 });
+    await writeFile(parentFile, `import {open} from 'node:fs/promises';
+import {runCodexProcess} from ${JSON.stringify(new URL('../../src/core/ai/providers/codex-process.ts', import.meta.url).href)};
+const file = await open(${JSON.stringify(bin)}, 'r');
+await runCodexProcess({runtimeFd:file.fd,args:[${JSON.stringify(beat)}],cwd:${JSON.stringify(root)},
+env:{PATH:'/usr/bin:/bin',HOME:${JSON.stringify(root)}},prompt:'synthetic',timeoutMs:15000,maxOutputBytes:1024,isolation:'pid-namespace'});
+`);
+    const parent = spawn(process.execPath, [parentFile], { stdio: 'ignore', env: codexEnvironment(env) });
+    const closed = new Promise<void>((resolve, reject) => { parent.once('close', () => resolve()); parent.once('error', reject); });
+    let started = false;
+    try {
+      for (let i = 0; i < 150; i++) {
+        try { if ((await stat(beat)).size > 0) { started = true; break; } } catch { /* startup */ }
+        await Bun.sleep(20);
+      }
+      expect(started).toBe(true);
+      parent.kill('SIGKILL'); await closed;
+      await Bun.sleep(150);
+      const before = (await stat(beat)).size;
+      await Bun.sleep(350);
+      const after = (await stat(beat)).size;
+      if (after !== before) await Bun.sleep(5_000); // Bounded regression fixture finishes before cleanup.
+      expect(after).toBe(before);
+    } finally { parent.kill('SIGKILL'); await closed; }
+  }, 12_000);
+  test.skipIf(process.platform !== 'linux')('namespace startup refuses a mismatched parent before running the executable', async () => {
+    const launch = codexNamespaceLaunch('/usr/bin/true', []);
+    const correct = spawnSync(launch.command, launch.args, { timeout: 2_000, env: { PATH: '/usr/bin:/bin' } });
+    expect(correct.status).toBe(0);
+    const wrong = [...launch.args]; wrong[wrong.indexOf(String(process.pid))] = '0';
+    const refused = spawnSync(launch.command, wrong, { timeout: 2_000, env: { PATH: '/usr/bin:/bin' } });
+    expect(refused.status).toBe(125);
+  });
+  test.skipIf(process.platform !== 'linux')('namespace availability refuses a failed support launcher', async () => {
+    const launcher = join(root, `codex-launcher-${sequence++}.sh`);
+    await writeFile(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    expect(() => assertCodexNamespaceAvailable(launcher, '/usr/bin/true')).not.toThrow();
+    await writeFile(launcher, '#!/bin/sh\nexit 1\n');
+    expect(() => assertCodexNamespaceAvailable(launcher, '/usr/bin/true')).toThrow();
+  });
   test('production host boundary refuses inherited managed configuration and mutable parents', async () => {
     const hostRoot = join(root, `codex-host-boundary-${sequence++}`);
     const etc = join(hostRoot, 'etc');
@@ -151,6 +203,7 @@ sleep 3
     await writeFile(unshare, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const proof = join(binDir, 'true');
     await writeFile(proof, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    for (const name of ['setpriv', 'dash']) await writeFile(join(binDir, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     await chmod(hostRoot, 0o755); await chmod(etc, 0o755);
     await chmod(join(hostRoot, 'usr'), 0o755); await chmod(binDir, 0o755);
     const trustedUid = (await stat(hostRoot)).uid;
@@ -162,10 +215,6 @@ sleep 3
     const mutableFile = await stat(unshare);
     expect(() => assertTrustedCodexExecutable(mutableFile, trustedUid)).toThrow();
     await chmod(unshare, 0o755);
-    expect(() => assertCodexNamespaceAvailable(unshare, proof)).not.toThrow();
-    await writeFile(unshare, '#!/bin/sh\nexit 1\n');
-    expect(() => assertCodexNamespaceAvailable(unshare, proof)).toThrow();
-    await writeFile(unshare, '#!/bin/sh\nexit 0\n');
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).resolves.toBeUndefined();
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid + 2, callerUid)).rejects.toThrow();
     await mkdir(join(etc, 'codex'));
@@ -183,11 +232,17 @@ sleep 3
     await chmod(proof, 0o777);
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
     await chmod(proof, 0o755);
+    for (const name of ['setpriv', 'dash']) {
+      await chmod(join(binDir, name), 0o777);
+      await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, callerUid)).rejects.toThrow();
+      await chmod(join(binDir, name), 0o755);
+    }
     await expect(__assertCodexHostBoundaryForTests(hostRoot, trustedUid, trustedUid)).rejects.toThrow();
     const symlinkRoot = join(root, `codex-host-link-${sequence++}`);
     await mkdir(join(symlinkRoot, 'usr', 'bin'), { recursive: true });
     await writeFile(join(symlinkRoot, 'usr', 'bin', 'unshare'), '', { mode: 0o755 });
     await writeFile(join(symlinkRoot, 'usr', 'bin', 'true'), '', { mode: 0o755 });
+    for (const name of ['setpriv', 'dash']) await writeFile(join(symlinkRoot, 'usr', 'bin', name), '', { mode: 0o755 });
     await chmod(symlinkRoot, 0o755);
     await chmod(join(symlinkRoot, 'usr'), 0o755);
     await chmod(join(symlinkRoot, 'usr', 'bin'), 0o755);
