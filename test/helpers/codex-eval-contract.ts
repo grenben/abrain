@@ -18,6 +18,7 @@ import { runJudge, BudgetLedger } from '../../src/eval/shared/judge-runner.ts';
 import { judgeRow, classifyJudgeResponse } from '../../src/eval/longmemeval/judge.ts';
 import { buildQaAccuracy } from '../../src/eval/longmemeval/qa-accuracy.ts';
 import { runEvalLongMemEval } from '../../src/commands/eval-longmemeval.ts';
+import { configPath } from '../../src/core/config-path.ts';
 import { resolveEvalModels } from '../../src/eval/longmemeval/codex-config.ts';
 
 interface Fixture {
@@ -185,6 +186,21 @@ export function codexEvalContract(f: Fixture) { describe('native evaluation role
     });
     expect(qa).toMatchObject({ actual_cost_usd: null, known_priced_cost_usd: 0.125, unpriced_judge_rows: 2, run_cost_usd: null, complete: false, judge_errors: 1 });
     expect(ledger.snapshot()).toMatchObject({ actual_usd: null, unpriced_calls: 2 });
+  });
+  test('a reader-only benchmark does not require disabled judge or extractor roles', async () => {
+    const path = configPath(), saved = readFileSync(path, 'utf8'), config = JSON.parse(saved);
+    const { root, dataset, output } = benchmark(), before = f.calls().length;
+    config.private_codex.enabled_roles = ['longmemeval-reader'];
+    try {
+      writeFileSync(path, JSON.stringify(config));
+      await f.run(() => runEvalLongMemEval([dataset, '--keyword-only', '--no-trajectory', '--no-embed-cache', '--output', output], { exitOnError: false }));
+      expect(f.calls().length - before).toBe(2);
+      await f.run(async () => {
+        await expect(runEvalLongMemEval([dataset, '--keyword-only', '--no-trajectory', '--no-embed-cache', '--judge', '--output', output], { exitOnError: false }))
+          .rejects.toMatchObject({ code: 'private_role_disabled' });
+      });
+      expect(f.calls().length - before).toBe(2);
+    } finally { writeFileSync(path, saved); rmSync(root, { recursive: true, force: true }); }
   });
   test('real keyword benchmark preserves external admission across question database resets', async () => {
     const { root, dataset, output } = benchmark();

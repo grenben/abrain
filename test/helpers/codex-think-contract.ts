@@ -470,8 +470,8 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   withCodexRoleFixture(root, ["brainstorm-judge"], () => codexBrainstormJudgeContract({engine:()=>engine,run,reply,calls}));
   codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
   codexProposalCacheContract({engine:()=>engine,run,reply,calls});
-  withCodexRoleFixture(root, ["longmemeval-fact-keys-paper", "longmemeval-fact-keys-production", "longmemeval-reader", "longmemeval-extractor", "longmemeval-judge"], () => codexFactKeysContract({root,engine:()=>engine,run,reply,calls}));
-  withCodexRoleFixture(root, ["longmemeval-reader", "longmemeval-extractor", "longmemeval-judge", "longmemeval-synopsis"], () => codexSynopsisTierContract({root,engine:()=>engine,run,reply,calls}));
+  withCodexRoleFixture(root, ["longmemeval-fact-keys-paper", "longmemeval-fact-keys-production"], () => codexFactKeysContract({root,engine:()=>engine,run,reply,calls}));
+  withCodexRoleFixture(root, ["longmemeval-synopsis"], () => codexSynopsisTierContract({root,engine:()=>engine,run,reply,calls}));
   codexScratchContract({engine:()=>engine,run,reply,calls});
   codexEvalAllowanceContract({root,engine:()=>engine,reply,calls});
   codexEvalRunContract({engine:()=>engine,run,reply,calls});

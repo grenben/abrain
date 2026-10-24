@@ -2,6 +2,7 @@ import type { BrainEngine } from '../core/engine.ts';
 import type { Page } from '../core/types.ts';
 import type { ParseResult } from '../core/conversation-parser/types.ts';
 import { polishConversation, PARSER_POLISH_VERSION } from '../core/conversation-parser/llm-polish.ts';
+import { bindPrivateRoleScope } from '../core/ai/private-role-scope.ts';
 import { readPrivateCodexConfig, privatePolicyFingerprint } from '../core/ai/private-policy.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../core/ai/subscription-context.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
@@ -24,7 +25,7 @@ export async function previewParserPolish(engine: BrainEngine, args: string[], p
   const run = () => polishConversation({ enabled: true, parsed, engine, model, signal: context?.signal });
   if (context) {
     if (context.engine !== engine) throw new SubscriptionAdmissionError('subscription_identity_conflict');
-    return run();
+    return withCodexSubscription(bindPrivateRoleScope(context, ['parser-polish'], privatePolicyFingerprint(policy)), run);
   }
   const runId = await engine.transaction(async tx => {
     await declareDurablePersistence(tx);
@@ -39,5 +40,5 @@ export async function previewParserPolish(engine: BrainEngine, args: string[], p
     return id;
   });
   process.stderr.write(`[conversation-parser] subscription request ${allowance!.requestId}; cost unknown\n`);
-  return withCodexSubscription({ engine, runId }, run);
+  return withCodexSubscription(bindPrivateRoleScope({ engine, runId }, ['parser-polish'], privatePolicyFingerprint(policy)), run);
 }

@@ -99,6 +99,27 @@ export function codexParserPolishContract(f: Fixture) {
         expect(f.calls().length).toBe(count);
       } finally { writeFileSync(path, saved); }
     });
+    test('a policy change during local admission cannot spend the retained preview grant', async () => {
+      const path = configPath(), saved = readFileSync(path, 'utf8'), request = randomUUID();
+      const slug = `conversations/polish-race-${request}`, engine = f.engine(), before = f.calls().length;
+      await engine.putPage(slug, { type: 'conversation', title: 'Synthetic race', compiled_truth: '**Aster:** Orbit launched.' }, { sourceId: f.sourceId });
+      const original = engine.transaction;
+      const fault = spyOn(engine, 'transaction').mockImplementation(async <T>(fn: (db: BrainEngine) => Promise<T>, options?: Parameters<BrainEngine['transaction']>[1]): Promise<T> => {
+        const result = await original.call(engine, fn, options) as T;
+        if (typeof result === 'string' && result.startsWith('codex-parser-polish:')) {
+          const value = JSON.parse(saved); value.private_codex.models.deep = 'codex-cli:changed-unused-tier';
+          writeFileSync(path, JSON.stringify(value));
+        }
+        return result;
+      });
+      try {
+        await expect(runConversationParser(engine, ['scan', slug, '--polish', '--json', '--codex-request-id', request,
+          '--codex-max-attempts', '1', '--codex-max-turns', '1', '--codex-deadline', new Date(Date.now() + 600000).toISOString()]))
+          .rejects.toMatchObject({ code: 'private_route_conflict' });
+        expect(f.calls().length).toBe(before);
+        expect(await engine.executeRaw('SELECT attempts FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-parser-polish:${request}:%`])).toEqual([{ attempts: 0 }]);
+      } finally { fault.mockRestore(); writeFileSync(path, saved); }
+    });
     test('foreground CLI allowance binds request to original evidence and cannot be repurposed', async () => {
       const slug = `conversations/polish-local-${randomUUID()}`;
       await f.engine().putPage(slug, { type: 'conversation', title: 'Synthetic local preview', compiled_truth: '**Aster:** Orbit   launched.', frontmatter: { date: '2026-06-02' } }, { sourceId: f.sourceId });

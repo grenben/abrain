@@ -4,11 +4,13 @@ import { readPrivateCodexConfig, requirePrivateRole, privatePolicyFingerprint, P
 
 /** Pin activation and tier selection through retained-result reads and host effects,
  * including changes made while an asynchronous authority check is suspended. */
-export function bindPrivateRoleScope(host: CodexSubscriptionContext, roles: readonly PrivateRole[]): CodexSubscriptionContext {
+export function bindPrivateRoleScope(host: CodexSubscriptionContext, roles: readonly PrivateRole[], expectedFingerprint?: string): CodexSubscriptionContext {
   const policy = readPrivateCodexConfig();
   if (!policy) throw new PrivateRoutingError('role_scope:policy_missing');
   for (const role of roles) requirePrivateRole(policy, role);
   const fingerprint = privatePolicyFingerprint(policy);
+  if (expectedFingerprint !== undefined && fingerprint !== expectedFingerprint)
+    throw new PrivateRoutingError('role_scope:policy_changed');
   const check = () => {
     const current = readPrivateCodexConfig();
     if (!current || privatePolicyFingerprint(current) !== fingerprint)

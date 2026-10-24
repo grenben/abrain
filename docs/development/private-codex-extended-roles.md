@@ -32,7 +32,9 @@ Every role above has source implementation; real-model acceptance is **not run**
 and activation is **off**. A disabled optional feature still does no work. A
 requested private role that is disabled fails before inference; subagent and
 optimizer queue preflight also refuses it before inserting a job or allowance.
-Composite features require their selected dependency roles. Enabling
+A reader-only benchmark does not require the disabled judge or extractor;
+retrieval-only fact-key and synopsis runs do not require a reader. Composite
+features require their selected dependency roles. Enabling
 `nightly-probes`, for example, does not grant its reader or extractor permission.
 
 The implementation passes trusted role identity to the resolver and gateway,
