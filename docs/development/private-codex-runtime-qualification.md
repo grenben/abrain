@@ -15,6 +15,10 @@ It rejects source symlinks, non-regular or oversized files, changed bytes,
 unprotected destination ancestors and conflicting existing destinations. It
 never changes an existing file or directory's permissions. The final file is
 root-owned, mode 0555, and published without overwriting an existing path.
+New directories are set to 0755 on their verified descriptors even under a
+restrictive umask. Existing ancestors must allow traversal, and an existing
+runtime must allow read/execute access for the non-root GBrain process; inaccessible
+paths are refused without changing their modes.
 Re-running against the same protected copy verifies it and reports already staged.
 
 The staging helper does not execute Codex, change authentication, select a live

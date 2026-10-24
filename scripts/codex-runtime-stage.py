@@ -48,18 +48,28 @@ def protected_directory(path):
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
         root = os.fstat(fd)
-        if root.st_uid != 0 or root.st_mode & 0o022:
+        if root.st_uid != 0 or root.st_mode & 0o022 or not root.st_mode & 0o001:
             raise ValueError("destination root is not protected")
         for part in path.parts[1:]:
+            created = False
             try:
                 os.mkdir(part, 0o755, dir_fd=fd)
+                created = True
             except FileExistsError:
                 pass
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-            info = os.fstat(child)
-            if info.st_uid != 0 or info.st_mode & 0o022:
+            try:
+                info = os.fstat(child)
+                if info.st_uid != 0 or info.st_mode & 0o022:
+                    raise ValueError("destination ancestor is not protected")
+                if created:
+                    # Only our new directory: preserve traversal through a restrictive umask.
+                    os.fchmod(child, 0o755)
+                elif not info.st_mode & 0o001:
+                    raise ValueError("existing destination ancestor is not traversable")
+            except BaseException:
                 os.close(child)
-                raise ValueError("destination ancestor is not protected")
+                raise
             os.close(fd)
             fd = child
         return fd
@@ -72,7 +82,7 @@ def verify_destination(directory):
     fd = open_file("codex", directory)
     try:
         info = os.fstat(fd)
-        if info.st_uid != 0 or info.st_mode & 0o222 or not info.st_mode & 0o111:
+        if info.st_uid != 0 or info.st_mode & 0o222 or info.st_mode & 0o005 != 0o005:
             raise ValueError("existing destination is not a protected executable")
         if digest_file(fd) != SHA256:
             raise ValueError("existing destination has a different digest")
