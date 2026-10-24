@@ -92,7 +92,10 @@ export function codexParserPolishContract(f: Fixture) {
       try {
         revoke(); await expect(polish()).rejects.toMatchObject({ code: 'private_role_disabled' });
         writeFileSync(path, saved);
-        await f.run(async () => { await expect(polish()).rejects.toMatchObject({ reason: 'invalid_input' }); }, { checkAuthority: async () => { revoke(); } });
+        let checks = 0;
+        // Revoke at the final cache-return fence; an earlier revocation would be
+        // caught by the next pre-check even without the post-await recheck.
+        await f.run(async () => { await expect(polish()).rejects.toMatchObject({ reason: 'invalid_input' }); }, { checkAuthority: async () => { if (++checks === 2) revoke(); } });
         expect(f.calls().length).toBe(count);
       } finally { writeFileSync(path, saved); }
     });
