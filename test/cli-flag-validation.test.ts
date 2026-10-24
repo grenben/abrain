@@ -122,6 +122,14 @@ describe('#2185 acceptance — real usage stays legal', () => {
     expect(validateCommandFlags('sources', ['push', BOGUS])).toBe(BOGUS);
   });
 
+  test('private Codex tiered pin preview reaches its handler through flag validation', () => {
+    const models = JSON.stringify({ utility: 'codex-cli:utility', reasoning: 'codex-cli:reasoning',
+      deep: 'codex-cli:deep', subagent: 'codex-cli:subagent' });
+    const args = ['pins', 'preview', '--plane', 'file', '--models', models, '--json'];
+    expect(validateCommandFlags('private-codex', args)).toBeNull();
+    expect(validateCommandFlags('private-codex', [...args, BOGUS])).toBe(BOGUS);
+  });
+
   // Pre-landing review regression: the validator rejected the CLI-local
   // flags makeContext consumes OUTSIDE the op contract — `gbrain search
   // "x" --source y` and `--dry-run` invocations exited 1 as unknown flags.
