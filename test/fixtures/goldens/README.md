@@ -92,6 +92,9 @@ reproduce byte for byte. Each file is written by `test/helpers/golden.ts` as
   subpath, engine prototype-chain methods, and a checker-printed type surface.
   `test/fixtures/export-consumer/consumer.ts` imports every subpath by package name
   and is typechecked by `bun run typecheck`.
+  The private-Codex integration intentionally adds optional `privateRole` members
+  to `ChatOpts` and `RunThinkOpts`. The type golden records these role-routing
+  inputs; runtime export names and existing required members are unchanged.
 
 ## CLI goldens (A16b / EO5 / EO13)
 
