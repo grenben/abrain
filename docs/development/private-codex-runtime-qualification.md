@@ -28,6 +28,15 @@ new copy afterward, followed by the separately scoped real-model acceptance.
 Its unprivileged contracts cover source admission and read-only behavior;
 actual privileged staging and native host acceptance require operator evidence.
 
+The explicitly signed-in `codex-runtime-live-synthetic-probe.ts --live` step
+refuses a mutable inode, symlink, changed bytes, a digest other than the inspected
+build, or an unsupported host before launching a runtime with the filtered
+credential environment. It holds the checked descriptor through the launch and
+records its digest and host check in a successful receipt. This preflight does
+not add a production hash or replace the preceding credential-free boundary,
+abort and timeout acceptance. Its refusal regressions use synthetic executables
+and empty temporary homes; they do not establish live-model acceptance.
+
 ## Read-only local evidence
 
 The inspected local standalone package identifies version **0.162.0**, target

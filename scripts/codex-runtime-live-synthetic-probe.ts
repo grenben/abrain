@@ -1,8 +1,10 @@
 /** One explicit, signed-in synthetic model call; never reads or writes brain content. */
+import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import { chmod, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { assertTrustedCodexExecutable } from '../src/core/ai/providers/codex-qualification.ts';
+import { assertProductionCodexHostBoundary, assertTrustedCodexExecutable } from '../src/core/ai/providers/codex-qualification.ts';
 import { CodexProposalError } from '../src/core/ai/providers/codex-contract.ts';
 import { parseCodexLifecycle } from '../src/core/ai/providers/codex-lifecycle.ts';
 import { codexProposalModelCatalog } from '../src/core/ai/providers/codex-model-catalog.ts';
@@ -22,10 +24,31 @@ const prepared = prepareCodexSchema({ type: 'object', properties: {
   source_quote: { type: 'string', minLength: 1, maxLength: 2000 },
   image_note: { type: 'string', minLength: 1, maxLength: 300 },
 }, required: ['evidence_hash', 'synopsis', 'source_quote', 'image_note'], additionalProperties: false });
-const runtime = await open(bin, 'r');
+// This is a candidate-qualification probe, not production allowlist admission.
+// Match the exact build inspected by the credential-free boundary probe and staging helper.
+const expectedSha256 = '50ed828f357c655a3c82054d346cab8434f24901f14ec19b8267571bdd008b38';
+const runtime = await open(bin, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 let scratch: string | undefined;
 let settled = true;
 try {
+  const before = await runtime.stat();
+  assertTrustedCodexExecutable(before);
+  if (before.size > 512 * 1024 * 1024) throw new Error('Codex live probe runtime exceeds size bound');
+  const hash = createHash('sha256');
+  const chunk = Buffer.allocUnsafe(1024 * 1024);
+  for (let offset = 0; offset < before.size;) {
+    const { bytesRead } = await runtime.read(chunk, 0, Math.min(chunk.length, before.size - offset), offset);
+    if (!bytesRead) throw new Error('short Codex live probe runtime read');
+    hash.update(chunk.subarray(0, bytesRead)); offset += bytesRead;
+  }
+  const after = await runtime.stat();
+  assertTrustedCodexExecutable(after);
+  if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+    throw new Error('Codex live probe runtime changed during hashing');
+  }
+  const sha256 = hash.digest('hex');
+  if (sha256 !== expectedSha256) throw new Error('Codex live probe runtime digest differs from inspected build');
+  await assertProductionCodexHostBoundary();
   scratch = await mkdtemp(join(tmpdir(), 'gbrain-codex-live-synthetic-'));
   await chmod(scratch, 0o700);
   const schemaFile = join(scratch, 'schema.json');
@@ -56,9 +79,7 @@ try {
   const quoteExact = answer.source_quote === 'The cube is red.';
   const lifecycleTextMatches = lifecycle.text.trim() === answerText.trim();
   const eventTypes = stdout.trim().split('\n').map(line => (JSON.parse(line) as { type: string }).type);
-  let runtimeFileProtected = false;
-  try { assertTrustedCodexExecutable(await runtime.stat()); runtimeFileProtected = true; } catch { /* diagnostic only */ }
-  const result = { model, runtimeFileProtected, schemaValid, quoteExact, lifecycleTextMatches,
+  const result = { model, sha256, hostBoundary: 'pass', runtimeFileProtected: true, schemaValid, quoteExact, lifecycleTextMatches,
     eventTypes, usage: lifecycle.usage };
   console.log(JSON.stringify(result));
   if (!schemaValid || !quoteExact || !lifecycleTextMatches) process.exitCode = 1;
