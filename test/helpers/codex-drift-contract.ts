@@ -1,3 +1,4 @@
+import { withCodexRoleFixture } from './codex-role-fixture.ts';
 /** Protects real private drift routing, evidence validation and report outcomes.
  * Reverting the private judge branch admits malformed judgments as stable.
  * Existing drift tests inject a judge and cannot exercise native schema transport.
@@ -76,6 +77,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     for (const [key, value] of saved) if (value === undefined) delete process.env[key]; else process.env[key] = value;
     rmSync(root, { recursive: true, force: true });
   });
+  withCodexRoleFixture(root, ['drift'], () => {
   test('native transport produces a private scoped report with exact evidence, preserving takes', async () => {
     const before = await engine.executeRaw('SELECT id,weight FROM takes ORDER BY id');
     await run(async id => {
@@ -187,5 +189,6 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
       expect((await phase()).totals?.judged).toBe(0);
     });
     expect(calls().length - before).toBe(1);
+  });
   });
 }

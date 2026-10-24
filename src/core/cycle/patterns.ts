@@ -567,7 +567,7 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
   // v0.28: unified model resolution
   const { resolveModel } = await import('../model-config.ts');
   const model = await resolveModel(engine, {
-    configKey: 'models.dream.patterns',
+    privateRole: 'patterns', configKey: 'models.dream.patterns',
     deprecatedConfigKey: 'dream.patterns.model',
     tier: 'reasoning',
     fallback: 'sonnet',

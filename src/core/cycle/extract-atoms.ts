@@ -1029,6 +1029,7 @@ export async function runPhaseExtractAtoms(
       if (cutLine) { inputTruncated++; console.error(cutLine); } // counted only for a model call
 
       const result = await chat({
+        privateRole: 'atoms',
         model: extractModel,
         ...atomsPrompt(dateGrounding, originLabel, promptContent),
         maxTokens: maxOutputTokens, responseSchema: codexAtomsResponseSchema(promptContent),

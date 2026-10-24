@@ -1,3 +1,4 @@
+import { withCodexRoleFixture } from './codex-role-fixture.ts';
 import { maintenancePreflight } from '../../src/core/persistence/prepared-maintenance.ts';
 import { reserveSynthesisSubmission, remainingSynthesisSubmissions } from '../../src/core/cycle/synthesize-codex-admission.ts';
 import { beforeAll, afterAll, test, expect } from 'bun:test';
@@ -66,6 +67,7 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   }
   const plans=(sourceId:string)=>engine.executeRaw<{plan_id:string;state:string;payload:{watermark:{key:string};pages:Array<{slug:string}>}}>('SELECT plan_id,state,payload FROM codex_publication_plans WHERE source_id=$1 AND kind=\'synthesis\' ORDER BY created_at',[sourceId]);
   const halt=(sourceId:string)=>async()=>{if((await plans(sourceId)).length)throw new Error('synthetic crash after retention');};
+  withCodexRoleFixture(root, ['dream-triage', 'dream-synthesis', 'patterns'], () => {
   test('real transcript → triage → reflection → pattern path publishes required summaries and grounded provenance',async()=>{
     const f=await fixture('page',2), before=calls().length;const r=await f.run();expect(r.status).toBe('ok');expect(r.details?.pages_written).toBe(4);
     const accepted=await plans(f.sourceId);expect(accepted.every(p=>p.state==='complete')).toBe(true);
@@ -171,4 +173,5 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     const next=await g.scope(()=>runPhaseSynthesize(engine,{sourceId:g.sourceId,brainDir:g.dir,dryRun:false}));expect(next.details?.reason).not.toBe('cooldown_active');expect(next.details?.deferred).toBe(1);
   });
 
+  });
 }

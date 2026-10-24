@@ -70,7 +70,7 @@ export async function withEnrichSubscription<T>(engine: BrainEngine, flags: Enri
   if (identity.auxiliaryMaxUsd !== undefined && (!Number.isFinite(identity.auxiliaryMaxUsd) || identity.auxiliaryMaxUsd <= 0)) {
     throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
   }
-  const model = (await resolvePrivateModel(engine, { cliFlag: identity.params.model as string | undefined,
+  const model = (await resolvePrivateModel(engine, { privateRole: 'enrichment', cliFlag: identity.params.model as string | undefined,
     configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, policy)).model;
   const sourceIds = [...identity.sourceIds].sort();
   const bound = await selectedSources(engine, sourceIds);
@@ -78,7 +78,7 @@ export async function withEnrichSubscription<T>(engine: BrainEngine, flags: Enri
     const current = readPrivateCodexConfig();
     if (!current || privatePolicyFingerprint(current) !== privatePolicyFingerprint(policy) ||
         digest(await selectedSources(db, sourceIds)) !== digest(bound)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
-    await resolvePrivateModel(db, { cliFlag: identity.params.model as string | undefined,
+    await resolvePrivateModel(db, { privateRole: 'enrichment', cliFlag: identity.params.model as string | undefined,
       configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, current);
   };
   const enclosing = codexSubscriptionContext();
@@ -144,7 +144,7 @@ export async function queuePrivateEnrich(engine: BrainEngine, flags: EnrichAllow
     throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
   }
   const grant = parseGrant(flags);
-  await resolvePrivateModel(engine, { cliFlag: identity.params.model as string | undefined,
+  await resolvePrivateModel(engine, { privateRole: 'enrichment', cliFlag: identity.params.model as string | undefined,
     configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, policy);
   const sourceIds = [...new Set(identity.sourceIds)].sort();
   const paid = spendAuthorization ? { ...spendAuthorization, group_id: grant.requestId } : undefined;

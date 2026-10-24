@@ -2,7 +2,7 @@ import { getChatModel } from '../ai/gateway.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { ChatOpts } from '../ai/gateway.ts';
-import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, privateModelForRole } from '../ai/private-policy.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 
 export const CODEX_GRADE_VERSION = 'codex-grounded-grade-v1';
@@ -13,7 +13,7 @@ export async function privateGradeMode(engine: BrainEngine, model: string, ensem
   if (!policy) return false;
   assertPrivateRoute(model, 'grade_takes.model', policy);
   await resolvePrivateModel(engine, { privateRole: 'take-grading', cliFlag: model, tier: 'utility', fallback: 'unused' }, policy);
-  for (const judge of ensemble ?? []) assertPrivateRoute(judge.modelId, 'grade_takes.ensemble.model', policy);
+  for (const judge of ensemble ?? []) assertPrivateRoute(judge.modelId, 'grade_takes.ensemble.model', policy, 'take-grading');
   return true;
 }
 
@@ -48,7 +48,8 @@ export async function sequentialJudges<T>(calls: Array<() => Promise<T>>): Promi
 /** One resolved model drives inference, budget admission and versioned cache identity. */
 export async function resolveGradeIdentity(engine: BrainEngine, model: string | undefined,
   ensemble: Array<{modelId: string}> | undefined, version: string) {
-  const judgeModelFull = model ?? getChatModel();
+  const policy = readPrivateCodexConfig();
+  const judgeModelFull = model ?? (policy ? privateModelForRole(policy, 'take-grading') : getChatModel());
   const privateMode = await privateGradeMode(engine, judgeModelFull, ensemble);
   // Preserve legacy cache keys; subscription budgeting requires the provider prefix.
   const judgeModelId = privateMode ? judgeModelFull : splitProviderModelId(judgeModelFull).model || judgeModelFull;

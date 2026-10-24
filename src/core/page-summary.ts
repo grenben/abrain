@@ -111,7 +111,7 @@ export const SYNOPSIS_SYSTEM_PROMPT = [
 ].join('\n');
 
 export interface GeneratePerChunkSynopsisArgs {
-  privateRole?: 'contextual-synopsis' | 'longmemeval-synopsis';
+  privateRole?: 'page-summary' | 'contextual-synopsis' | 'longmemeval-synopsis';
   /** The full document text (source file, chunk-concat, or chunk-alone per D11). */
   documentText: string;
   /** The chunk for which we're generating the synopsis. */
@@ -168,7 +168,7 @@ export async function generatePerChunkSynopsis(
   const maxTokens = args.maxTokens ?? SYNOPSIS_MAX_TOKENS;
 
   const chatOpts: ChatOpts = {
-    privateRole: args.privateRole ?? 'contextual-synopsis',
+    privateRole: args.privateRole ?? 'page-summary',
     // #3813: key-aware tier default, not the hardcoded hash anchor above —
     // an OPENAI_API_KEY-only install must not route to Anthropic.
     model: args.model ?? resolveTierDefault('utility'),

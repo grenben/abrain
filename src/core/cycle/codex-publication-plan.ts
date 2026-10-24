@@ -7,11 +7,13 @@ import { validateMaintenance, submitMaintenanceIntent, submitDatabaseMaintenance
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { getWriteRequest } from '../persistence/journal.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
+import { readPrivateCodexConfig, privatePolicyFingerprint, PrivateRoutingError } from '../ai/private-policy.ts';
 
 export interface PublicationEvidence { slug: string; id: number; revision: string; excerpt: string }
 export interface PublicationPage { slug: string; content: string; expectedRevision: string | null; evidence: PublicationEvidence[]; files?: PublicationFileEvidence[]; file?: boolean }
 export interface PublicationPayload {
   version: 1; authority: MaintenanceAuthority['writer']; pages: PublicationPage[];
+  policy_fingerprint?: string;
   evidence: PublicationEvidence[]; files?: PublicationFileEvidence[]; watermark: { key: string; value: string }; skipped: boolean;
 }
 export interface PublicationPlan { plan_id: string; payload: PublicationPayload; payload_hash: string; state: 'accepted' | 'complete' }
@@ -20,6 +22,14 @@ function assertActive(signal?: AbortSignal) {
   codexSubscriptionContext()?.signal?.throwIfAborted();
 }
 const fail = (): never => { throw new CodexProposalError('invalid_output'); };
+function checkPolicy(payload: PublicationPayload): void {
+  const policy = readPrivateCodexConfig();
+  // Old scalar plans remain recoverable under scalar policy. A tiered grant
+  // cannot silently adopt work retained before explicit role authorization.
+  if (payload.policy_fingerprint === undefined && policy && 'model' in policy) return;
+  if (!policy || payload.policy_fingerprint !== privatePolicyFingerprint(policy))
+    throw new PrivateRoutingError('publication:policy_changed');
+}
 export function publicationRequestId(planId: string, ordinal: number): string {
   const hex = digest(['codex-publication-v1', planId, ordinal]);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
@@ -29,15 +39,20 @@ export async function pendingPublication(engine: BrainEngine, authority: Mainten
     WHERE source_id=$1 AND source_incarnation=$2 AND kind=$3 AND state='accepted'`,
   [authority.writer.sourceId, authority.writer.sourceIncarnation, kind]);
   if (plan && (digest(plan.payload) !== plan.payload_hash || digest(plan.payload.authority) !== digest(authority.writer))) fail();
+  if (plan) checkPolicy(plan.payload);
   return plan ?? null;
 }
 /** Bank the entire immutable plan before the first prepared write is admitted. */
 export async function retainPublication(engine: BrainEngine, authority: MaintenanceAuthority, kind: 'patterns' | 'synthesis', payload: PublicationPayload, signal?: AbortSignal): Promise<PublicationPlan> {
   assertActive(signal);
+  const policy = readPrivateCodexConfig();
+  if (!policy) throw new PrivateRoutingError('publication:policy_missing');
+  payload = { ...payload, policy_fingerprint: privatePolicyFingerprint(policy) };
   const hash = digest(payload), planId = digest([kind, authority.writer.sourceIncarnation, hash]);
   await engine.transaction(async tx => {
     assertActive(signal);
     await codexSubscriptionContext()?.checkAuthorityInTransaction?.(tx);
+    checkPolicy(payload);
     await tx.lockPageKeys([...payload.pages, ...payload.evidence].map(page => ({ sourceId: authority.writer.sourceId, slug: page.slug })));
     await validateMaintenance(tx, authority, payload.pages[0]?.slug ?? payload.evidence[0]?.slug ?? 'reflections');
     validatePublicationFiles(payload.files ?? []);
@@ -60,6 +75,7 @@ export async function retainPublication(engine: BrainEngine, authority: Maintena
 export async function executePublication(engine: BrainEngine, authority: MaintenanceAuthority, plan: PublicationPlan, signal?: AbortSignal): Promise<number> {
   assertActive(signal);
   await codexSubscriptionContext()?.checkAuthority?.();
+  checkPolicy(plan.payload);
   const [stored] = await engine.executeRaw<{payload_hash:string;state:string}>(
     'SELECT payload_hash,state FROM codex_publication_plans WHERE plan_id=$1 AND source_id=$2 AND source_incarnation=$3',
     [plan.plan_id, authority.writer.sourceId, authority.writer.sourceIncarnation]);
@@ -69,6 +85,7 @@ export async function executePublication(engine: BrainEngine, authority: Mainten
   for (let i = 0; i < plan.payload.pages.length; i++) {
     assertActive(signal);
     await codexSubscriptionContext()?.checkAuthority?.();
+    checkPolicy(plan.payload);
     const page = plan.payload.pages[i]!;
     const submit = page.file === false ? submitDatabaseMaintenanceIntent : submitMaintenanceIntent;
     await submit(engine, authority, page.slug, { kind: page.files ? 'managed_maintenance_codex_synthesis_page' : 'managed_maintenance_codex_page',
@@ -80,6 +97,7 @@ export async function executePublication(engine: BrainEngine, authority: Mainten
   await engine.transaction(async tx => {
     assertActive(signal);
     await codexSubscriptionContext()?.checkAuthorityInTransaction?.(tx);
+    checkPolicy(plan.payload);
     const [current] = await tx.executeRaw<{state:string;payload_hash:string}>(
       'SELECT state,payload_hash FROM codex_publication_plans WHERE plan_id=$1 FOR UPDATE', [plan.plan_id]);
     if (!current || current.payload_hash !== plan.payload_hash) fail();

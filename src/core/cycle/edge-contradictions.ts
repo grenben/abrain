@@ -300,7 +300,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
   const done = (status: EdgeContradictionsResult['status'], detail: string, totals?: Record<string, number>): EdgeContradictionsResult =>
     ({ name: 'edge_contradictions', status, detail, totals, duration_ms: Date.now() - start });
 
-  const model = await resolveModel(engine, { configKey: 'models.dream.edge_contradictions', tier: 'utility', fallback: 'haiku' });
+  const model = await resolveModel(engine, { privateRole: 'edge-contradictions', configKey: 'models.dream.edge_contradictions', tier: 'utility', fallback: 'haiku' });
   const config = await loadEdgeContradictionsConfig(engine, model);
   const declaredMode = await loadSingleValueMode(engine);
   if (config.mode === 'off' && declaredMode === 'off') return done('skipped', 'mode off (dream.edge_contradictions.mode, dream.single_value.mode)');

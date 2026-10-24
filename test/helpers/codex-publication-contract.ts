@@ -1,3 +1,4 @@
+import { withCodexRoleFixture } from './codex-role-fixture.ts';
 import { beforeAll, afterAll, test, expect } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
@@ -68,6 +69,23 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
   }
   const reply = (value:unknown)=>writeFileSync(control, JSON.stringify(value));
   const calls = ()=>existsSync(capture)?readFileSync(capture,'utf8'):'';
+  withCodexRoleFixture(root, ['patterns'], () => {
+  // Existing crash/replay coverage used an unchanged grant. This exercises the
+  // real retained-plan path after a different tier changes, without another call.
+  test('retained publication refuses a changed policy even when its own role and model still match', async () => {
+    const f = await fixture(); reply(f.proposal());
+    expect((await f.run(haltAfterRetention(f.sourceId))).status).toBe('fail');
+    const before = calls(), path = join(root, '.gbrain', 'config.json'), saved = readFileSync(path, 'utf8');
+    const config = JSON.parse(saved); config.private_codex.models.deep = 'codex-cli:changed-deep';
+    try {
+      writeFileSync(path, JSON.stringify(config));
+      expect((await f.run()).status).toBe('fail');
+      expect(calls()).toBe(before);
+      expect(await engine.getPage('patterns/review', { sourceId: f.sourceId })).toBeNull();
+      expect(await engine.executeRaw('SELECT id FROM persistence_requests WHERE source_id=$1', [f.sourceId])).toHaveLength(0);
+    } finally { writeFileSync(path, saved); }
+    expect((await f.run()).status).toBe('ok'); expect(calls()).toBe(before);
+  });
   test('production patterns publishes a retained proposal through receipts, files and source-scoped provenance', async()=>{
     const f = await fixture(); reply(f.proposal());
     const result = await f.run(); expect(result.status).toBe('ok'); expect(result.details?.patterns_written).toBe(1);
@@ -185,4 +203,5 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     expect(await engine.executeRaw('SELECT id FROM persistence_requests WHERE source_id=$1',[f.sourceId])).toHaveLength(1);
   });
 
+  });
 }

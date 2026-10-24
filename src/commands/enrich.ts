@@ -247,7 +247,7 @@ const defaultSynthesize: SynthesizeFn = async ({ system, user, model, abortSigna
     if (!allowedSources || !bindingHash) throw new CodexProposalError('invalid_input');
     const allowed = new Set(allowedSources);
     const proposal = await withCodexProposalCache({ namespace: 'enrich-page-v1', bindingHash }, () => cachedCodexProposal({
-      model, system, messages: [{ role: 'user', content: user }], maxTokens: 2048, abortSignal,
+      privateRole: 'enrichment', model, system, messages: [{ role: 'user', content: user }], maxTokens: 2048, abortSignal,
       responseSchema: { name: 'enrich-page-v1', schema: { type: 'object', properties: { text: { type: 'string' } },
         required: ['text'], additionalProperties: false }, validateCodexProposal: raw => {
         const text = (JSON.parse(raw) as { text: string }).text;
@@ -566,7 +566,7 @@ export async function runEnrichCore(
     if (!grant.current) throw new SubscriptionAdmissionError('subscription_exhausted');
   }
   const model = privatePolicy
-    ? (await resolvePrivateModel(engine, { cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, privatePolicy)).model
+    ? (await resolvePrivateModel(engine, { privateRole: 'enrichment', cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, privatePolicy)).model
     : opts.model || getChatModel();
   const synthesizeFn = opts.synthesizeFn ?? defaultSynthesize;
   const config = loadConfig();
@@ -1066,7 +1066,7 @@ export async function runEnrich(engine: BrainEngine, args: string[]): Promise<vo
     throw new SubscriptionAdmissionError('subscription_auxiliary_budget_required');
   }
   if (privatePolicy && !parsed.dryRun) {
-    await resolvePrivateModel(engine, { cliFlag: parsed.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, privatePolicy);
+    await resolvePrivateModel(engine, { privateRole: 'enrichment', cliFlag: parsed.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, privatePolicy);
   }
 
   // Chat gateway is required for non-dry-run inline work (the worker needs it

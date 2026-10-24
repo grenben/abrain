@@ -1,3 +1,4 @@
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
 import { remainingSynthesisSubmissions, reserveSynthesisSubmission } from './synthesize-codex-admission.ts';
 import { resolve } from 'node:path';
 import type { BrainEngine } from '../engine.ts';
@@ -31,12 +32,13 @@ export async function runPrivateSynthesize(engine: BrainEngine, opts: Synthesize
     if (opts.deadlineAtMs != null) signals.push(AbortSignal.timeout(Math.max(0, Math.min(2147483647, opts.deadlineAtMs - Date.now()))));
     opts = { ...opts, brainDir: resolve(opts.brainDir), signal: AbortSignal.any(signals.filter((s): s is AbortSignal => !!s)) };
     const sourceId = opts.sourceId ?? 'default', config = await loadSynthConfig(engine), policy = readPrivateCodexConfig()!;
-    assertPrivateRoute(config.model, 'dream.synthesize.model', policy);
+    assertPrivateRoute(config.model, 'dream.synthesize.model', policy, 'dream-synthesis');
     const decide = await resolveTriageDecide(engine);
     assertTriageRoute(config.triage.model, !!decide);
     if (!config.enabled && !opts.once && !opts.inputFile) return result('skipped', 'synthesis is disabled', { reason: 'disabled' });
     if (!await maintenanceCallerPreflight(engine, sourceId)) throw new Error('codex_publication_requires_managed_persistence');
     if (opts.dryRun) return result('ok', 'Private synthesis preview: no inference or publication.', { dryRun: true });
+    return await withPrivateRoleScope(['dream-synthesis', 'dream-triage'], async () => {
     const authority = (await maintenancePreflight(engine, sourceId, opts.brainDir, { deadlineAtMs: opts.deadlineAtMs }))!;
     const pending = await pendingPublication(engine, authority, 'synthesis');
     if (pending) {
@@ -89,6 +91,7 @@ export async function runPrivateSynthesize(engine: BrainEngine, opts: Synthesize
     });
     return result(deferred ? 'warn' : 'ok', deferred ? 'Synthesis has deferred transcripts; completion is not claimed for them.' : 'Bounded synthesis finished.',
       { transcripts_processed: processed, already_synthesized: completed, pages_written: written, deferred, excluded_visibility: ignored });
+    });
   } catch (error) {
     // Never turn policy, parsing, lifecycle or publication failures into clean zero/completion.
     const candidate = (error as { code?: unknown })?.code ?? (error instanceof Error ? error.message : null);

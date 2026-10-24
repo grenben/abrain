@@ -1,3 +1,4 @@
+import { withCodexRoleFixture } from './codex-role-fixture.ts';
 import { generatePerChunkSynopsis } from '../../src/core/page-summary.ts';
 import { runPhaseGradeTakes, defaultJudge } from '../../src/core/cycle/grade-takes.ts';
 import type { OperationContext } from '../../src/core/operations.ts';
@@ -62,6 +63,7 @@ afterAll(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+  withCodexRoleFixture(root, ['facts', 'classifiers', 'atoms', 'take-grading', 'page-summary'], () => {
 test('native fact schema preserves host provenance and bounds candidates before acceptance', async () => {
   reply({ facts: [fact] });
   await run(async runId => {
@@ -240,4 +242,5 @@ test('private ensembles run sequentially and never cache a failed slot as a judg
   }, 4);
 });
 
+  });
 }

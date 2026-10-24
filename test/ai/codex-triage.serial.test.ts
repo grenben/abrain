@@ -1,3 +1,4 @@
+import { withCodexRoleFixture } from '../helpers/codex-role-fixture.ts';
 import { beforeAll, afterAll, test, expect } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
@@ -67,6 +68,7 @@ afterAll(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+withCodexRoleFixture(root, ['dream-triage'], () => {
 test('real triage transports schema, serializes calls and stores grounded versioned verdicts', async () => {
   const good = transcript('good'), empty = transcript('empty');
   const result = await withRun(() => runTriagePass(engine, [good, empty], cfg));
@@ -116,4 +118,6 @@ test('refusal is an explicit failure and never a cached negative judgment', asyn
   await expect(withRun(() => runTriagePass(engine, [t], cfg), 'fixture-refusal')).rejects.toThrow();
   expect(await engine.getDreamVerdict(t.filePath, t.contentHash)).toBeNull();
   expect(calls()).toHaveLength(count + 1);
+});
+
 });

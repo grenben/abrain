@@ -1,3 +1,4 @@
+import { withCodexRoleFixture } from './codex-role-fixture.ts';
 import { beforeAll, beforeEach, afterAll, test, expect } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -81,6 +82,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     for (const [key,value] of saved) if (value === undefined) delete process.env[key]; else process.env[key]=value;
     rmSync(root,{recursive:true,force:true});
   });
+  withCodexRoleFixture(root, ['take-calibration', 'calibration-voice-judge'], () => {
   test('native profile is source/holder scoped, retains metrics and reuses its receipt', async () => {
     await run(async id => {
       expect(await phase({ gradeCompletion: 0.6 })).toMatchObject({ status: 'ok', details: { profiles_completed: 1, cost_usd: null, billing: 'subscription' } });
@@ -270,5 +272,6 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     } finally { process.stdout.write=stdout;process.stderr.write=stderr;process.exit=exit; }
     const [admission]=await engine.executeRaw<{account_lane:string}>("SELECT account_lane FROM codex_subscription_runs WHERE run_id LIKE $1",[`codex-calibration:${requestId}:%`]);
     expect(admission!.account_lane).toBe('codex-subscription'); expect(await rows()).toHaveLength(1);
+  });
   });
 }

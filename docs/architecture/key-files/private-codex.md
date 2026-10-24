@@ -15,6 +15,11 @@ Gateway `ChatOpts.privateRole` and direct dispatcher `role` carry trusted caller
 identity. Dispatch acceptance and proposal caches bind role and complete policy;
 queue/recovery bindings use the policy fingerprint for tiered configurations.
 This shared foundation does not establish feature-level or live acceptance.
+Updated core callers carry their own role identities, including the separate direct
+`page-summary` and contextual synopsis roles. `private-role-scope.ts` fences
+retained-result and publication boundaries against policy changes; synthesis
+and pattern plans bind the policy that accepted them, so recovery cannot adopt
+a different tiered grant. Core contract fixtures use explicit role allowlists.
 
 - `src/core/skillopt/codex-cycle.ts` — private scheduled phase through the real batch coordinator, explicit trusted source/read scope and inherited subscription admission. `codex-cycle-config.ts` validates configuration; `codex-cycle-store.ts` retains frozen selection and source/incarnation cooldowns backed by actual batch receipts; `codex-cycle-context.ts` prevents unrelated workflows from adopting cycle identities. Migration v286 (`codex-cycle-schema.ts`) has storage parity. `cycle-phase.ts` retains default-off and legacy behavior; `cycle.ts` threads explicit source/deadline. `test/helpers/codex-skillopt-cycle-contract.ts` covers dispatcher, queued maintenance, partial publication and honest stamp behavior. See [scheduled cycles](../../development/private-codex-skillopt-cycles.md).
 

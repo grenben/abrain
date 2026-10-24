@@ -349,7 +349,7 @@ export async function runPhaseDrift(
   const maintenance = await maintenancePreflight(engine, sourceId);
   if (sourceBinding) await bindPrivateDriftSource(engine, sourceId, sourceBinding);
   const modelId = await resolveModel(engine, {
-    configKey: 'models.drift',
+    privateRole: 'drift', configKey: 'models.drift',
     deprecatedConfigKey: 'dream.drift.model',
     tier: 'reasoning',
     fallback: 'sonnet',

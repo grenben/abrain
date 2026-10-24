@@ -9,7 +9,7 @@ export const triageVersionForModel = (model: string, legacy: number): number => 
 
 export function assertTriageRoute(model: string, hasDecide = false): void {
   const policy = readPrivateCodexConfig();
-  assertPrivateRoute(normalizeModelId(model), 'dream:triage', policy);
+  assertPrivateRoute(normalizeModelId(model), 'dream:triage', policy, 'dream-triage');
   if (policy && hasDecide) throw new PrivateRoutingError('dream:triage_decide');
 }
 

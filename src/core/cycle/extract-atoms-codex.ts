@@ -13,7 +13,7 @@ export function privateAtomsFailure(error: unknown): boolean {
 export function privateAtomsAdmission(model: string): boolean {
   if (!model.startsWith('codex-cli:')) return false;
   const policy = readPrivateCodexConfig();
-  assertPrivateRoute(model, 'extract_atoms.model', policy);
+  assertPrivateRoute(model, 'extract_atoms.model', policy, 'atoms');
   if (!policy || !codexSubscriptionContext()) throw new SubscriptionAdmissionError('subscription_required');
   return true;
 }

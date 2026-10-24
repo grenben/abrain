@@ -1,3 +1,4 @@
+import { withCodexRoleFixture } from './codex-role-fixture.ts';
 /** Runs real proposal extraction and persistence with a synthetic CLI.
  * Protects grounded batch acceptance, empty-result cache identity and rollback.
  * Legacy extractor-injection tests do not cover native transport or private authority.
@@ -78,6 +79,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     for (const [key, value] of saved) if (value === undefined) delete process.env[key]; else process.env[key] = value;
     rmSync(root, { recursive: true, force: true });
   });
+  withCodexRoleFixture(root, ['take-proposals'], () => {
   test('native grounded batch keeps quote provenance, source scope and advisory status', async () => {
     await run(async id => {
       expect(await phase()).toMatchObject({ status: 'ok', details: { proposals_inserted: 2, cost_usd: null, billing: 'subscription' } });
@@ -168,5 +170,6 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     expect((await phase()).details?.budget_exhausted).toBe(true);
     expect((await runPhaseProposeTakes(ctx(), { dryRun: true })).status).toBe('skipped');
     expect(calls().length).toBe(before); expect(await rows()).toHaveLength(0);
+  });
   });
 }

@@ -473,6 +473,7 @@ export async function defaultJudge(input: {
     .replace('{EVIDENCE_BLOCK}', input.evidence);
 
   const result = await chatFn({
+    privateRole: 'take-grading',
     messages: [{ role: 'user', content: prompt }],
     ...(input.modelHint ? { model: input.modelHint } : {}),
     maxTokens: 600,

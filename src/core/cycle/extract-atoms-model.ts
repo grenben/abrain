@@ -6,7 +6,7 @@ export async function resolveExtractAtomsModelWithSource(
   engine: BrainEngine,
 ): Promise<{ model: string; source: 'config' | 'tier_config' | 'tier_default'; label?: string }> {
   if (readPrivateCodexConfig()) {
-    const r = await resolveModelDetailed(engine,{configKey:'models.dream.extract_atoms',tier:'utility',fallback:'unused'});
+    const r = await resolveModelDetailed(engine,{privateRole:'atoms',configKey:'models.dream.extract_atoms',tier:'utility',fallback:'unused'});
     return {model:r.model,source:r.source==='config_key'?'config':r.source==='tier_config'?'tier_config':'tier_default'};
   }
   try {

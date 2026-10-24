@@ -1,3 +1,4 @@
+import { bindPrivateRoleScope } from '../ai/private-role-scope.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { OperationError } from '../ops/contract.ts';
 import type { CalibrationProfileOpts } from './calibration-profile.ts';
@@ -27,14 +28,15 @@ const profileResult = (profile: PrivateProfile, cacheHit: boolean) => ({ profile
 export async function runPrivateCalibration(ctx: OperationContext, scope: ScopedReadOpts, opts: CalibrationProfileOpts) {
   const results: Array<Record<string, unknown>> = [], failures: Array<{ source_id: string; code: string }> = [];
   try {
-    const context = codexSubscriptionContext(), job = currentSubmissionAuthority();
+    const admitted = codexSubscriptionContext(), job = currentSubmissionAuthority();
+    const context = admitted ? bindPrivateRoleScope(admitted, ['take-calibration', 'calibration-voice-judge']) : undefined;
     if (ctx.remote !== false || currentVerifiedLocalWriter()?.remote || job && job.kind !== 'application') throw new OperationError('permission_denied', 'Private calibration requires local authority.', 'Use a trusted local cycle.');
     if (!context) throw new SubscriptionAdmissionError('subscription_required');
     const [brain] = await ctx.engine.executeRaw<{ brain_id: string }>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
     const [admittedBrain] = await context.engine.executeRaw<{ brain_id: string }>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
     if (!brain || brain.brain_id !== admittedBrain?.brain_id) throw new SubscriptionAdmissionError('subscription_identity_conflict');
-    const model = await resolveModel(ctx.engine, { cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'sonnet' });
-    await resolveModel(ctx.engine, { tier: 'utility', fallback: 'haiku' });
+    const model = await resolveModel(ctx.engine, { privateRole: 'take-calibration', cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'sonnet' });
+    await resolveModel(ctx.engine, { privateRole: 'calibration-voice-judge', tier: 'utility', fallback: 'haiku' });
     const holder = resolveOwnerHolder({ override: opts.holder, configValue: await ctx.engine.getConfig('emotional_weight.user_holder') });
     const gradeCompletion = opts.gradeCompletion ?? 1;
     if (!holder.trim() || holder.length > 200 || !Number.isFinite(gradeCompletion) || gradeCompletion < 0 || gradeCompletion > 1) throw new CodexProposalError('invalid_input');

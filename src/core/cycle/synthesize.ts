@@ -1617,7 +1617,7 @@ export async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig>
   // v0.28: resolveModel() unifies CLI flag > new key > deprecated key > models.default > env > fallback
   const { resolveModel, resolveAlias } = await import('../model-config.ts');
   const model = await resolveModel(engine, {
-    configKey: 'models.dream.synthesize',
+    privateRole: 'dream-synthesis', configKey: 'models.dream.synthesize',
     deprecatedConfigKey: 'dream.synthesize.model',
     tier: 'reasoning',
     fallback: 'sonnet',
@@ -1627,10 +1627,13 @@ export async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig>
   // stays free for a future real CLI flag). Both legacy spellings keep
   // resolving through the standard chain when the new key is unset.
   const triageModelOverride = await engine.getConfig('models.dream.triage');
-  const verdictModel = triageModelOverride?.trim()
+  const verdictModel = readPrivateCodexConfig()
+    ? await resolveModel(engine, { privateRole: 'dream-triage', configKey: 'models.dream.triage',
+        deprecatedConfigKey: 'models.dream.synthesize_verdict', tier: 'utility', fallback: 'haiku' })
+    : triageModelOverride?.trim()
     ? await resolveAlias(engine, triageModelOverride.trim())
     : await resolveModel(engine, {
-        configKey: 'models.dream.synthesize_verdict',
+        privateRole: 'dream-triage', configKey: 'models.dream.synthesize_verdict',
         deprecatedConfigKey: 'dream.synthesize.verdict_model',
         tier: 'utility',
         fallback: 'haiku',

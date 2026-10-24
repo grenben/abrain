@@ -842,7 +842,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
     const phaseStartMs = Date.now();
     const proposalRunId = privateMode ? randomUUID() : `propose-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}-${randomUUID().slice(0, 8)}`;
 
-    const modelId = privateMode ? await resolveModel(engine, { cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'sonnet' }) : opts.model ?? getChatModel();
+    const modelId = privateMode ? await resolveModel(engine, { privateRole: 'take-proposals', cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'sonnet' }) : opts.model ?? getChatModel();
     if (privateMode) promptVersion = codexTakeCacheVersion(modelId, attributionRules, dateGrounding, promptVersion);
 
     // #4494: configurable extractor output caps (dream.triage.max_tokens

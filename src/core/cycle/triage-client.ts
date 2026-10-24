@@ -70,6 +70,7 @@ export function makeJudgeClient(verdictModel: string): JudgeClient | null {
             : undefined);
 
       const result: ChatResult = await gatewayChat({
+        privateRole: 'dream-triage',
         model: modelStr,
         responseSchema: codexTriageSchema(modelStr, options?.validateCodexProposal),
         system,

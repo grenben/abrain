@@ -1,3 +1,4 @@
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
 import { isQuarantined } from '../quarantine.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
@@ -24,12 +25,13 @@ export async function runPrivatePatterns(engine: BrainEngine, opts: PatternsPhas
   const result = (status: PhaseResult['status'], summary: string, details: Record<string, unknown>): PhaseResult =>
     ({ phase: 'patterns', status, summary, duration_ms: Date.now() - started, details });
   const policy = readPrivateCodexConfig()!;
-  assertPrivateRoute(config.model, 'patterns.model', policy);
+  assertPrivateRoute(config.model, 'patterns.model', policy, 'patterns');
   const authority = await maintenancePreflight(engine, sourceId, opts.brainDir, { deadlineAtMs: opts.deadlineAtMs });
   if (!authority) throw new Error('codex_publication_requires_managed_persistence');
   // Recovery takes precedence over changed evidence, cooldowns and new inference.
   const pending = await pendingPublication(engine, authority, 'patterns');
   if (opts.dryRun) return result('ok', 'private patterns preview: no inference or publication', { dryRun: true, pending_plan: pending?.plan_id ?? null });
+  return withPrivateRoleScope(['patterns'], async () => {
   if (pending) {
     const count = await executePublication(engine, authority, pending, opts.signal);
     return result('ok', `patterns: recovered ${count} prepared page(s)`, { patterns_written: count, recovered: true, plan_id: pending.plan_id, cost_usd: null });
@@ -109,4 +111,5 @@ export async function runPrivatePatterns(engine: BrainEngine, opts: PatternsPhas
   const count = await executePublication(engine, authority, plan, opts.signal);
   return result('ok', `patterns: published ${count} prepared page(s)`, { patterns_written: count,
     clean_zero: proposal.skipped, plan_id: plan.plan_id, cost_usd: null, reflections_considered: evidence.length });
+  });
 }
