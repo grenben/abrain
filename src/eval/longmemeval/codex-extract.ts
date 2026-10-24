@@ -12,7 +12,7 @@ const nullableLabel = { type: ['string', 'null'], minLength: 1, maxLength: 64 };
 const dateValid = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
 export async function codexExtract(input: { client: ThinkLLMClient; body: string; model: string; sessionDate?: string }) {
   if (!isGatewayThinkClient(input.client) || !input.body.trim() || Buffer.byteLength(input.body) > 160000) throw new CodexProposalError('invalid_input');
-  await resolveModel(codexSubscriptionContext()?.engine ?? null, { cliFlag: input.model, tier: 'utility', fallback: 'unused' });
+  await resolveModel(codexSubscriptionContext()?.engine ?? null, { privateRole: 'longmemeval-extractor', cliFlag: input.model, tier: 'utility', fallback: 'unused' });
   const dateMatch = input.sessionDate?.match(/^(\d{4})[-/](\d{2})[-/](\d{2})(?:\D|$)/);
   const sessionDate = dateMatch ? dateMatch.slice(1, 4).join('-') : null;
   if (sessionDate && !dateValid(sessionDate)) throw new CodexProposalError('invalid_input');
@@ -21,7 +21,7 @@ export async function codexExtract(input: { client: ThinkLLMClient; body: string
     'Use a date explicitly present in the excerpt or the supplied sessionDate. Omit unsupported claims. Return claims: [] when none qualify.';
   const prompt = JSON.stringify({ transcript: input.body, sessionDate });
   const evidenceHash = digest({ protocol: CODEX_EXTRACTOR_PROTOCOL, system, prompt });
-  const result = await cachedCodexProposal({ model: input.model, system, messages: [{ role: 'user', content: prompt }],
+  const result = await cachedCodexProposal({ privateRole: 'longmemeval-extractor', model: input.model, system, messages: [{ role: 'user', content: prompt }],
     maxTokens: 4096, timeoutMs: 120000, responseSchema: { name: CODEX_EXTRACTOR_PROTOCOL, schema: {
       type: 'object', properties: { evidence_hash: { type: 'string', enum: [evidenceHash] },
         claims: { type: 'array', maxItems: 32, items: { type: 'object', properties: {

@@ -78,6 +78,9 @@ changes to core helpers reused by evaluation features. It must preserve the
 existing source/authority/publication boundaries. An inventory entry alone is
 not implementation: `parser-polish` needs a real caller with an observable result.
 
+The extended caller implementation and its verification are tracked in
+[the extended role checkpoint](private-codex-extended-roles.md).
+
 ## Per-group checkpoints
 
 1. Trace real entrypoints through CLI, scheduler, worker, retry, cache and

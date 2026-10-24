@@ -39,7 +39,7 @@ export async function runCodexRollout(opts: RolloutOpts): Promise<Trajectory> {
   if (Buffer.byteLength(JSON.stringify(snapshot)) > 32768) invalid();
   const signal = AbortSignal.any([host.signal, opts.abortSignal].filter((s): s is AbortSignal => !!s));
   signal.throwIfAborted();
-  const { model } = await resolvePrivateModel(opts.engine, { cliFlag: snapshot.targetModel, tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy!);
+  const { model } = await resolvePrivateModel(opts.engine, { privateRole: 'iterative-minions', cliFlag: snapshot.targetModel, tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy!);
   const [source] = await opts.engine.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1', [snapshot.sourceId]);
   if (!source || source.archived) rolloutConflict();
   const binding = await bindRollout({ ...host, signal }, snapshot.codex.invocationId,

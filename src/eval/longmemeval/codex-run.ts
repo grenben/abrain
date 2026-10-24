@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync } from 'node:fs';
 import type { BrainEngine } from '../../core/engine.ts';
+import { bindPrivateRoleScope } from '../../core/ai/private-role-scope.ts';
 import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
 import { codexSubscriptionContext, withCodexSubscription, type CodexSubscriptionContext } from '../../core/ai/subscription-context.ts';
 import { hasAIInvocationGuard, withAIInvocationPreflight } from '../../core/ai/invocation-guard.ts';
@@ -21,8 +22,9 @@ export function privateEvalReplayText(): string | undefined { return runs.getSto
 
 /** The original host authority stays outside the derived run fence; no recursive hooks. */
 export async function withPrivateEvalLifecycle<T>(run: () => Promise<T>): Promise<T> {
-  const host = codexSubscriptionContext();
-  if (!readPrivateCodexConfig() || !host) return run();
+  const parent = codexSubscriptionContext();
+  if (!readPrivateCodexConfig() || !parent) return run();
+  const host = bindPrivateRoleScope(parent, []); // Selected roles are resolved before the run is bound.
   if (runs.getStore()) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const state: RunState = { host }, auxiliaryAuthorized = hasAIInvocationGuard();
   const transactionFence = async (tx: BrainEngine) => {

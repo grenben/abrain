@@ -260,7 +260,7 @@ async function callSlot(
       const bindingHash = digest({ protocol: 'cross-modal-judge-v1', runId: context.runId,
         task: opts.task, output: opts.output, dimensions: opts.dimensions, slot: slot.id, cycle: opts.cycle });
       const proposal = await withCodexProposalCache({ namespace: 'cross-modal-judge-v1', bindingHash },
-        () => cachedCodexProposal({ ...base, responseSchema: { name: 'cross-modal-judge-v1', schema,
+        () => cachedCodexProposal({ ...base, privateRole: 'nightly-probes', responseSchema: { name: 'cross-modal-judge-v1', schema,
           validateCodexProposal: raw => {
             const parsed = parseModelJSON(raw);
             if (parsed._repaired || keys.some(key => !Number.isInteger(parsed.scores[key]?.score) ||

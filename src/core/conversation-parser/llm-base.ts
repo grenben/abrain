@@ -2,7 +2,7 @@
  * v0.41.16.0 — Shared LLM base for conversation-parser polish + fallback.
  *
  * The extraction orchestrator explicitly opts in to fallback after a built-in
- * miss. No polish wrapper currently calls this module. Strict private calls
+ * miss. The opt-in scan preview uses llm-polish.ts for evidence-preserving prose formatting. Strict private calls
  * use llm-codex.ts: native schemas, revalidated versioned cache, explicit errors.
  * The compatibility transport/cache below serves non-private callers.
  *

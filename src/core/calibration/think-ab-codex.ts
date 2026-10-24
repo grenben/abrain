@@ -5,7 +5,8 @@ import { initializeLocalPersistence } from '../persistence/page-mutations.ts';
 import { submissionAuthority } from '../persistence/authority.ts';
 import { declareDurablePersistence } from '../persistence/protocol.ts';
 import { currentSubmissionAuthority } from '../minions/submission-authority.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { bindPrivateRoleScope } from '../ai/private-role-scope.ts';
+import { readPrivateCodexConfig, privatePolicyFingerprint } from '../ai/private-policy.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { OperationError } from '../ops/contract.ts';
@@ -52,7 +53,8 @@ export async function recordPrivateAbPreference(engine: BrainEngine, sourceId: s
 }
 /** Two sequential native calls, with each accepted answer retained before the next. */
 export async function preparePrivateAbTrial(input: PrivateABInput): Promise<ABTrial> {
-    const policy = readPrivateCodexConfig(), context = codexSubscriptionContext();
+    const policy = readPrivateCodexConfig(), parent = codexSubscriptionContext();
+    const context = parent && policy ? bindPrivateRoleScope(parent, ['calibration-think-ab']) : undefined;
     if (!policy || !context)
         throw new SubscriptionAdmissionError('subscription_required');
     const id = requireUuid(input.trialId), { engine, sourceId, question, holder } = input;
@@ -71,8 +73,9 @@ export async function preparePrivateAbTrial(input: PrivateABInput): Promise<ABTr
         codexSubscriptionContext()!.signal?.throwIfAborted();
         await context.checkAuthority?.();
         const { source, authority } = await localContext(engine, sourceId, input.remote, true);
-        const model = await resolveModel(engine, { cliFlag: input.model, configKey: 'models.think', tier: 'deep', fallback: 'opus' });
-        const inputHash = digest({ protocol: 'codex-think-ab-v1', sourceId, incarnation: source.incarnation, question, holder, model, bin: policy.bin });
+        const model = await resolveModel(engine, { privateRole: 'calibration-think-ab', cliFlag: input.model, configKey: 'models.think', tier: 'deep', fallback: 'opus' });
+        const inputHash = digest({ protocol: 'codex-think-ab-v1', sourceId, incarnation: source.incarnation, question, holder, model, bin: policy.bin,
+            ...(policy.models ? { policyIdentity: privatePolicyFingerprint(policy) } : {}) });
         let trial = await engine.transaction(async (tx) => {
             await declareDurablePersistence(tx);
             const existing = await tx.executeRaw<ABTrial>('SELECT * FROM codex_think_ab_trials WHERE trial_id=$1::uuid', [id]);
@@ -101,11 +104,12 @@ export async function preparePrivateAbTrial(input: PrivateABInput): Promise<ABTr
                 continue;
             await context.checkAuthority?.();
             await checkTrialGeneration(engine, trial);
-            const opts = { question, sourceId, remote: false as const, model, withCalibration: side === 'calibrated', calibrationHolder: holder, embedQuestion: (q: string) => embedQueryWithPrefix(engine, q) };
+            const opts = { privateRole: 'calibration-think-ab' as const, question, sourceId, remote: false as const, model, withCalibration: side === 'calibrated', calibrationHolder: holder, embedQuestion: (q: string) => embedQueryWithPrefix(engine, q) };
             const captured = await withThinkEvidence(thinkPublicationContext(engine, opts), opts, () => runThink(engine, opts));
             await saveTrialAnswer(engine, trial, side, { ...captured.result, comparison_evidence: captured.evidence });
             trial = await readTrial(engine, id, sourceId);
         }
+        await context.checkAuthority?.();
         return trial;
     });
 }

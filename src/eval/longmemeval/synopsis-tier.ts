@@ -1,3 +1,4 @@
+import { resolveModel } from '../../core/model-config.ts';
 /**
  * synopsis-tier.ts — makes `gbrain eval longmemeval --mode tokenmax` measure
  * the vectors production builds for that mode.
@@ -176,7 +177,9 @@ export async function resolveSynopsisTier(knobs: ResolvedSearchKnobs, keywordOnl
   if (keywordOnly || knobs.contextual_retrieval_disabled || knobs.contextual_retrieval !== 'per_chunk_synopsis') return null;
   const privateMode = !!readPrivateCodexConfig();
   if (privateMode) validatePrivateSynopsisOptions(o);
-  const model = await resolveContextualSynopsisModel(privateMode ? codexSubscriptionContext()?.engine ?? null : null);
+  const model = privateMode
+    ? await resolveModel(codexSubscriptionContext()?.engine ?? null, { privateRole: 'longmemeval-synopsis', configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model', envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility', fallback: 'unused' })
+    : await resolveContextualSynopsisModel(null);
   const tier: SynopsisTier = {
     model,
     maxTokens: SYNOPSIS_MAX_TOKENS,

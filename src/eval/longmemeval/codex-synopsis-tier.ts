@@ -26,7 +26,7 @@ export async function applyPrivateSynopsisTier(engine: BrainEngine, pages: Reado
   // chunk evidence, native schema and model also enter each cache request hash.
   return withCodexProposalCache({ namespace: 'longmemeval-synopsis', bindingHash: digest({ runId: context.runId, protocol: CODEX_SYNOPSIS_VERSION }) }, async () => {
     for (const page of pages) {
-      const result = await reembedPageWithContextualRetrieval({ engine, pageSlug: page.slug, sourceId: 'default',
+      const result = await reembedPageWithContextualRetrieval({ privateRole: 'longmemeval-synopsis', engine, pageSlug: page.slug, sourceId: 'default',
         globalMode: 'per_chunk_synopsis', synopsisModel: tier.model, synopsisMaxTokens: tier.maxTokens, chunkConcurrency: 1,
         abortSignal: context.signal, onSynopsisResult: event => sp.recordNative(event.usage, event.cacheHit) });
       // No title fallback, automatic transient retry or false completion from a

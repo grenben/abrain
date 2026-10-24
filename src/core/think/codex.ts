@@ -2,7 +2,7 @@ import type { BrainEngine } from '../engine.ts';
 import type { RunThinkOpts, ThinkResponse, ThinkResult } from './index.ts';
 import type { ThinkGatherResult } from './gather.ts';
 import { chat } from '../ai/gateway.ts';
-import { readPrivateCodexConfig, PrivateRoutingError, privateModelForTier } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, PrivateRoutingError, privateModelForTier, privateModelForRole } from '../ai/private-policy.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 import { hasAIInvocationGuard, withAIInvocationPreflight, isAIInvocationPolicyError } from '../ai/invocation-guard.ts';
@@ -15,7 +15,11 @@ import { pickDecideConfig, readDecideConfig } from '../ai/decide/config.ts';
 
 /** Preserve the host's auxiliary USD guard; subscription consent alone cannot pay for retrieval. */
 export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, run: () => Promise<ThinkResult>): Promise<ThinkResult> {
-  if (!readPrivateCodexConfig()) return run();
+  const policy = readPrivateCodexConfig();
+  if (!policy) return run();
+  const role = opts.privateRole ?? 'think';
+  if (!['think', 'auto-think', 'calibration-think-ab'].includes(role)) throw new CodexProposalError('invalid_input');
+  privateModelForRole(policy, role);
   const context = codexSubscriptionContext();
   if (!context) throw new SubscriptionAdmissionError('subscription_required');
   if (!opts.question.trim() || opts.question.length > 16000 || opts.stubResponse || opts.client ||
@@ -27,7 +31,6 @@ export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, 
   await context.checkAuthority?.();
   if (context.signal?.aborted) throw new CodexProposalError('aborted');
   const decide = readDecideConfig(pickDecideConfig(await loadConfigSnapshot(engine)) ?? {});
-  const policy = readPrivateCodexConfig()!;
   const classifierModel = privateModelForTier(policy, 'utility');
   if (Object.values(decide.slots).some(slot => slot.mode !== 'off' && slot.provider !== `llm:${classifierModel}`) ||
     decide.egressFallback !== 'none' && decide.egressFallback !== `llm:${classifierModel}`)
@@ -46,7 +49,7 @@ export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, 
 
 const citationKey = (c: { page_slug: string; row_num: number | null }) => `${c.page_slug}#${c.row_num ?? '_'}`;
 /** Native response transport plus closure over the actual bounded retrieval evidence. */
-export async function proposeCodexThink(input: { model: string; system: string; prompt: string; gather: ThinkGatherResult }) {
+export async function proposeCodexThink(input: { privateRole?: RunThinkOpts['privateRole']; model: string; system: string; prompt: string; gather: ThinkGatherResult }) {
   if (Buffer.byteLength(input.system + input.prompt, 'utf8') > 131072) throw new CodexProposalError('invalid_input');
   const evidenceHash = digest({ system: input.system, prompt: input.prompt });
   const pages = new Set([...input.gather.pages.map(p => p.slug), ...input.gather.graphSlugs]);
@@ -58,7 +61,7 @@ export async function proposeCodexThink(input: { model: string; system: string; 
   for (const take of input.gather.takes) {
     const set = sources.get(take.page_slug) ?? new Set<number>(); set.add(take.page_id); sources.set(take.page_slug, set);
   }
-  const result = await chat({ privateRole: 'think', model: input.model, allowFallback: false, timeoutMs: 120000, maxTokens: 4096,
+  const result = await chat({ privateRole: input.privateRole ?? 'think', model: input.model, allowFallback: false, timeoutMs: 120000, maxTokens: 4096,
     system: input.system, messages: [{ role: 'user', content: input.prompt }], responseSchema: {
       name: 'codex-think-v1', schema: { type: 'object', additionalProperties: false, required: ['evidence_hash','answer','citations','gaps'], properties: {
         evidence_hash: { type: 'string', enum: [evidenceHash] }, answer: { type: 'string', maxLength: 24000 },

@@ -34,7 +34,7 @@ import { CostTracker, estimateUpperBoundCost } from './cost-tracker.ts';
 import { buildSourceTierBreakdown, classifySlugTier } from './cross-source.ts';
 import { shouldSkipForDateMismatch } from './date-filter.ts';
 import { withBudgetTracker } from '../ai/gateway.ts';
-import { readPrivateCodexConfig, assertPrivateRoute } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, privateModelForRole } from '../ai/private-policy.ts';
 import { assertSubscriptionTarget } from '../ai/subscription-target.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
@@ -254,7 +254,9 @@ function sortPairs(
 export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerResult> {
   const privatePolicy = readPrivateCodexConfig();
   if (privatePolicy) {
-    assertPrivateRoute(opts.judgeModel ?? resolveTierDefault('utility'), 'eval-contradictions:runner', privatePolicy);
+    const model = privateModelForRole(privatePolicy, 'contradiction-probe');
+    assertPrivateRoute(opts.judgeModel ?? model, 'eval-contradictions:runner', privatePolicy, 'contradiction-probe');
+    opts = { ...opts, judgeModel: opts.judgeModel ?? model };
     if (opts.judgeFn || opts.searchFn) throw new CodexProposalError('invalid_input');
     await assertSubscriptionTarget(opts.engine);
     const context = codexSubscriptionContext()!;

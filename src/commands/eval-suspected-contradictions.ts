@@ -344,7 +344,7 @@ async function runRun(engine: BrainEngine, f: ParsedFlags): Promise<void> {
   // models.eval.contradictions_judge config key + key-aware utility-tier
   // default + global models.default override + env var all compose correctly.
   // The --judge CLI flag still wins as the highest-precedence override.
-  const judgeModel = await resolveModel(engine, {
+  const judgeModel = await resolveModel(engine, { privateRole: 'contradiction-probe',
     cliFlag: f.judge,
     configKey: 'models.eval.contradictions_judge',
     tier: 'utility',

@@ -32,19 +32,19 @@ export async function preflightSubscriptionJob(engine: BrainEngine, name: string
   }
   if (name === 'subagent') {
     validateCodexReadJob(data);
-    await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
+    await resolvePrivateModel(engine, { privateRole: 'iterative-minions', tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
   }
   if (name === 'skillopt') {
     if (data.bootstrap_protocol !== undefined) {
       validateCodexBootstrapJob(data);
       const options = data.bootstrap_options as { optimizer: { model: string } };
-      await resolvePrivateModel(engine, { cliFlag: options.optimizer.model, tier: 'deep', fallback: 'unused' }, policy);
+      await resolvePrivateModel(engine, { privateRole: 'skillopt-bootstrap', cliFlag: options.optimizer.model, tier: 'deep', fallback: 'unused' }, policy);
     } else {
       const { validateCodexOptimizerJob } = await import('../skillopt/codex-job-contract.ts');
       validateCodexOptimizerJob(data);
-      await resolvePrivateModel(engine, { tier: 'deep', fallback: 'unused' }, policy);
-      await resolvePrivateModel(engine, { tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
-      await resolvePrivateModel(engine, { tier: 'reasoning', fallback: 'unused' }, policy);
+      await resolvePrivateModel(engine, { privateRole: 'skillopt-optimizer', tier: 'deep', fallback: 'unused' }, policy);
+      await resolvePrivateModel(engine, { privateRole: 'iterative-minions', tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy);
+      await resolvePrivateModel(engine, { privateRole: 'skillopt-judge', tier: 'reasoning', fallback: 'unused' }, policy);
     }
   }
 }

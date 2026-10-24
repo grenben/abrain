@@ -247,6 +247,8 @@ export type ReembedPageResult =
     };
 
 export interface ReembedPageArgs {
+  /** Host role retained through the shared synopsis transformer. */
+  privateRole?: 'contextual-synopsis' | 'longmemeval-synopsis';
   engine: BrainEngine;
   /** Page slug (within `sourceId`). */
   pageSlug: string;
@@ -648,6 +650,7 @@ async function buildWrappedChunkText(opts: {
       leaseAcquired = true;
     }
     synopsisResult = await (args.generateSynopsis ?? generatePerChunkSynopsis)({
+      privateRole: args.privateRole,
       documentText: sourceText,
       chunkText: c.chunk_text,
       pageTitle: page.title,

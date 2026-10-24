@@ -93,7 +93,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     if (hasFlags(flags)) throw usageError('Codex allowance flags require strict private configuration.', 'Configure private Codex before granting subscription calls.');
     return run();
   }
-  assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy);
+  assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy, 'contradiction-probe');
   if (enclosing) {
     if (hasFlags(flags)) throw usageError('An enclosing host already owns the subscription allowance.', 'Reuse the host allowance without nested Codex flags.');
     const scratch = await assertSubscriptionTarget(engine);
@@ -157,7 +157,7 @@ export async function withEvalContradictionSubscription<T>(engine: BrainEngine, 
     if (!current || privatePolicyFingerprint(current) !== privatePolicyFingerprint(policy)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
-    assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy);
+    assertPrivateRoute(identity.judgeModel, 'eval-contradictions:cli', policy, 'contradiction-probe');
     if (digest({ ...claim, ...await corpusSnapshot(db) }) !== digest(claim)) {
       throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }

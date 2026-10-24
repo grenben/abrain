@@ -5,12 +5,13 @@ import { runLlmCall, probeLlmAvailability } from '../../src/core/conversation-pa
 import { privateFallbackContract } from '../../src/core/conversation-parser/llm-codex-fallback.ts';
 import { runExtractConversationFactsCore } from '../../src/commands/extract-conversation-facts.ts';
 import { parseConversation } from '../../src/core/conversation-parser/parse.ts';
+import { codexParserPolishContract } from './codex-parser-polish-contract.ts';
 interface Fixture {
   engine():BrainEngine; sourceId:string;
   run<T>(fn:(id:string)=>Promise<T>,hooks?:{},maxAttempts?:number):Promise<T>;
   reply(value:unknown):void; calls():any[];
 }
-export function codexParserContract(f:Fixture){describe('native conversation parser',()=>{
+export function codexParserContract(f:Fixture){codexParserPolishContract(f);describe('native conversation parser',()=>{
   const messages=[{speaker:'Aster',timestamp:'2026-06-02T10:00:00Z',text:'Orbit launched.'},{speaker:'Birch',timestamp:'2026-06-02T10:01:00Z',text:'Confirmed launch.'}];
   const body='Aster ⟿ 10:00 ⟿ Orbit launched.\nBirch ⟿ 10:01 ⟿ Confirmed launch.';
   const parse=(overrides:Partial<Parameters<typeof runLlmFallback>[0]>={})=>runLlmFallback({engine:f.engine(),modelStr:'codex-cli:gpt-test',body,fallbackDate:'2026-06-02',...overrides});
@@ -25,7 +26,7 @@ export function codexParserContract(f:Fixture){describe('native conversation par
     expect(wire.args).toContain('--output-schema');expect(wire.mode).toBe(0o600);expect(wire.schema.required).toEqual(['evidence_hash','messages']);
     expect(JSON.parse(wire.prompt).messages[0].content).toContain(body);expect(wire.envKeys.some((k:string)=>/API_KEY|TOKEN|DATABASE_URL/.test(k))).toBe(false);
     expect(await parse()).toEqual(messages);expect(f.calls().length-count).toBe(1);
-    const [cache]=await f.engine().executeRaw<{value_json:any}>('SELECT value_json FROM conversation_parser_llm_cache');expect(cache!.value_json.protocol).toBe('private-parser-cache-v1');expect(JSON.parse(cache!.value_json.raw).messages).toEqual(messages);
+    const [cache]=await f.engine().executeRaw<{value_json:any}>('SELECT value_json FROM conversation_parser_llm_cache');expect(cache!.value_json.protocol).toBe('private-parser-cache-v2');expect(JSON.parse(cache!.value_json.raw).messages).toEqual(messages);
   });
   test.each([
     {raw:'malformed'}, {messages:[{...messages[0],text:'Fabricated quote'}]}, {messages:[{...messages[0],speaker:'Forged'}]},

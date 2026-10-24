@@ -15,7 +15,7 @@ export async function privateContextualModel(args: ReembedPageArgs, fallback: st
   for (const [key, value] of [['synopsisModel', args.synopsisModel], ['haikuModel', args.haikuModel]] as const)
     if (value !== undefined) assertPrivateRoute(value, `contextual:${key}`);
   if (args.generateSynopsis) throw new CodexProposalError('invalid_input');
-  const selection = { cliFlag: args.synopsisModel ?? args.haikuModel,
+  const selection = { privateRole: args.privateRole ?? 'contextual-synopsis', cliFlag: args.synopsisModel ?? args.haikuModel,
     configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model',
     envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility' as const, fallback };
   const owner = codexSubscriptionContext()?.engine;

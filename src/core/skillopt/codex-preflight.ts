@@ -33,11 +33,11 @@ export async function preflightNativeOptimizer(opts: SkillOptOpts,
   const split = splitBench(benchmark, opts.split);
   if (Math.ceil(split.train.length / opts.batchSize) * opts.epochs > 100) invalid();
   assertBundledMutationHeldOut({ isBundled: files.bundled, willMutate: files.mutate, heldOutCount: heldOut.length, skillName: opts.skillName });
-  await resolvePrivateModel(engine, { cliFlag: opts.optimizerModel, tier: 'deep', fallback: 'unused' }, policy!);
-  await resolvePrivateModel(engine, { cliFlag: opts.targetModel, tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy!);
-  await resolvePrivateModel(engine, { cliFlag: opts.judgeModel, tier: 'reasoning', fallback: 'unused' }, policy!);
+  await resolvePrivateModel(engine, { privateRole: 'skillopt-optimizer', cliFlag: opts.optimizerModel, tier: 'deep', fallback: 'unused' }, policy!);
+  await resolvePrivateModel(engine, { privateRole: 'iterative-minions', cliFlag: opts.targetModel, tier: 'subagent', configKey: 'models.subagent', fallback: 'unused' }, policy!);
+  await resolvePrivateModel(engine, { privateRole: 'skillopt-judge', cliFlag: opts.judgeModel, tier: 'reasoning', fallback: 'unused' }, policy!);
   for (const task of [...benchmark.tasks, ...heldOut]) if (task.judge.kind === 'llm' && task.judge.model)
-    await resolvePrivateModel(engine, { cliFlag: task.judge.model, tier: 'reasoning', fallback: 'unused' }, policy!);
+    await resolvePrivateModel(engine, { privateRole: 'skillopt-judge', cliFlag: task.judge.model, tier: 'reasoning', fallback: 'unused' }, policy!);
   const cap = await resolveReflectMaxTokens(engine, opts.optimizerModel, opts.reflectMaxTokens);
   if (cap.maxTokens < 16 || cap.maxTokens > 8192) invalid();
   const modelsPlan = (await buildModelsPlan(engine, opts.models ?? unknownProvenanceModels(opts, 'caller-supplied'), [...benchmark.tasks, ...heldOut]))

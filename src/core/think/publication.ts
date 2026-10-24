@@ -59,7 +59,7 @@ export async function retainPrivateThink(engine: BrainEngine, opts: RunThinkOpts
     }>('SELECT incarnation FROM sources WHERE id=$1 AND NOT archived', [sourceId]);
     if (!source)
         throw new OperationError('source_changed', 'The think destination is not active.', 'Select an active source.');
-    const model = await resolveModel(engine, { cliFlag: opts.model, configKey: 'models.think', tier: 'deep', fallback: 'opus' });
+    const model = await resolveModel(engine, { privateRole: opts.privateRole ?? 'think', cliFlag: opts.model, configKey: 'models.think', tier: 'deep', fallback: 'opus' });
     const requestKey = digest([sourceId, opts.question]);
     const inputHash = digest({ sourceId, incarnation: source.incarnation, question: opts.question, anchor: opts.anchor ?? null,
         save: !!opts.save, take: !!opts.take, model, scope: opts.allowedSources ?? null, since: opts.since ?? null, until: opts.until ?? null,

@@ -66,6 +66,8 @@ export function classifyLlmCallFailure(e: unknown): LlmCallFailureClass {
 }
 
 export interface RunThinkOpts {
+  /** Host feature identity; never read from model output or operation parameters. */
+  privateRole?: 'think' | 'auto-think' | 'calibration-think-ab';
   /** Trusted operation context for prepared publication; never a model-authored field. */
   publicationContext?: import('../ops/contract.ts').OperationContext;
   question: string;
@@ -627,7 +629,7 @@ async function runThinkPipeline(engine: BrainEngine, opts: RunThinkOpts): Promis
   const temporal = await resolveThinkTemporalContext(engine, { referenceDate: opts.referenceDate });
 
   // Resolve the model through the 6-tier chain.
-  const modelUsed = await resolveModel(engine, {
+  const modelUsed = await resolveModel(engine, { privateRole: opts.privateRole ?? 'think',
     cliFlag: opts.model,
     configKey: 'models.think',
     tier: 'deep',
@@ -942,7 +944,7 @@ async function synthesizeThink(input: { opts: RunThinkOpts; modelUsed: string; s
   let response: ThinkResponse = { answer: '', citations: [], gaps: [] };
   if (privateMode) {
     await (await import('./publication.ts')).captureThinkPublicationEvidence(gather);
-    const proposed = await proposeCodexThink({ model: modelUsed, system: systemPrompt, prompt: userMessage, gather });
+    const proposed = await proposeCodexThink({ privateRole: opts.privateRole ?? 'think', model: modelUsed, system: systemPrompt, prompt: userMessage, gather });
     response = proposed.response; usage = proposed.usage;
   } else if (opts.stubResponse) {
     response = opts.stubResponse;

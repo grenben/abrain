@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { BrainEngine } from '../core/engine.ts';
-import { readPrivateCodexConfig, type PrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { readPrivateCodexConfig, privateModelForRole, privatePolicyFingerprint, type PrivateCodexConfig } from '../core/ai/private-policy.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../core/ai/subscription-context.ts';
 import { withSubscriptionAuxiliaryBudget } from '../core/ai/subscription-auxiliary.ts';
@@ -16,6 +16,7 @@ export async function withScheduledNightlyProbe(engine: BrainEngine, input: Nigh
   run: () => Promise<NightlyProbeResult>): Promise<NightlyProbeResult> {
   const policy = readPrivateCodexConfig();
   if (!policy) return run();
+  privateModelForRole(policy, 'nightly-probes');
   if (codexSubscriptionContext()) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const limits = policy.scheduled_jobs?.['nightly-quality-probe'];
   if (!limits) throw new SubscriptionAdmissionError('subscription_required');
@@ -33,8 +34,8 @@ export async function withScheduledNightlyProbe(engine: BrainEngine, input: Nigh
   if (digest(await routeAndSearch(engine)) !== digest(selected)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const occurrence = input.startedAt.toISOString().slice(0, 10);
   const prefix = `codex-nightly-quality:${occurrence}:`;
-  const policyIdentity = (value: PrivateCodexConfig) => ({ model: value.model, bin: value.bin,
-    limits: value.scheduled_jobs?.['nightly-quality-probe'] });
+  const policyIdentity = (value: PrivateCodexConfig) => value.models ? privatePolicyFingerprint(value) :
+    { model: value.model, bin: value.bin, limits: value.scheduled_jobs?.['nightly-quality-probe'] };
   const [brain] = await engine.executeRaw<{ brain_id: string }>('SELECT brain_id FROM persistence_brain WHERE singleton=1');
   if (!brain) throw new SubscriptionAdmissionError('subscription_identity_conflict');
   const claim = { protocol: 'codex-nightly-quality-v1', brainId: brain.brain_id,

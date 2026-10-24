@@ -299,10 +299,20 @@ test('a real worker publishes both source jobs under their shared parent allowan
     await engine.executeRaw("DELETE FROM sources WHERE id='other'");
   }
 });
+test('a disabled nightly role refuses scheduling before any durable allowance', async () => {
+  const models = { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' };
+  writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ private_codex: { mode: 'strict', bin, models, enabled_roles: ['longmemeval-reader', 'longmemeval-extractor'] } }));
+  let started = false;
+  await expect(withScheduledNightlyProbe(engine, { fixturePath: join(root, 'unused'), startedAt: new Date(), maxUsd: 1 }, async () => {
+    started = true; return { outcome: 'pass', exit_code: 0 };
+  })).rejects.toMatchObject({ code: 'private_role_disabled' });
+  expect(started).toBe(false); expect(count()).toBe(0);
+  expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toEqual([]);
+});
 test('nightly occurrence reuses one immutable allowance and rejects a changed fixture', async () => {
   const limits = { maxAttempts: 2, maxTurns: 2, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
-    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    private_codex: { mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['nightly-probes', 'longmemeval-reader', 'longmemeval-extractor', 'longmemeval-judge'], bin,
       scheduled_jobs: { 'nightly-quality-probe': limits } } }));
   const fixturePath = join(root, 'nightly-synthetic.jsonl');
   writeFileSync(fixturePath, '{"question":"synthetic"}\n');
@@ -310,7 +320,7 @@ test('nightly occurrence reuses one immutable allowance and rejects a changed fi
     searchConfigSnapshot: await resolveNightlyProbeSearchConfigSnapshot(engine),
     modelRoutes: await resolveNightlyProbeModelRoutes(engine) };
   const run = () => withScheduledNightlyProbe(engine, scope, async () => {
-    await call(); return { outcome: 'pass', exit_code: 0 };
+    await chat({ privateRole: 'nightly-probes', messages: [{ role: 'user', content: 'synthetic fixture' }] }); return { outcome: 'pass', exit_code: 0 };
   });
   await run();
   const [first] = await engine.executeRaw<{ deadline: Date | string }>(
@@ -332,13 +342,13 @@ test('nightly private admission requires an explicit schedule and auxiliary cap 
     searchConfigSnapshot: await resolveNightlyProbeSearchConfigSnapshot(engine),
     modelRoutes: await resolveNightlyProbeModelRoutes(engine) };
   await expect(withScheduledNightlyProbe(engine, scope, async () => {
-    await call(); return { outcome: 'pass', exit_code: 0 };
+    await chat({ privateRole: 'nightly-probes', messages: [{ role: 'user', content: 'synthetic fixture' }] }); return { outcome: 'pass', exit_code: 0 };
   })).rejects.toMatchObject({ code: 'subscription_required' });
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
-    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    private_codex: { mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['nightly-probes', 'longmemeval-reader', 'longmemeval-extractor', 'longmemeval-judge'], bin,
       scheduled_jobs: { 'nightly-quality-probe': { maxAttempts: 1, maxTurns: 1, windowMs: 600_000 } } } }));
   await expect(withScheduledNightlyProbe(engine, scope, async () => {
-    await call(); return { outcome: 'pass', exit_code: 0 };
+    await chat({ privateRole: 'nightly-probes', messages: [{ role: 'user', content: 'synthetic fixture' }] }); return { outcome: 'pass', exit_code: 0 };
   })).rejects.toMatchObject({ code: 'subscription_auxiliary_budget_required' });
   expect(count()).toBe(0);
   const runs = await engine.executeRaw('SELECT run_id FROM codex_subscription_runs');
@@ -347,7 +357,7 @@ test('nightly private admission requires an explicit schedule and auxiliary cap 
 test('private cross-modal judge validates three sequential Codex proposals before acceptance', async () => {
   const limits = { maxAttempts: 3, maxTurns: 3, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
-    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    private_codex: { mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['nightly-probes', 'longmemeval-reader', 'longmemeval-extractor', 'longmemeval-judge'], bin,
       scheduled_jobs: { 'nightly-quality-probe': limits } } }));
   const fixturePath = join(root, 'nightly-judge.jsonl');
   writeFileSync(fixturePath, '{"question":"synthetic"}\n');
@@ -373,7 +383,7 @@ test('private cross-modal judge validates three sequential Codex proposals befor
 test('invalid private judge scores consume attempts but never accepted turns', async () => {
   const limits = { maxAttempts: 3, maxTurns: 1, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
-    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    private_codex: { mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['nightly-probes', 'longmemeval-reader', 'longmemeval-extractor', 'longmemeval-judge'], bin,
       scheduled_jobs: { 'nightly-quality-probe': limits } } }));
   const fixturePath = join(root, 'nightly-invalid.jsonl'), batchPath = join(root, 'nightly-invalid-batch.jsonl');
   writeFileSync(fixturePath, '{"question":"synthetic"}\n');
@@ -397,7 +407,7 @@ test('invalid private judge scores consume attempts but never accepted turns', a
 test('the scheduled nightly phase records an honest collapsed-panel result under one allowance', async () => {
   const limits = { maxAttempts: 4, maxTurns: 4, windowMs: 600_000, auxiliaryMaxUsd: 0.01 };
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
-    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    private_codex: { mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['nightly-probes', 'longmemeval-reader', 'longmemeval-extractor', 'longmemeval-judge'], bin,
       scheduled_jobs: { 'nightly-quality-probe': limits } } }));
   const fixturePath = join(root, 'nightly-phase.jsonl'), auditDir = mkdtempSync(join(root, 'nightly-audit-'));
   writeFileSync(fixturePath, '{"question":"Where?"}\n');
@@ -416,7 +426,7 @@ test('the scheduled nightly phase records an honest collapsed-panel result under
       runLongMemEval: async ({ outputPath }) => {
         const judgeReply = readFileSync(replyPath, 'utf8');
         writeFileSync(replyPath, 'synthetic reader');
-        await call();
+        await chat({ privateRole: 'nightly-probes', messages: [{ role: 'user', content: 'synthetic fixture' }] });
         writeFileSync(replyPath, judgeReply);
         writeFileSync(outputPath, JSON.stringify({ question_id: 'q1', question: 'Where?',
           hypothesis: 'widget-co', answer: 'widget-co' }) + '\n');
@@ -441,7 +451,7 @@ test('the scheduled nightly phase records an honest collapsed-panel result under
 test('the daemon step runs the native nightly reader, extractor, embedding and judge adapters under one grant', async () => {
   const limits = { maxAttempts: 100, maxTurns: 100, windowMs: 600_000, auxiliaryMaxUsd: 1 };
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
-    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    private_codex: { mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['nightly-probes', 'longmemeval-reader', 'longmemeval-extractor', 'longmemeval-judge'], bin,
       scheduled_jobs: { 'nightly-quality-probe': limits } } }));
   writeFileSync(replyPath, '__NIGHTLY_SCHEMA__');
   const auditDir = mkdtempSync(join(root, 'nightly-native-audit-'));

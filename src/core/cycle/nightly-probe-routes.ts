@@ -112,11 +112,11 @@ export async function resolveNightlyProbeModelRoutes(
   try {
     const privatePolicy = readPrivateCodexConfig();
     if (privatePolicy) {
-      const reader = await resolvePrivateModel(engine, NIGHTLY_PROBE_READER_ROUTE, privatePolicy);
-      const extractor = await resolvePrivateModel(engine, NIGHTLY_PROBE_EXTRACTOR_ROUTE, privatePolicy);
+      const reader = await resolvePrivateModel(engine, { ...NIGHTLY_PROBE_READER_ROUTE, privateRole: 'longmemeval-reader' }, privatePolicy);
+      const extractor = await resolvePrivateModel(engine, { ...NIGHTLY_PROBE_EXTRACTOR_ROUTE, privateRole: 'longmemeval-extractor' }, privatePolicy);
       const slots: NightlyProbeModelRoutes['slots'] = {};
       for (const [id, configKey] of Object.entries(NIGHTLY_PROBE_SLOT_KEYS) as Array<[NightlyProbeSlotId, string]>) {
-        slots[id] = (await resolvePrivateModel(engine, { configKey, tier: 'reasoning', fallback: 'unused' }, privatePolicy)).model;
+        slots[id] = (await resolvePrivateModel(engine, { privateRole: 'nightly-probes', configKey, tier: 'reasoning', fallback: 'unused' }, privatePolicy)).model;
       }
       return { reader, extractor, slots };
     }

@@ -1,3 +1,4 @@
+import { withDistinctCodexModels } from './codex-role-fixture.ts';
 import { codexDiscoveryContract } from './codex-discovery-contract.ts';
 import { beforeAll, beforeEach, afterAll, test, expect, spyOn } from 'bun:test';
 import { createHash } from 'node:crypto';
@@ -54,7 +55,7 @@ export function codexActionsContract(factory: () => Promise<{ engine: BrainEngin
     for (const k of keys) process.env[k] = root;
     globalThis.fetch = (() => { throw new Error('forbidden network'); }) as unknown as typeof fetch;
     mkdirSync(join(root, '.gbrain'));
-    writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin } }));
+    writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ private_codex: { mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['iterative-minions', 'skillopt-optimizer', 'skillopt-judge', 'skillopt-bootstrap'], bin } }));
     const script = `#!${Bun.which('node')}
 import {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
 const a=process.argv.slice(2),arg=n=>a[a.indexOf(n)+1],schema=JSON.parse(readFileSync(arg('--output-schema'),'utf8')),prompt=readFileSync(0,'utf8');
@@ -95,6 +96,23 @@ const events=[{type:'thread.started',thread_id:'fixture'},{type:'turn.started'}]
     await engine?.disconnect(); await cleanup?.(); unregister?.(); resetGateway(); globalThis.fetch = fetch;
     for (const [k, v] of saved) if (v === undefined) delete process.env[k]; else process.env[k] = v;
     rmSync(root, { recursive: true, force: true });
+  });
+  test('disabled iterative role refuses queue admission before creating a job or allowance', async () => {
+    const path = join(root, '.gbrain', 'config.json'), saved = readFileSync(path, 'utf8'), value = JSON.parse(saved);
+    value.private_codex.enabled_roles = value.private_codex.enabled_roles.filter((role: string) => role !== 'iterative-minions');
+    try {
+      writeFileSync(path, JSON.stringify(value));
+      await expect(submit()).rejects.toMatchObject({ code: 'private_role_disabled' });
+      expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toEqual([]);
+      expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toEqual([]);
+      expect(calls()).toHaveLength(0);
+    } finally { writeFileSync(path, saved); }
+  });
+  test('the real queued action loop dispatches the subagent tier with distinct private models', async () => {
+    await withDistinctCodexModels(async () => {
+      const job = await claim(); expect((await run(job)).stop_reason).toBe('end_turn');
+      expect(calls().map(wire => wire.argv[wire.argv.indexOf('--model') + 1])).toEqual(['subagent-fixture', 'subagent-fixture']);
+    });
   });
   test('trusted child jobs use distinct ledgers while consuming one parent allowance', async () => {
     const parent = { ...grant(3), runId: 'aggregate-action-root', accountLane: CODEX_JOB_ACCOUNT_LANE };

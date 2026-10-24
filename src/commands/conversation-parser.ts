@@ -18,6 +18,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { BUILTIN_PATTERNS } from '../core/conversation-parser/builtins.ts';
 import { readConversationBodyForParsing } from '../core/conversation-parser/body.ts';
 import { parseConversation } from '../core/conversation-parser/parse.ts';
+import { previewParserPolish } from './conversation-parser-polish.ts';
+import { splitEvalAllowance } from '../eval/longmemeval/codex-allowance-flags.ts';
+import { usageError } from '../cli/cli-error.ts';
 import type { BrainEngine } from '../core/engine.ts';
 
 function printHelp(): void {
@@ -36,6 +39,10 @@ Examples:
   gbrain conversation-parser validate ./my-pattern.json
 
 Global flags:
+  --polish             Opt-in prose formatting preview for scan; original evidence stays intact.
+  --codex-max-attempts N --codex-max-turns N --codex-deadline UTC
+                       Explicit subscription limits required with --polish.
+  --codex-request-id UUID  Reuse unchanged input and limits for recovery.
   --json               Emit JSON envelope on stdout (where applicable).
   --help, -h           Print this help.
 `);
@@ -156,7 +163,10 @@ async function runScan(
   args: string[],
   json: boolean,
 ): Promise<void> {
-  const slug = args.find((a) => !a.startsWith('--'));
+  const split = splitEvalAllowance(args);
+  if (split.allowance && !split.args.includes('--polish'))
+    throw usageError('Codex limits require scan --polish.', 'Omit allowance flags for a deterministic scan.');
+  const slug = split.args.find((a) => !a.startsWith('--'));
   if (!slug) {
     process.stderr.write(
       '[conversation-parser scan] USAGE: missing page slug.\n',
@@ -174,6 +184,7 @@ async function runScan(
   const body = await readConversationBodyForParsing(engine, page);
 
   const result = parseConversation(body, { page, diagnostic: true });
+  const polished = args.includes('--polish') ? await previewParserPolish(engine, args, page, result) : undefined;
 
   if (json) {
     process.stdout.write(
@@ -190,6 +201,7 @@ async function runScan(
           // undefined on healthy pages → JSON.stringify drops the key (byte-identical).
           date_fallback_count: result.date_fallback_count,
           unrecognized_headings: result.unrecognized_headings,
+          presentation: polished?.presentation,
           first_3_messages: result.messages.slice(0, 3).map((m) => ({
             speaker: m.speaker,
             timestamp: m.timestamp,
@@ -229,5 +241,9 @@ async function runScan(
         `    - ${m.speaker} @ ${m.timestamp}: ${m.text.slice(0, 80)}\n`,
       );
     }
+  }
+  if (polished) {
+    process.stdout.write('  presentation (original messages remain authoritative):\n');
+    for (const item of polished.presentation) process.stdout.write(`    ${item.message_index + 1}: ${item.prose}\n`);
   }
 }

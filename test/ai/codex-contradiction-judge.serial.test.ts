@@ -57,7 +57,7 @@ beforeAll(async () => {
   globalThis.fetch = (() => { throw new Error('forbidden network'); }) as unknown as typeof fetch;
   mkdirSync(join(root, '.gbrain'));
   writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ embedding_disabled: true, private_codex: {
-    mode: 'strict', model: 'codex-cli:gpt-test', bin,
+    mode: 'strict', models: { utility: 'codex-cli:gpt-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:gpt-test', subagent: 'codex-cli:gpt-test' }, enabled_roles: ['contradiction-probe', 'edge-contradictions'], bin,
   } }));
   writeFileSync(capture, '');
   const script = `#!${Bun.which('node')}
@@ -82,6 +82,21 @@ afterAll(async () => {
   await engine?.disconnect(); unregister?.(); resetGateway(); globalThis.fetch = originalFetch;
   for (const [key, value] of saved) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   rmSync(root, { recursive: true, force: true });
+});
+
+test('direct contradiction caller checks database pins and role activation before dispatch', async () => {
+  const path = join(root, '.gbrain', 'config.json'), saved = readFileSync(path, 'utf8'), before = calls().length;
+  try {
+    await run(async () => {
+      await engine.setConfig('models.eval.contradictions_judge', 'codex-cli:forbidden');
+      await expect(judgeContradiction(input)).rejects.toMatchObject({ code: 'private_route_conflict' });
+      await engine.setConfig('models.eval.contradictions_judge', '');
+      const value = JSON.parse(saved); value.private_codex.enabled_roles = ['edge-contradictions'];
+      writeFileSync(path, JSON.stringify(value));
+      await expect(judgeContradiction(input)).rejects.toMatchObject({ code: 'private_role_disabled' });
+    });
+    expect(calls().length).toBe(before);
+  } finally { writeFileSync(path, saved); await engine.setConfig('models.eval.contradictions_judge', ''); }
 });
 
 test('the real private gateway accepts a quoted native contradiction verdict', async () => {

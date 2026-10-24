@@ -103,8 +103,8 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
     assertPrivateRoute(opts.targetModel,'skillopt:target_model');
     if(opts.judgeModel)assertPrivateRoute(opts.judgeModel,'skillopt:judge_model');
     for(const task of opts.selSet)if(task.judge.kind==='llm'&&task.judge.model)assertPrivateRoute(task.judge.model,'skillopt:task.judge.model');
-    await resolveModel(opts.engine,{cliFlag:opts.targetModel,tier:'subagent',fallback:'sonnet'});
-    if(opts.selSet.some(t=>t.judge.kind==='llm'))await resolveModel(opts.engine,{cliFlag:opts.judgeModel,tier:'reasoning',fallback:'sonnet'});
+    await resolveModel(opts.engine,{ privateRole: 'iterative-minions',cliFlag:opts.targetModel,tier:'subagent',fallback:'sonnet'});
+    if(opts.selSet.some(t=>t.judge.kind==='llm'))await resolveModel(opts.engine,{ privateRole: 'skillopt-judge',cliFlag:opts.judgeModel,tier:'reasoning',fallback:'sonnet'});
   }
   interface PerTask {
     task_id: string;

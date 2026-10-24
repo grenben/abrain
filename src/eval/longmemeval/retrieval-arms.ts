@@ -19,7 +19,7 @@
  * the same pool rides on the row, so each run is its own paired control.
  */
 
-import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { readPrivateCodexConfig, privateModelForRole } from '../../core/ai/private-policy.ts';
 import { codexSubscriptionContext } from '../../core/ai/subscription-context.ts';
 import { applyPrivateFactKeys } from './codex-fact-keys.ts';
 import { privateFactKeyModel, CODEX_FACT_KEYS_PROTOCOL } from './codex-fact-keys-extract.ts';
@@ -314,8 +314,8 @@ export const LME_RETRIEVAL_ARM_FLAGS: Array<{ name: string; arg?: string; help: 
 
 /** Folds active arms into retrieval_config_hash; empty when no arm is on (existing receipts keep their hash). */
 export function armPins(o: RetrievalArmOptions): { retrieval_arms?: Record<string, unknown> } {
-  const pins: Record<string, unknown> = {};
-  if (o.factKeys) Object.assign(pins, { fact_keys: o.factKeys, fact_extractor: o.factExtractor, fact_keys_model: o.factKeysModel ?? readPrivateCodexConfig()?.model ?? 'utility-tier', ...(readPrivateCodexConfig() ? { fact_keys_protocol: CODEX_FACT_KEYS_PROTOCOL } : {}) });
+  const pins: Record<string, unknown> = {}, policy = o.factKeys ? readPrivateCodexConfig() : undefined;
+  if (o.factKeys) Object.assign(pins, { fact_keys: o.factKeys, fact_extractor: o.factExtractor, fact_keys_model: o.factKeysModel ?? (policy ? privateModelForRole(policy, o.factExtractor === 'production' ? 'longmemeval-fact-keys-production' : 'longmemeval-fact-keys-paper') : 'utility-tier'), ...(readPrivateCodexConfig() ? { fact_keys_protocol: CODEX_FACT_KEYS_PROTOCOL } : {}) });
   if (o.timeScope) Object.assign(pins, { time_scope: o.timeScope, time_scope_pool: o.timeScopePool });
   return Object.keys(pins).length > 0 ? { retrieval_arms: pins } : {};
 }

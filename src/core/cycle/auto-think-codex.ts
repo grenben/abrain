@@ -1,3 +1,5 @@
+import { bindPrivateRoleScope } from '../ai/private-role-scope.ts';
+import { readPrivateCodexConfig, privatePolicyFingerprint } from '../ai/private-policy.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { AutoThinkConfig, AutoThinkPhaseOpts, DreamPhaseResult } from './auto-think.ts';
 import { runThink, persistSynthesis } from '../think/index.ts';
@@ -27,7 +29,7 @@ export async function runPrivateAutoThink(engine: BrainEngine, opts: AutoThinkPh
     const timer = opts.deadlineAtMs == null ? undefined : setTimeout(() => controller.abort(), Math.max(0, Math.min(2147483647, opts.deadlineAtMs - Date.now())));
     timer?.unref();
     try {
-        return await withCodexSubscription({ ...context, signal }, () => runBatch(engine, opts, config));
+        return await withCodexSubscription({ ...bindPrivateRoleScope(context, ['auto-think']), signal }, () => runBatch(engine, opts, config));
     }
     finally {
         clearTimeout(timer);
@@ -59,7 +61,7 @@ async function runBatch(engine: BrainEngine, opts: AutoThinkPhaseOpts, config: A
         throw new SubscriptionAdmissionError('subscription_identity_conflict');
     if (opts.client)
         throw new OperationError('invalid_params', 'Private automatic think cannot use an injected model client.', 'Use the native structured Codex gateway.');
-    const model = await resolveModel(engine, { configKey: 'models.auto_think', deprecatedConfigKey: 'dream.auto_think.model', tier: 'deep', fallback: 'opus' });
+    const model = await resolveModel(engine, { privateRole: 'auto-think', configKey: 'models.auto_think', deprecatedConfigKey: 'dream.auto_think.model', tier: 'deep', fallback: 'opus' });
     const ctx = thinkPublicationContext(engine, { question: 'auto-think', sourceId, remote: false });
     await initializeLocalPersistence(ctx);
     const [source] = await engine.executeRaw<{
@@ -70,7 +72,9 @@ async function runBatch(engine: BrainEngine, opts: AutoThinkPhaseOpts, config: A
     const authority = await submissionAuthority(ctx, 'submit_job', sourceId, source!.incarnation, '');
     if (authority.remote || authority.slugPrefixes !== null && !authority.slugPrefixes.includes('*'))
         throw new OperationError('permission_denied', 'Automatic think requires a source-wide local grant.', 'Use an authorized local maintenance context.');
-    const inputHash = digest({ sourceId, incarnation: source!.incarnation, config, model });
+    const policy = readPrivateCodexConfig()!;
+    const inputHash = digest({ sourceId, incarnation: source!.incarnation, config, model,
+        ...(policy.models ? { policyIdentity: privatePolicyFingerprint(policy) } : {}) });
     const candidate: AutoThinkRun = { run_id: context.runId, source_id: sourceId, source_incarnation: source!.incarnation, input_hash: inputHash,
         binding: { authority, questions, autoCommit: config.autoCommit, ...context.publicationFence ? { fence: context.publicationFence } : {} }, results: {}, state: 'accepted' };
     const batch = await acceptAutoThinkBatch(engine, candidate, config.cooldownDays);
@@ -90,7 +94,7 @@ async function runBatch(engine: BrainEngine, opts: AutoThinkPhaseOpts, config: A
             continue;
         }
         try {
-            const result = previous?.result ?? await withSubscriptionAuxiliaryBudget(engine, `group:auto-think:${context.runId}:${sourceId}:${inputHash}`, auxiliaryAuthorized ? config.budgetUsd : undefined, () => runThink(engine, { question: questions[i]!, sourceId, remote: false, model, save: config.autoCommit, embedQuestion: (q: string) => embedQueryWithPrefix(engine, q) }));
+            const result = previous?.result ?? await withSubscriptionAuxiliaryBudget(engine, `group:auto-think:${context.runId}:${sourceId}:${inputHash}`, auxiliaryAuthorized ? config.budgetUsd : undefined, () => runThink(engine, { privateRole: 'auto-think', question: questions[i]!, sourceId, remote: false, model, save: config.autoCommit, embedQuestion: (q: string) => embedQueryWithPrefix(engine, q) }));
             if (result.synthesisOk !== true)
                 return report('partial', 'Automatic think produced a valid empty answer; cooldown unchanged.', completed);
             if (!previous)

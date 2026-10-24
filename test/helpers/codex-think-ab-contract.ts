@@ -1,4 +1,7 @@
+import { withDistinctCodexModels } from './codex-role-fixture.ts';
 import { describe, beforeEach, test, expect, spyOn } from 'bun:test';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { configPath } from '../../src/core/config-path.ts';
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { preparePrivateAbTrial, inspectPrivateAbTrial, recordPrivateAbPreference } from '../../src/core/calibration/think-ab-codex.ts';
@@ -17,6 +20,26 @@ export function codexThinkAbContract(f:Fixture){describe('native calibration A/B
   beforeEach(async()=>{
     for(const [source,text] of [[f.sourceId,'LOCAL AB PROFILE'],['default','FOREIGN AB PROFILE']])
       await f.engine().executeRaw(`INSERT INTO calibration_profiles(source_id,holder,published,total_resolved,pattern_statements,active_bias_tags,model_id,domain_scorecards,voice_gate_passed,voice_gate_attempts) VALUES($1,'self',false,5,$2::text[],ARRAY[]::text[],'fixture','{}'::jsonb,true,1)`,[source,[text]]);
+  });
+  test('A/B revocation inside an awaited host fence stops before any trial or inference', async () => {
+    const path = configPath(), saved = readFileSync(path, 'utf8'), opts = input(), count = f.calls().length;
+    try {
+      await f.run(async () => {
+        await expect(preparePrivateAbTrial(opts)).rejects.toMatchObject({ code: 'private_route_conflict' });
+      }, { checkAuthority: async () => {
+        const value = JSON.parse(saved); value.private_codex.enabled_roles = [];
+        writeFileSync(path, JSON.stringify(value));
+      } });
+      expect(await f.engine().executeRaw('SELECT trial_id FROM codex_think_ab_trials WHERE trial_id=$1::uuid', [opts.trialId])).toEqual([]);
+      expect(f.calls().length).toBe(count);
+    } finally { writeFileSync(path, saved); }
+  });
+  test('both nested think calls retain the A/B role and choose deep over the core reasoning tier', async () => {
+    await withDistinctCodexModels(async () => {
+      const before = f.calls().length;
+      await f.run(async () => { expect((await preparePrivateAbTrial(input())).state).toBe('ready'); });
+      expect(f.calls().slice(before).map(wire => wire.args[wire.args.indexOf('--model') + 1])).toEqual(['deep-fixture', 'deep-fixture']);
+    });
   });
   test('two native calls retain grounded answers and profile provenance without inventing a preference',async()=>{
     const opts=input(),before=f.calls().length;

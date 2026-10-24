@@ -368,7 +368,7 @@ export async function judgeRow(
   ctx: JudgeLaneContext,
 ): Promise<JudgeRowFields> {
   if (readPrivateCodexConfig()) await resolveModel(codexSubscriptionContext()?.engine ?? null,
-    { cliFlag: ctx.model, configKey: 'models.eval.longmemeval_judge', tier: 'deep', fallback: 'unused' });
+    { privateRole: 'longmemeval-judge', cliFlag: ctx.model, configKey: 'models.eval.longmemeval_judge', tier: 'deep', fallback: 'unused' });
   const { kind, prompt } = buildJudgePrompt(input);
   const configHash = ctx.configHashFor(input);
   const common = {

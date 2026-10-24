@@ -15,13 +15,13 @@ export async function codexReader(input: {
   sessions: ChatSessionForPrompt[]; maxSessionChars: number;
 }): Promise<Pick<ReaderAnswer, 'text' | 'usage' | 'response_model' | 'finish_reason' | 'native'>> {
   if (!isGatewayThinkClient(input.client) || input.sessions.length > 64) throw new CodexProposalError('invalid_input');
-  await resolveModel(codexSubscriptionContext()?.engine ?? null, { cliFlag: input.model, configKey: 'models.eval.longmemeval', fallback: 'unused' });
+  await resolveModel(codexSubscriptionContext()?.engine ?? null, { privateRole: 'longmemeval-reader', cliFlag: input.model, configKey: 'models.eval.longmemeval', fallback: 'unused' });
   const evidence = new Map(input.sessions.map(s => [s.session_id, sanitizeChatContent(s.body, input.maxSessionChars).text]));
   if (evidence.size !== input.sessions.length) throw new CodexProposalError('invalid_input');
   const system = `${input.system}\nReturn the native schema. Ground answers in exact quotations from the supplied sessions. ` +
     `When evidence is insufficient, use status abstained, no citations, and answer exactly: ${CODEX_READER_ABSTENTION}`;
   const evidenceHash = digest({ protocol: CODEX_READER_PROTOCOL, system, prompt: input.prompt, evidence: [...evidence] });
-  const result = await cachedCodexProposal({ model: input.model, system, messages: [{ role: 'user', content: input.prompt }],
+  const result = await cachedCodexProposal({ privateRole: 'longmemeval-reader', model: input.model, system, messages: [{ role: 'user', content: input.prompt }],
     maxTokens: input.maxTokens, timeoutMs: 120000, responseSchema: { name: CODEX_READER_PROTOCOL, schema: {
       type: 'object', properties: {
         evidence_hash: { type: 'string', enum: [evidenceHash] },

@@ -3,7 +3,7 @@ import type { SkillOptOpts, RunReceipt } from './types.ts';
 import type { RunSkillOptResult } from './orchestrator.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../ai/subscription-context.ts';
 import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, privatePolicyFingerprint, privateModelForRole } from '../ai/private-policy.ts';
 import { assertLegacySkillWriter } from '../skillpack/writer-guard.ts';
 import { digest } from '../persistence/digest.ts';
 import { CODEX_READ_PROTOCOL, validateCodexReadJob } from '../minions/codex-action-contract.ts';
@@ -34,7 +34,7 @@ export async function prepareCodexSkillOpt(original: SkillOptOpts) {
   const input = { protocol: 'codex-skillopt-run-v1', files, sourceId, sourceIncarnation: source.incarnation,
     skillName: opts.skillName, epochs: opts.epochs, batchSize: opts.batchSize, lr: opts.lr, lrSchedule: opts.lrSchedule,
     split: opts.split, mode: opts.mode, codex: opts.codex, optimizerModel: opts.optimizerModel, targetModel: opts.targetModel,
-    judgeModel: opts.judgeModel, model: policy!.model, bin: policy!.bin, reflectCap: cap.maxTokens, maxRuntimeMin: opts.maxRuntimeMin,
+    judgeModel: opts.judgeModel, model: privateModelForRole(policy!, 'skillopt-optimizer'), ...(policy!.models ? { policyIdentity: privatePolicyFingerprint(policy!) } : {}), bin: policy!.bin, reflectCap: cap.maxTokens, maxRuntimeMin: opts.maxRuntimeMin,
     bootstrapReviewed: opts.bootstrapReviewed, modelsStrict: strict, modelsPlan,
     ...(localOptimizerAllowance() ? { localAllowance: localOptimizerAllowance() } : {}) };
   if (opts.codexExpectedInputHash !== undefined && digest(input) !== opts.codexExpectedInputHash)
@@ -59,7 +59,7 @@ export async function runCodexSkillOpt(original: SkillOptOpts): Promise<RunSkill
     const fence = async (tx: typeof engine) => {
       await fenceOptimizerRun(tx, host, claim);
       const currentPolicy = readPrivateCodexConfig();
-      if (!currentPolicy || currentPolicy.model !== policy!.model || currentPolicy.bin !== policy!.bin) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+      if (!currentPolicy || privatePolicyFingerprint(currentPolicy) !== privatePolicyFingerprint(policy!)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
       const [current] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [sourceId]);
       if (!current || current.archived || current.incarnation !== source.incarnation) throw new SubscriptionAdmissionError('subscription_identity_conflict');
       signal.throwIfAborted();

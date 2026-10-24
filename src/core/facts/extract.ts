@@ -269,6 +269,8 @@ export const ENTITY_HINTS_CAP = 5;
 export interface FactEmbeddingSignature { model: string; dimensions: number; }
 
 export interface ExtractInput {
+  /** Host identity for the native production-extractor benchmark arm. */
+  privateRole?: 'facts' | 'longmemeval-fact-keys-production';
   turnText: string;
   /** Host accounting only; never receives mutable proposal content. */
   onNativeProposal?: (event: Readonly<NativeFactsAccounting>) => void;
@@ -628,7 +630,9 @@ export async function extractFactsFromTurnWithOutcome(
   // When the caller (the backstop availability gate) already resolved the
   // model, honor it — resolving again costs up to 3 engine.getConfig
   // round-trips per gated page write.
-  const model = input.model ?? await getFactsExtractionModel(input.engine);
+  const model = privateFactsMode()
+    ? (await resolveModelDetailed(input.engine ?? null, { privateRole: input.privateRole ?? 'facts', cliFlag: input.model, configKey: 'facts.extraction_model', tier: 'reasoning', fallback: 'unused' })).model
+    : input.model ?? await getFactsExtractionModel(input.engine);
   const maxTokens = await getFactsExtractionMaxTokens(input.engine);
 
   if (!isAvailable('chat', model)) {
@@ -663,7 +667,7 @@ export async function extractFactsFromTurnWithOutcome(
       : ''
   }`;
   let result: Pick<ChatResult, 'text' | 'stopReason'>;
-  const request = privateFactsMode() ? (opts: ChatOpts) => codexFactsChat(opts, input.onNativeProposal) : chat;
+  const request = privateFactsMode() ? (opts: ChatOpts) => codexFactsChat({ ...opts, privateRole: input.privateRole ?? 'facts' }, input.onNativeProposal) : chat;
   // The cap the last call was actually sent at. When the truncation retry
   // escalates to maxTokens*2, the malformed-output retry below must re-send
   // at the escalated cap — re-sending at 1x would just re-truncate.

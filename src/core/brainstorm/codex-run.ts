@@ -1,3 +1,4 @@
+import { bindPrivateRoleScope } from '../ai/private-role-scope.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { OperationError } from '../ops/contract.ts';
@@ -26,7 +27,8 @@ import { prepareBrainstormPublication } from './codex-publication.ts';
 import { claimBrainstormRun, fenceBrainstormRun, readBrainstormRun, retainBrainstormStage, releaseBrainstormRun } from './codex-store.ts';
 export const CODEX_BRAINSTORM_RUN_VERSION = 'codex-brainstorm-run-v1';
 export async function runCodexBrainstorm(engine: BrainEngine, config: BrainstormRunConfig, original: BrainstormOptions): Promise<BrainstormResult> {
-    const host = codexSubscriptionContext();
+    const parent = codexSubscriptionContext();
+    const host = parent ? bindPrivateRoleScope(parent, ['brainstorm', 'brainstorm-judge']) : undefined;
     if (!host)
         throw new SubscriptionAdmissionError('subscription_required');
     const profile = original.profile ?? BRAINSTORM_PROFILE;
@@ -58,8 +60,8 @@ export async function runCodexBrainstorm(engine: BrainEngine, config: Brainstorm
     await initializeLocalPersistence(ctx);
     if (config.chat_model)
         assertPrivateRoute(config.chat_model, 'brainstorm:config.chat_model');
-    const model = await resolveModel(engine, { cliFlag: opts.modelOverride, tier: 'deep', fallback: 'opus' });
-    const judgeModel = await resolveModel(engine, { cliFlag: opts.judgeModel, configKey: 'models.brainstorm.judge', tier: 'utility', fallback: 'haiku' });
+    const model = await resolveModel(engine, { privateRole: 'brainstorm', cliFlag: opts.modelOverride, tier: 'deep', fallback: 'opus' });
+    const judgeModel = await resolveModel(engine, { privateRole: 'brainstorm-judge', cliFlag: opts.judgeModel, configKey: 'models.brainstorm.judge', tier: 'utility', fallback: 'haiku' });
     const settings = await engine.getAllConfig();
     if (Object.values(readDecideConfig(pickDecideConfig(settings) ?? {}).slots).some(s => s.mode !== 'off'))
         throw new PrivateRoutingError('brainstorm:decide.slots');
@@ -88,8 +90,8 @@ export async function runCodexBrainstorm(engine: BrainEngine, config: Brainstorm
         const fence = async (tx: BrainEngine) => {
             await fenceBrainstormRun(tx, host, claim);
             abortSignal?.throwIfAborted();
-            await resolveModel(tx, { cliFlag: opts.modelOverride, tier: 'deep', fallback: 'opus' });
-            await resolveModel(tx, { cliFlag: opts.judgeModel, configKey: 'models.brainstorm.judge', tier: 'utility', fallback: 'haiku' });
+            await resolveModel(tx, { privateRole: 'brainstorm', cliFlag: opts.modelOverride, tier: 'deep', fallback: 'opus' });
+            await resolveModel(tx, { privateRole: 'brainstorm-judge', cliFlag: opts.judgeModel, configKey: 'models.brainstorm.judge', tier: 'utility', fallback: 'haiku' });
             if (selection)
                 await validateBrainstormSelection(tx, selection);
         };

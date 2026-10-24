@@ -10,13 +10,13 @@ export async function resolveEvalModels(opts: { model?: string; judgeModel: stri
     throw new Error('private evaluation requires native role clients, authorized provider transports and sequential judging');
   const engine = privateMode ? subscription?.engine ?? null : null;
   const judgeModel = privateMode ? await resolveModel(engine, {
-    cliFlag: opts.judgeModel || undefined, configKey: 'models.eval.longmemeval_judge', tier: 'deep', fallback: DEFAULT_JUDGE_MODEL,
+    privateRole: 'longmemeval-judge', cliFlag: opts.judgeModel || undefined, configKey: 'models.eval.longmemeval_judge', tier: 'deep', fallback: DEFAULT_JUDGE_MODEL,
   }) : opts.judgeModel || DEFAULT_JUDGE_MODEL;
-  const model = await resolveModel(engine, { cliFlag: opts.model, configKey: 'models.eval.longmemeval', envVar: 'GBRAIN_MODEL', fallback: 'sonnet' });
+  const model = await resolveModel(engine, { privateRole: 'longmemeval-reader', cliFlag: opts.model, configKey: 'models.eval.longmemeval', envVar: 'GBRAIN_MODEL', fallback: 'sonnet' });
   return { model, judgeModel, subscriptionAuthorized: privateMode && !!subscription };
 }
 
 export function resolveEvalExtractorModel(cliFlag?: string): Promise<string> {
   return resolveModel(readPrivateCodexConfig() ? codexSubscriptionContext()?.engine ?? null : null,
-    { cliFlag, tier: 'utility', fallback: 'haiku' });
+    { privateRole: 'longmemeval-extractor', cliFlag, tier: 'utility', fallback: 'haiku' });
 }

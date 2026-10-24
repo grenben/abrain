@@ -1,3 +1,4 @@
+import { withDistinctCodexModels } from './codex-role-fixture.ts';
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../../src/core/engine.ts';
@@ -34,6 +35,14 @@ export function codexBrainstormRunContract(f:Fixture){describe('native brainstor
     f.reply({autoBrainstorm:true});
   });
   afterEach(async()=>{await f.engine().executeRaw('UPDATE sources SET archived=true WHERE id=$1',[sourceId]);});
+  test('cross and judge dispatch their distinct deep and utility tier models', async () => {
+    await withDistinctCodexModels(async () => {
+      const before = f.calls().length;
+      await f.run(async () => { expect((await run()).generation_status).toBe('complete'); });
+      const models = f.calls().slice(before).map(wire => wire.args[wire.args.indexOf('--model') + 1]);
+      expect(models).toEqual(['deep-fixture', 'utility-fixture']);
+    });
+  });
   test('real retrieval, native cross, judge and prepared publication retain quotes, provenance and null cost',async()=>{
     const before=f.calls().length;
     await f.run(async id=>{
