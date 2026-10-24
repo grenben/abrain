@@ -74,4 +74,31 @@ export function codexPinDatabaseContract(factory: () => Promise<{ engine: BrainE
     await expect(previewDatabasePins(engine, 'openai:fixture')).rejects.toThrow('invalid_target');
     expect(await engine.executeRaw('SELECT id FROM codex_upgrade_receipts')).toHaveLength(0);
   });
+  // Real config deletion/replay is the regression: one scalar models.default
+  // cannot serve distinct tiers, and rollback must restore the retired pin.
+  test('tiered plans map role pins and reversibly retire the conflicting global default', async () => {
+    const tiers = { utility: 'codex-cli:utility', reasoning: 'codex-cli:reasoning', deep: 'codex-cli:deep', subagent: 'codex-cli:subagent' };
+    const keys = { 'models.dream.synthesize': 'reasoning', 'models.think': 'deep', 'models.subagent': 'subagent',
+      'contextual_retrieval.haiku_model': 'utility' } as const;
+    try {
+      for (const key of Object.keys(keys)) await engine.setConfig(key, 'anthropic:fixture');
+      const p = await previewDatabasePins(engine, tiers); expect(p.version).toBe(2);
+      expect(p.changes.find(c => c.key === 'models.default')!.after).toBeNull();
+      const applied = await applyDatabasePins(engine, tiers, p.plan_hash);
+      expect(await engine.getConfig('models.default')).toBeNull();
+      for (const [key, tier] of Object.entries(keys)) expect(await engine.getConfig(key)).toBe(tiers[tier]);
+      expect((await applyDatabasePins(engine, { ...tiers }, p.plan_hash)).id).toBe(applied.id);
+      expect(await engine.getConfig('embedding_model')).toBe('voyage:fixture');
+      await rollbackDatabasePins(engine, applied.id, p.plan_hash);
+      expect(await engine.getConfig('models.default')).toBe('anthropic:fixture');
+      for (const key of Object.keys(keys)) expect(await engine.getConfig(key)).toBe('anthropic:fixture');
+    } finally { await engine.executeRaw('DELETE FROM config WHERE key=ANY($1::text[])', [Object.keys(keys)]); }
+  });
+  test('restoring a global default after a tiered apply prevents rollback from overwriting it', async () => {
+    const tiers = { utility: 'codex-cli:u', reasoning: 'codex-cli:r', deep: 'codex-cli:d', subagent: 'codex-cli:s' };
+    const p = await previewDatabasePins(engine, tiers), applied = await applyDatabasePins(engine, tiers, p.plan_hash);
+    await engine.setConfig('models.default', 'openai:operator-change');
+    await expect(rollbackDatabasePins(engine, applied.id, p.plan_hash)).rejects.toThrow('configuration_changed');
+    expect(await engine.getConfig('models.default')).toBe('openai:operator-change');
+  });
 }

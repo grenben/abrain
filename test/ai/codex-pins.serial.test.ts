@@ -16,6 +16,7 @@ const root = mkdtempSync(join(tmpdir(), 'codex-pin-file-')), file = join(root, '
 const previous = process.env.GBRAIN_HOME, target = 'codex-cli:gpt-fixture', fetch = globalThis.fetch;
 const config = { chat_model: 'anthropic:fixture', expansion_model: 'haiku', chat_fallback_chain: ['anthropic:fixture','openai:fixture'],
   embedding_model: 'voyage:fixture', anthropic_api_key: 'SYNTHETIC_CREDENTIAL_CANARY', unrelated: { preserve: true } };
+const tiers = { utility: 'codex-cli:utility', reasoning: 'codex-cli:reasoning', deep: 'codex-cli:deep', subagent: 'codex-cli:subagent' };
 beforeAll(() => { process.env.GBRAIN_HOME = root; mkdirSync(join(root, '.gbrain')); globalThis.fetch = (() => { throw new Error('forbidden network'); }) as unknown as typeof fetch; });
 beforeEach(() => { rmSync(dir, { recursive: true, force: true }); writeFileSync(file, JSON.stringify(config)); });
 afterAll(() => { if (previous === undefined) delete process.env.GBRAIN_HOME; else process.env.GBRAIN_HOME = previous; globalThis.fetch = fetch; rmSync(root, { recursive: true, force: true }); });
@@ -101,4 +102,27 @@ test('invalid or unconfirmed CLI mutations refuse before a database connection',
     ['pins','receipts','--plane','database','--model',target],
   ]) await expect(run(args, ctx)).rejects.toThrow('Codex pin migration refused');
   expect(connections).toBe(0); expect(existsSync(dir)).toBe(false);
+});
+
+// Scalar receipts cannot prove tier mapping or object-target replay. These use
+// the actual journal and CLI; no transport or filesystem seam is added.
+test('tiered file pins survive replay and rollback without touching activation or auxiliary settings', async () => {
+  const p = previewFilePins(tiers); expect(p.version).toBe(2);
+  const applied = await applyFilePins(tiers, p.plan_hash), value = JSON.parse(readFileSync(file, 'utf8'));
+  expect(value.chat_model).toBe(tiers.reasoning); expect(value.expansion_model).toBe(tiers.utility);
+  expect(value.chat_fallback_chain).toEqual([tiers.reasoning]); expect(value.embedding_model).toBe(config.embedding_model);
+  expect(value.private_codex).toBeUndefined(); expect(value.anthropic_api_key).toBe(config.anthropic_api_key);
+  expect((await applyFilePins({ ...tiers }, p.plan_hash)).id).toBe(applied.id);
+  await rollbackFilePins(applied.id, p.plan_hash); expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(config);
+});
+test('tiered CLI preview accepts exactly four pins and refuses mixed target forms before connecting', async () => {
+  const written: string[] = [], spy = spyOn(output, 'writeStdoutFinal').mockImplementation(async text => { written.push(text); });
+  const ctx = { connectEngine: () => { throw new Error('forbidden connection'); } } as unknown as CliDispatchContext;
+  try {
+    await run(['pins', 'preview', '--plane', 'file', '--models', JSON.stringify(tiers), '--json'], ctx);
+    expect(JSON.parse(written.join('')).target).toEqual(tiers); expect(existsSync(dir)).toBe(false);
+    for (const flags of [['--model', target, '--models', JSON.stringify(tiers)], ['--models', JSON.stringify({ utility: tiers.utility })],
+      ['--models', JSON.stringify({ ...tiers, secret: 'SYNTHETIC_INVALID' })]])
+      await expect(run(['pins', 'preview', '--plane', 'database', ...flags], ctx)).rejects.toThrow('Codex pin migration refused');
+  } finally { spy.mockRestore(); }
 });

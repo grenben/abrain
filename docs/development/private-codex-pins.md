@@ -32,6 +32,20 @@ Malformed pin values refuse without echoing them. File preview opens no database
 database preview uses an explicit existing-brain connection. Neither dispatches
 inference or model discovery. Ordinary configuration reads never migrate pins.
 
+For a four-tier policy, replace `--model` with `--models` on both preview and
+apply, using the same JSON object:
+
+```sh
+gbrain private-codex pins preview --plane database --models '{"utility":"codex-cli:UTILITY","reasoning":"codex-cli:REASONING","deep":"codex-cli:DEEP","subagent":"codex-cli:SUBAGENT"}' --json
+```
+
+Each registered role pin maps to its role's tier; existing tier pins map directly.
+The global `models.default` is removed because it cannot express distinct tiers.
+This deletion appears in the reviewed plan and rollback restores its original
+value. Unset slots stay unset. Tiered plans use receipt version 2; scalar version 1
+receipts remain readable. Neither form changes `private_codex.enabled_roles`.
+The four model names above are placeholders, not qualified runtime selections.
+
 ## Receipts, recovery and rollback
 
 ```sh
@@ -76,10 +90,10 @@ bun test --timeout=240000 test/e2e/codex-pin-database.test.ts
 
 Native PostgreSQL uses separately authorized isolated infrastructure. File fixtures
 must run outside managed brain trees so the normal filesystem guard remains active.
-CLI regression discrimination reverts only `src/cli/commands/private-codex.ts`:
+Historical scalar-checkpoint evidence: CLI regression discrimination reverted only `src/cli/commands/private-codex.ts`:
 eight tests pass and two fail; restored integration passes all ten.
 
-The combined file/PGLite suite passes 16 tests (83 assertions); the native
+At that scalar checkpoint, the combined file/PGLite suite passed 16 tests (83 assertions); the native
 PostgreSQL contract passes six (32 assertions). Migration, schema generation and
 PGLite catalog checks pass 220 tests. PostgreSQL catalogs and column parity pass
 eight tests; the optional PgBouncer case is unavailable. `bun run verify` passes

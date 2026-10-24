@@ -6,7 +6,7 @@ import { atomicWriteFileSync } from '../atomic-write.ts';
 import { flushDirectory } from '../fs-durable.ts';
 import { digest, sha256 } from '../persistence/digest.ts';
 import { acquireNativeLock } from '../persistence/native-lock.ts';
-import { FILE_GENERATIVE_PINS, makePinPlan, pinError, validatePinPlan, type PinPlan } from './private-pin-plan.ts';
+import { FILE_GENERATIVE_PINS, makePinPlan, pinError, validatePinPlan, type PinPlan, type PinTarget } from './private-pin-plan.ts';
 
 interface FileReceipt {
   id: string; plan: PinPlan; state: 'pending_apply' | 'applied' | 'pending_rollback' | 'rolled_back';
@@ -48,10 +48,10 @@ function publish(raw: string, expected: string) {
 }
 function changed(raw: string, plan: PinPlan, reverse = false): string {
   const config = object(raw);
-  for (const c of plan.changes) config[c.key] = reverse ? c.before : c.after;
+  for (const c of plan.changes) { const value = reverse ? c.before : c.after; if (value === null) delete config[c.key]; else config[c.key] = value; }
   return render(config);
 }
-export function previewFilePins(target: string): PinPlan {
+export function previewFilePins(target: PinTarget): PinPlan {
   const j = journal();
   if (j.records.some(r => r.state.startsWith('pending'))) pinError('pending_migration');
   const raw = read(paths().file)!, config = object(raw);
@@ -66,7 +66,7 @@ async function locked<T>(run: () => T): Promise<T> {
   try { return run(); } finally { await claim.release(); }
 }
 /** Journal before file replacement; recovery distinguishes old, applied and unrelated bytes. */
-export async function applyFilePins(target: string, expected: string): Promise<FileReceipt> {
+export async function applyFilePins(target: PinTarget, expected: string): Promise<FileReceipt> {
   if (!/^[a-f0-9]{64}$/.test(expected)) return pinError('preview_required');
   return locked(() => {
     const j = journal(); let record = j.records.find(r => r.plan.plan_hash === expected);
@@ -79,7 +79,7 @@ export async function applyFilePins(target: string, expected: string): Promise<F
       record = { id: randomUUID(), plan, state: 'pending_apply', before_hash: sha256(raw), after_hash: sha256(after), rollback_hash: sha256(changed(after, plan, true)) };
       j.records.push(record); save(j);
     }
-    if (record.plan.target !== target || record.state === 'pending_rollback' || record.state === 'rolled_back') return pinError('receipt_state_changed');
+    if (digest(record.plan.target) !== digest(target) || record.state === 'pending_rollback' || record.state === 'rolled_back') return pinError('receipt_state_changed');
     const raw = read(paths().file)!, hash = sha256(raw);
     if (record.state === 'applied') { if (hash !== record.after_hash) pinError('configuration_changed'); return record; }
     if (hash === record.before_hash) {
