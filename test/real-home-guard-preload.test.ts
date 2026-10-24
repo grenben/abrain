@@ -72,7 +72,7 @@ describe('real-home guard', () => {
         cwd: root, env, stdout: 'pipe', stderr: 'pipe', timeout: 45_000,
       });
       for (const path of artifacts) expect(readFileSync(join(home, path), 'utf8')).toBe('fake-live-sentinel\n');
-      expect(child.exitCode).toBe(0);
+      expect(child.exitCode, child.stdout.toString() + child.stderr.toString()).toBe(0);
     });
   });
 

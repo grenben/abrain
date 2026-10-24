@@ -19,10 +19,12 @@ test/agent-operator-gate-fixes.serial.test.ts	global-state	global-state: binds l
 test/agent-recovery-consent-journeys.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME)
 test/ai/codex-actions.serial.test.ts	global-state	global-state: imported action contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-calibration.serial.test.ts	global-state	global-state: imported calibration contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-concepts.serial.test.ts	global-state	global-state: imported concepts contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-contradiction-judge.serial.test.ts	global-state	global-state: changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch and gateway, registers a process-wide Codex runtime fixture, and patches process.exit
 test/ai/codex-drift.serial.test.ts	global-state	global-state: imported drift contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-eval-cli.serial.test.ts	global-state	global-state: configures the process-wide AI gateway and runs isolated CLI children with a network tripwire
 test/ai/codex-facts.serial.test.ts	global-state	global-state: imported facts contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
+test/ai/codex-fence-repair.serial.test.ts	global-state	global-state: imported fence-repair contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-gateway.serial.test.ts	R1	R1: mutates HOME/GBRAIN_HOME/CODEX_HOME and global fetch while configuring the process-wide AI gateway
 test/ai/codex-jobs.serial.test.ts	global-state	global-state: imported job contract changes HOME/GBRAIN_HOME/CODEX_HOME, global fetch, gateway and runtime qualification
 test/ai/codex-pins.serial.test.ts	R1	R1: mutates process.env (GBRAIN_HOME), global fetch, atomic-write and output spies
