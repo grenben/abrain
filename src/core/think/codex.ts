@@ -1,3 +1,4 @@
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { RunThinkOpts, ThinkResponse, ThinkResult } from './index.ts';
 import type { ThinkGatherResult } from './gather.ts';
@@ -20,6 +21,7 @@ export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, 
   const role = opts.privateRole ?? 'think';
   if (!['think', 'auto-think', 'calibration-think-ab'].includes(role)) throw new CodexProposalError('invalid_input');
   privateModelForRole(policy, role);
+  return withPrivateRoleScope([role], async () => {
   const context = codexSubscriptionContext();
   if (!context) throw new SubscriptionAdmissionError('subscription_required');
   if (!opts.question.trim() || opts.question.length > 16000 || opts.stubResponse || opts.client ||
@@ -45,6 +47,7 @@ export async function withPrivateThink(engine: BrainEngine, opts: RunThinkOpts, 
   }, () => import('./publication.ts').then(module => module.retainPrivateThink(engine, opts, run)));
   if (denied) throw denied;
   return result;
+  });
 }
 
 const citationKey = (c: { page_slug: string; row_num: number | null }) => `${c.page_slug}#${c.row_num ?? '_'}`;

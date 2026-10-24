@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { chat } from '../ai/gateway.ts';
-import { readPrivateCodexConfig, assertPrivateRoute, privateModelForRole } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, privateModelForRole, privatePolicyFingerprint } from '../ai/private-policy.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { EXTRACT_TAKES_PROMPT, EXTRACT_TAKES_ATTRIBUTION_RULES, type ProposeTakesExtractor, type ProposedTake } from './propose-takes.ts';
 import { observationDateLine, observationDateRule, resolveObservationDate } from '../ai/date-grounding.ts';
@@ -9,7 +9,7 @@ import { TAKE_KIND_VALUES } from '../takes-fence.ts';
 export const CODEX_TAKE_PROPOSAL_VERSION = 'codex-take-proposals-v1';
 type TakeProposal = Omit<ProposedTake, 'domain'> & { domain: string | null; source_quote: string };
 export const codexTakeCacheVersion = (model: string, attribution: boolean, grounding: boolean, version: string) =>
-  `${CODEX_TAKE_PROPOSAL_VERSION}:${createHash('sha256').update(JSON.stringify({ model, attribution, grounding, version })).digest('hex')}`;
+  `${CODEX_TAKE_PROPOSAL_VERSION}:${createHash('sha256').update(JSON.stringify({ model, attribution, grounding, version, policy: privatePolicyFingerprint(readPrivateCodexConfig()!) })).digest('hex')}`;
 
 /** Whole-batch validation precedes acceptance: no filtering invalid claims into an empty success. */
 export const codexTakeExtractor: ProposeTakesExtractor = async input => {

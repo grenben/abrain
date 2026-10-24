@@ -1,3 +1,4 @@
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
 import { formatCycleCost } from './budget-meter.ts';
 import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
@@ -343,6 +344,7 @@ export async function runPhaseDrift(
     };
   }
 
+  return withPrivateRoleScope(['drift'], async () => {
   // #5280: a managed brain publishes the report through the maintenance
   // coordinator; the preflight refuses a missing canonical owner before any
   // judge spend. Null on an unmanaged brain.
@@ -462,6 +464,7 @@ export async function runPhaseDrift(
     },
     duration_ms: Date.now() - start,
   };
+  }, false);
 }
 
 /** Test helper: expose findDriftCandidates without running the full phase. */

@@ -82,3 +82,12 @@ Optimizer producers carry the optional discovery registry through their immutabl
 
 - `src/core/cycle/concepts-codex.ts` — native concept narrative schema, exact member quotations, explicit numeric grounding, role-policy scope and current member-revision fences. The ordinary phase preserves its grouping, human-owned/deleted page guards, canonical sections and provenance. Private mode requires coordinated publication, filters private member atoms, uses the common subscription envelope, reports unknown USD cost and throws on inference failure without a template fallback. Small groups remain deterministic. Shared engine contract: `test/helpers/codex-concepts-contract.ts`.
 - `src/core/fence-repair/codex.ts` — one bounded native candidate proposal covers table repair and tail classification; the existing row/cell/visibility/structure gates run before accepted-turn accounting. Attempt memos bind the whole policy. The actual repair runner distinguishes subscription allowances from USD caps; previews and write receipts show unknown subscription cost. Preview policy, live role scope and page admission fence publication. Existing model-repair opt-in remains required; unmanaged publication is refused. `page-mutations.ts` carries the host subscription transaction fence into ordinary and file-repair admissions. Shared engine contract: `test/helpers/codex-fence-repair-contract.ts`.
+
+The core policy fences cover think, enrichment, atom maintenance, drift, grading,
+take proposals and edge judgments. `privatePolicyCheck` supports grant-free
+triage cache reads and contextual publication without replacing a scratch
+scope's identity. Triage/grading/proposal/enrichment caches bind the full policy;
+think publication payloads retain their role and fingerprint through later save.
+`minions/subscription-job-roles.ts` preflights known core producers and explicitly
+selected cycle phases without activating optional phases in implicit cycles.
+See the [core role checkpoint](../../development/private-codex-core-roles.md).

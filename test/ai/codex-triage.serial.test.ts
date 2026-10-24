@@ -10,7 +10,7 @@ import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.
 import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { runTriagePass, TRIAGE_VERSION, isTriageCacheValid } from '../../src/core/cycle/synthesize.ts';
-import { CODEX_TRIAGE_SCHEMA, CODEX_TRIAGE_VERSION } from '../../src/core/cycle/triage-codex.ts';
+import { CODEX_TRIAGE_SCHEMA, CODEX_TRIAGE_VERSION, triageCacheModel } from '../../src/core/cycle/triage-codex.ts';
 import type { TriageDecide } from '../../src/core/cycle/triage-decide.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'codex-triage-'));
@@ -76,7 +76,7 @@ test('real triage transports schema, serializes calls and stores grounded versio
   expect(calls().at(-1).schema).toEqual(CODEX_TRIAGE_SCHEMA);
   expect(calls().at(-1).args).toContain('--output-schema');
   const stored = await engine.getDreamVerdict(good.filePath, good.contentHash);
-  expect(stored).toMatchObject({ score: 0.9, triage_version: CODEX_TRIAGE_VERSION, model,
+  expect(stored).toMatchObject({ score: 0.9, triage_version: CODEX_TRIAGE_VERSION, model: triageCacheModel(model),
     segments: [{ quote: 'Acme-example will keep source evidence with every decision.', note: 'Keep evidence' }] });
   expect(isTriageCacheValid(stored!, model)).toBe(true);
   const count = calls().length;
@@ -84,6 +84,20 @@ test('real triage transports schema, serializes calls and stores grounded versio
   expect(calls()).toHaveLength(count); // Cache reads need no subscription grant.
   await engine.putDreamVerdict(good.filePath, good.contentHash, { ...stored!, model, triage_version: TRIAGE_VERSION });
   expect((await withRun(() => runTriagePass(engine, [good], cfg))).judged).toBe(1);
+});
+
+// A model-only cache survives an unrelated tier change; this proves policy-bound reuse.
+test('changed policy invalidates cached positive and negative verdicts without changing the dispatched model', async () => {
+  const inputs = [transcript('policy-good'), { ...transcript('empty'), filePath: '/synthetic/policy-empty.txt' }];
+  await withRun(() => runTriagePass(engine, inputs, cfg));
+  const count = calls().length, path = join(root, '.gbrain', 'config.json'), saved = readFileSync(path, 'utf8');
+  const next = JSON.parse(saved); next.private_codex.models.deep = 'codex-cli:changed-deep';
+  writeFileSync(path, JSON.stringify(next));
+  try {
+    const result = await withRun(() => runTriagePass(engine, inputs, cfg));
+    expect(result.cacheHits).toBe(0); expect(result.judged).toBe(2); expect(calls().length).toBe(count + 2);
+    expect(calls().at(-1).args[calls().at(-1).args.indexOf('--model') + 1]).toBe('gpt-test');
+  } finally { writeFileSync(path, saved); }
 });
 
 for (const kind of ['bad_quote', 'bad_entity', 'bad_note', 'bad_suffix', 'bad_schema', 'malformed']) {

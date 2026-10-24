@@ -331,6 +331,21 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     try{await run(async()=>{expect(await think({anchor:unicodeSlug})).toMatchObject({synthesisOk:true,citations:[{page_slug:unicodeSlug,row_num:null,citation_index:1}]});});}
     finally{await engine.executeRaw('DELETE FROM pages WHERE id=$1',[page.id]);}
   });
+  withCodexRoleFixture(root, ['think'], () => {
+  test('retained think publication refuses a changed tier policy and resumes only its original policy', async () => {
+    const path = join(root, '.gbrain', 'config.json'), savedPolicy = readFileSync(path, 'utf8');
+    await run(async () => {
+      const result = await think({ save: true }), count = calls().length;
+      const next = JSON.parse(savedPolicy); next.private_codex.models.utility = 'codex-cli:changed-utility';
+      try {
+        writeFileSync(path, JSON.stringify(next));
+        await expect(persistSynthesis(engine, result, { sourceId })).rejects.toMatchObject({ code: 'private_route_conflict' });
+        expect(await engine.executeRaw("SELECT id FROM persistence_requests WHERE intent->>'codex_think_plan'=$1", [result.codex_publication!.plan_id])).toHaveLength(0);
+      } finally { writeFileSync(path, savedPolicy); }
+      expect((await persistSynthesis(engine, result, { sourceId }))?.evidenceInserted).toBe(1); expect(calls().length).toBe(count);
+    });
+  });
+  });
   test('save retains the validated plan before effects and replays committed receipts without inference',async()=>{
     await run(async id=>{
       const result=await think({save:true});expect(result.codex_publication).toBeDefined();
@@ -468,7 +483,7 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
   withCodexRoleFixture(root, ["skillopt-bootstrap"], () => codexBootstrapLocalContract({root,engine:()=>engine,sourceId,reply,calls}));
   codexSubscriptionGroupContract({engine:()=>engine,run,reply,calls});
   withCodexRoleFixture(root, ["brainstorm-judge"], () => codexBrainstormJudgeContract({engine:()=>engine,run,reply,calls}));
-  codexContextualContract({engine:()=>engine,sourceId,run,reply,calls});
+  withCodexRoleFixture(root, ["contextual-synopsis", "page-summary"], () => codexContextualContract({engine:()=>engine,sourceId,run,reply,calls}));
   codexProposalCacheContract({engine:()=>engine,run,reply,calls});
   withCodexRoleFixture(root, ["longmemeval-fact-keys-paper", "longmemeval-fact-keys-production"], () => codexFactKeysContract({root,engine:()=>engine,run,reply,calls}));
   withCodexRoleFixture(root, ["longmemeval-synopsis"], () => codexSynopsisTierContract({root,engine:()=>engine,run,reply,calls}));

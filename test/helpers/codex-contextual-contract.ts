@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { v273 } from '../../src/core/schema-migrations/v273-precise-auxiliary-spend.ts';
 import { reserveGroup, settle } from '../../src/core/minions/budget-meter.ts';
 import { MinionQueue } from '../../src/core/minions/queue.ts';
@@ -99,6 +101,16 @@ export function codexContextualContract(f:Fixture){describe('native contextual s
   test('publication rechecks worker authority inside the transaction after embedding finishes',async()=>{
     let checked=false;await f.run(async()=>{expect((await run()).kind).toBe('transient_error');},{checkAuthorityInTransaction:async()=>{checked=true;throw new Error('synthetic stale worker');}});
     expect(checked).toBe(true);expect(embedded).toHaveLength(1);expect((await state()).page!.contextual_retrieval_mode).toBeNull();expect((await state()).chunks[0]!.embedding).toBeNull();
+  });
+  test('a policy change during embedding cannot publish vectors or completion metadata', async () => {
+    const path = join(process.env.GBRAIN_HOME!, '.gbrain', 'config.json'), saved = readFileSync(path, 'utf8');
+    let changed = false;
+    intervene = async () => { const next = JSON.parse(saved); next.private_codex.models.deep = 'codex-cli:changed-deep'; writeFileSync(path, JSON.stringify(next)); changed = true; };
+    try {
+      await f.run(async () => { expect(await run()).toMatchObject({ kind: 'transient_error', cause: 'db', detail: 'private_route_conflict: role_scope:policy_changed' }); });
+      expect(changed).toBe(true); expect(embedded).toHaveLength(1); expect((await state()).page!.contextual_retrieval_mode).toBeNull();
+      expect((await state()).chunks[0]!.embedding).toBeNull();
+    } finally { writeFileSync(path, saved); }
   });
   test('cancellation after embedding cannot publish a successful completion',async()=>{
     const controller=new AbortController();intervene=async()=>{controller.abort();};

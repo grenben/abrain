@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
 import { createSubscriptionRun } from '../../src/core/ai/subscription-admission.ts';
-import { withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
+import { withCodexSubscription, type CodexSubscriptionContext } from '../../src/core/ai/subscription-context.ts';
 import { __registerCodexFixtureForTests } from '../../src/core/ai/providers/codex-qualification.ts';
 import { extractFactsFromTurn, extractFactsFromTurnWithOutcome } from '../../src/core/facts/extract.ts';
 import { classifyAgainstCandidates } from '../../src/core/facts/classify.ts';
@@ -34,10 +34,10 @@ const fact = { fact: source, kind: 'fact', entity: null, confidence: 0.9, notabi
   metric: null, value: null, unit: null, period: null, source_quote: source };
 const candidate = { id: 7, fact: 'The synthetic orchard has ten apple trees.', kind: 'fact', embedding: null } as FactRow;
 function reply(value: unknown) { writeFileSync(control, JSON.stringify(value)); }
-const run = async <T>(fn: (runId: string) => Promise<T>, maxCalls = 2) => {
+const run = async <T>(fn: (runId: string) => Promise<T>, maxCalls = 2, hooks: Partial<CodexSubscriptionContext> = {}) => {
   const runId = `facts-${seq++}`;
   await createSubscriptionRun(engine, { runId, accountLane: runId, maxAttempts: maxCalls, maxTurns: maxCalls, deadline: new Date(Date.now() + 600_000) });
-  return withCodexSubscription({ engine, runId }, () => fn(runId));
+  return withCodexSubscription({ engine, runId, ...hooks }, () => fn(runId));
 };
 beforeAll(async () => {
   for (const k of keys) process.env[k] = root;
@@ -178,6 +178,24 @@ test('conflicting atom pins fail before dispatch and do not consume attempts', a
   expect(readFileSync(capture, 'utf8')).toBe(before);
 });
 
+// Source/quote tests do not catch a tier edit in the asynchronous publication fence.
+test('atom publication rolls back when the host changes policy after model acceptance', async () => {
+  reply({ atoms: [{ title: 'Policy fenced atom', atom_type: 'insight', body: source, source_quote: source,
+    lesson: null, concepts: null, virality_score: null, emotional_register: null }] });
+  const path = join(root, '.gbrain', 'config.json'), savedPolicy = readFileSync(path, 'utf8'); let changed = false;
+  const before = await engine.executeRaw("SELECT id FROM pages WHERE type='atom' ORDER BY id");
+  const transcriptPath = join(root, '2026-01-01-policy.txt'); writeFileSync(transcriptPath, source);
+  await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
+  try {
+    await expect(run(() => runPhaseExtractAtoms(engine, { _pages: [], _transcripts: [
+      { filePath: transcriptPath, content: source, contentHash: createHash('sha256').update(source).digest('hex') }] }), 2,
+      { checkAuthorityInTransaction: async () => {
+        changed = true; const next = JSON.parse(savedPolicy); next.private_codex.models.deep = 'codex-cli:changed-deep'; writeFileSync(path, JSON.stringify(next));
+      } })).rejects.toThrow();
+    expect(changed).toBe(true); expect(await engine.executeRaw("SELECT id FROM pages WHERE type='atom' ORDER BY id")).toEqual(before);
+  } finally { writeFileSync(path, savedPolicy); await engine.executeRaw('UPDATE persistence_brain SET enabled=false WHERE singleton=1'); }
+});
+
 test('private take grading validates evidence before acceptance and caches only valid verdicts', async () => {
   await engine.putPage('notes/synthetic-forecast', { type: 'note', title: 'Synthetic forecast', compiled_truth: source });
   const page = await engine.getPage('notes/synthetic-forecast', { sourceId: 'default' });
@@ -204,6 +222,13 @@ test('private take grading validates evidence before acceptance and caches only 
   expect(readFileSync(capture, 'utf8')).toBe(calls);
   const conflict = await run(() => runPhaseGradeTakes(ctx, { model: 'anthropic:forbidden', evidenceRetriever: async () => source }));
   expect(conflict.status).toBe('fail'); expect(readFileSync(capture, 'utf8')).toBe(calls);
+  const path = join(root, '.gbrain', 'config.json'), savedPolicy = readFileSync(path, 'utf8');
+  try {
+    const next = JSON.parse(savedPolicy); next.private_codex.models.deep = 'codex-cli:changed-deep'; writeFileSync(path, JSON.stringify(next));
+    const fresh = await run(grade); expect(fresh.details?.cache_hits).toBe(0); expect(fresh.details?.verdicts_written).toBe(1);
+    expect(readFileSync(capture, 'utf8')).not.toBe(calls);
+  } finally { writeFileSync(path, savedPolicy); }
+
 });
 
 test('private synopsis accepts grounded native output and propagates invalid output without fallback', async () => {

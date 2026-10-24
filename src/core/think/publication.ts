@@ -9,7 +9,7 @@ import { digest } from '../persistence/digest.ts';
 import { initializeLocalPersistence, preparePageAdmission } from '../persistence/page-mutations.ts';
 import { declareDurablePersistence } from '../persistence/protocol.ts';
 import { codexSubscriptionContext } from '../ai/subscription-context.ts';
-import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, privatePolicyFingerprint } from '../ai/private-policy.ts';
 import { resolveModel } from '../model-config.ts';
 import { currentSubmissionAuthority } from '../minions/submission-authority.ts';
 import { serializeMarkdown } from '../markdown.ts';
@@ -62,7 +62,7 @@ export async function retainPrivateThink(engine: BrainEngine, opts: RunThinkOpts
     const model = await resolveModel(engine, { privateRole: opts.privateRole ?? 'think', cliFlag: opts.model, configKey: 'models.think', tier: 'deep', fallback: 'opus' });
     const requestKey = digest([sourceId, opts.question]);
     const inputHash = digest({ sourceId, incarnation: source.incarnation, question: opts.question, anchor: opts.anchor ?? null,
-        save: !!opts.save, take: !!opts.take, model, scope: opts.allowedSources ?? null, since: opts.since ?? null, until: opts.until ?? null,
+        save: !!opts.save, take: !!opts.take, model, ...(readPrivateCodexConfig()?.models ? { privateRole: opts.privateRole ?? 'think' } : {}), scope: opts.allowedSources ?? null, since: opts.since ?? null, until: opts.until ?? null,
         referenceDate: opts.referenceDate ?? null, withCalibration: !!opts.withCalibration, calibrationHolder: opts.calibrationHolder ?? null,
         excludePrivate: opts.excludePrivate ?? null, takesHoldersAllowList: opts.takesHoldersAllowList ?? null, rounds: opts.rounds ?? 1, withTrajectory: opts.withTrajectory ?? null, policy: readPrivateCodexConfig() });
     const [prior] = await engine.executeRaw<ThinkPublicationPlan>('SELECT * FROM codex_think_publications WHERE run_id=$1 AND request_key=$2', [context.runId, requestKey]);
@@ -114,7 +114,7 @@ export async function retainPrivateThink(engine: BrainEngine, opts: RunThinkOpts
     }
     for (const action of actions)
         await preflightThinkAction(ctx, action.admission);
-    const payload: ThinkPublicationPayload = { version: 1, inputHash, result, evidence: state.evidence, actions, ...context.publicationFence ? { fence: context.publicationFence } : {} };
+    const payload: ThinkPublicationPayload = { version: 1, inputHash, policyFingerprint: privatePolicyFingerprint(readPrivateCodexConfig()!), privateRole: opts.privateRole ?? 'think', result, evidence: state.evidence, actions, ...context.publicationFence ? { fence: context.publicationFence } : {} };
     await engine.transaction(async (tx) => {
         await declareDurablePersistence(tx);
         await context.checkAuthorityInTransaction?.(tx);

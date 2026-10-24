@@ -1,3 +1,4 @@
+import { privatePolicyCheck } from './ai/private-role-scope.ts';
 import { CODEX_SYNOPSIS_VERSION } from './ai/codex-versions.ts';
 /**
  * v0.40.3.0 — contextual retrieval service (D27 P1-1 + D26 P0-2 +
@@ -303,6 +304,7 @@ export interface ReembedPageArgs {
 export async function reembedPageWithContextualRetrieval(
   args: ReembedPageArgs,
 ): Promise<ReembedPageResult> {
+  const checkPolicy = privatePolicyCheck();
   // ── Load page + source + chunks ────────────────────────────────────
   const initial = await args.engine.getPage(args.pageSlug, { sourceId: args.sourceId });
   if (!initial) {
@@ -330,6 +332,7 @@ export async function reembedPageWithContextualRetrieval(
         await fencePrivateContextualPublication(tx, page.source_id, prepared.snapshot.sourceIncarnation, args.abortSignal);
         await tx.lockPageKeys([{ sourceId: page.source_id, slug: page.slug }]);
         if (digest(sourcePolicy(await loadSourceRow(tx, page.source_id))) !== digest(sourcePolicy(source))) return false;
+        checkPolicy();
         if (embedded) {
           if (!(await installPageEmbeddings(tx, prepared, embedded.map(chunk => ({ ...chunk, model: prepared.embeddingModel ?? undefined })),
             undefined, { tier: mode, corpusGeneration: generation })).complete) return false;
@@ -342,6 +345,7 @@ export async function reembedPageWithContextualRetrieval(
           && !Object.hasOwn(page.frontmatter ?? {}, 'embed_skip')) {
           await reconcileContextualEmbeddingInputs(tx, prepared.snapshot, mode, generation);
         }
+        checkPolicy();
         return true;
       });
       return installed ? null : superseded;
@@ -412,6 +416,7 @@ export async function reembedPageWithContextualRetrieval(
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    checkPolicy();
     const phase1 = await withPrivateContextualPreparation(args, attemptMode === 'per_chunk_synopsis', chunks.length, () => tryBuildPhase1({
       attemptMode,
       page,

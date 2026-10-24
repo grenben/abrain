@@ -1,3 +1,4 @@
+import { withPrivateRoleScope } from '../core/ai/private-role-scope.ts';
 /**
  * gbrain enrich — batch enrichment primitive (issue #1700).
  *
@@ -60,7 +61,7 @@ import { jobSpendAuthorization, spendSubmitSummary, type SpendAuthorization } fr
 import { getCliOptions, cliOptsToProgressOptions, maybeBackground } from '../core/cli-options.ts';
 import { loadConfig } from '../core/config.ts';
 import { isMustAbortError, runSlidingPool } from '../core/worker-pool.ts';
-import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError } from '../core/ai/private-policy.ts';
+import { readPrivateCodexConfig, resolvePrivateModel, PrivateRoutingError, privatePolicyFingerprint } from '../core/ai/private-policy.ts';
 import { codexSubscriptionContext } from '../core/ai/subscription-context.ts';
 import { assertSubscriptionTarget } from '../core/ai/subscription-target.ts';
 import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
@@ -204,6 +205,7 @@ export interface EnrichResult {
 // ---------------------------------------------------------------------------
 
 export function enrichFingerprint(opts: {
+  privatePolicy?: string;
   sourceId: string;
   types: PageType[];
   order: EnrichOrder;
@@ -224,6 +226,7 @@ export function enrichFingerprint(opts: {
     order: opts.order,
     thinThreshold: opts.thinThreshold,
     model: opts.model,
+    ...(opts.privatePolicy ? { privatePolicy: opts.privatePolicy } : {}),
     ...(opts.minContextChars !== undefined && opts.minContextChars !== MIN_CONTEXT_CHARS
       ? { minContextChars: opts.minContextChars }
       : {}),
@@ -529,6 +532,10 @@ export async function runEnrichCore(
   opts: EnrichCoreOpts,
   signal?: AbortSignal,
 ): Promise<EnrichResult> {
+  return opts.dryRun ? enrichCore(engine, opts, signal) : withPrivateRoleScope(['enrichment'], () => enrichCore(engine, opts, signal));
+}
+
+async function enrichCore(engine: BrainEngine, opts: EnrichCoreOpts, signal?: AbortSignal): Promise<EnrichResult> {
   if (!opts.sourceId) throw new Error('runEnrichCore: opts.sourceId is required');
 
   const result: EnrichResult = {
@@ -568,13 +575,13 @@ export async function runEnrichCore(
   const model = privatePolicy
     ? (await resolvePrivateModel(engine, { privateRole: 'enrichment', cliFlag: opts.model, configKey: 'models.chat', tier: 'reasoning', fallback: 'unused' }, privatePolicy)).model
     : opts.model || getChatModel();
-  const synthesizeFn = opts.synthesizeFn ?? defaultSynthesize;
+  const synthesizeFn = privatePolicy ? defaultSynthesize : opts.synthesizeFn ?? defaultSynthesize;
   const config = loadConfig();
 
   const workersResolved = resolveWorkersWithClamp(engine, opts.workers, 'enrich', 0);
   const workers = workersResolved.workers;
 
-  const fp = enrichFingerprint({ sourceId, types, order, thinThreshold, model, minContextChars });
+  const fp = enrichFingerprint({ sourceId, types, order, thinThreshold, model, minContextChars, privatePolicy: privatePolicy ? privatePolicyFingerprint(privatePolicy) : undefined });
   const cpKey = checkpointKey(fp);
 
   // #3629: load the checkpoint BEFORE enumerating candidates. SKIP'd pages

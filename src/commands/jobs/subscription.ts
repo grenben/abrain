@@ -1,5 +1,6 @@
 import type { BrainEngine } from '../../core/engine.ts';
-import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { readPrivateCodexConfig, resolvePrivateModel } from '../../core/ai/private-policy.ts';
+import type { PrivateRole } from '../../core/ai/private-roles.ts';
 import { jobMayGenerate, preflightSubscriptionSubmit, type JobSubscriptionAuthorization } from '../../core/minions/subscription-jobs.ts';
 import { jobSpendAuthorization, type SpendAuthorization } from '../../core/minions/spend-authorization.ts';
 import { intFlagValue, numberFlagValue } from '../../cli/flag-values.ts';
@@ -18,11 +19,11 @@ function value(args: string[], flag: string): string | undefined {
 }
 
 /** Local CLI authority only. Job JSON, --yes and USD flags cannot create this grant. */
-export async function prepareCodexJobSubmit(engine: BrainEngine, name: string, data: Record<string, unknown>, args: string[]): Promise<{
+export async function prepareCodexJobSubmit(engine: BrainEngine, name: string, data: Record<string, unknown>, args: string[], localRole?: PrivateRole): Promise<{
   codexSubscription?: JobSubscriptionAuthorization; spendAuthorization?: SpendAuthorization;
 }> {
   const requested = args.some(arg => FLAGS.some(flag => arg === flag || arg.startsWith(`${flag}=`)));
-  const generative = jobMayGenerate(name, data);
+  const generative = localRole !== undefined || jobMayGenerate(name, data);
   if (!requested && !generative) return {};
   const policy = readPrivateCodexConfig();
   if (!policy && !requested) return {};
@@ -38,7 +39,10 @@ export async function prepareCodexJobSubmit(engine: BrainEngine, name: string, d
     throw usageError('--codex-deadline must be a future UTC ISO timestamp within 24 hours.', 'Use the same absolute deadline when resubmitting the same idempotency key.');
   }
   const codexSubscription = { maxAttempts, maxTurns, deadline };
-  await preflightSubscriptionSubmit(engine, name, data, codexSubscription);
+  // Local commands share allowance parsing, but must not impersonate a queued
+  // auto-think phase. The role is a host argument, never read from job JSON.
+  if (localRole) await resolvePrivateModel(engine, { privateRole: localRole, fallback: 'unused' }, policy);
+  else await preflightSubscriptionSubmit(engine, name, data, codexSubscription);
   // Any paid auxiliary work needs its own explicit numeric USD cap.
   const usd = value(args, '--max-usd');
   let spendAuthorization: SpendAuthorization | undefined;

@@ -517,6 +517,25 @@ test('payload subscription fields and USD consent do not authorize subscription 
   await expect(runWithJobSpend(engine, job, ctxFor(job), call)).rejects.toMatchObject({ code: 'subscription_required' });
   expect(count()).toBe(0);
 });
+// The worker's dispatch guard is too late to prove disabled work never entered the queue.
+test('core producer roles refuse disabled queue admission while freshness cycles stay model-free', async () => {
+  const models = { utility: 'codex-cli:utility-fixture', reasoning: 'codex-cli:reasoning-fixture', deep: 'codex-cli:deep-fixture', subagent: 'codex-cli:subagent-fixture' };
+  const path = join(root, '.gbrain', 'config.json');
+  const policy = (enabled_roles: string[]) => writeFileSync(path, JSON.stringify({ private_codex: { mode: 'strict', models, enabled_roles, bin } }));
+  policy(['chat']);
+  for (const [name, data] of [ ['enrich', { sourceId: 'default' }], ['extract-atoms-drain', {}],
+    ['autopilot-cycle', { phases: ['synthesize_concepts'] }], ['contextual_reindex_per_chunk', { expected_source_id: 'default' }] ] as const) {
+    await expect(queue.add(name, data, {}, { allowProtectedSubmit: true, codexSubscription: grant() })).rejects.toMatchObject({ code: 'private_role_disabled' });
+  }
+  expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+  expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+  policy(['enrichment']);
+  await expect(queue.add('enrich', { model: models.utility }, {}, { codexSubscription: grant() })).rejects.toMatchObject({ code: 'private_route_conflict' });
+  const valid = await queue.add('enrich', { model: models.reasoning }, {}, { codexSubscription: grant() }); expect(valid.id).toBeGreaterThan(0);
+  const fresh = await queue.add('autopilot-cycle', { phases: [...SOURCE_FRESHNESS_PHASES] }, {}, { allowProtectedSubmit: true }); expect(fresh.id).toBeGreaterThan(0);
+  expect(count()).toBe(0);
+});
+
 test('queue preflight refuses forbidden pins and private native minions without inserting jobs', async () => {
   await expect(queue.add('enrich', { model: 'anthropic:claude-test' })).rejects.toMatchObject({ source: 'job:model' });
   await expect(queue.add('subagent', { model: 'codex-cli:gpt-test' })).rejects.toMatchObject({ code: 'private_native_loop_unsupported' });

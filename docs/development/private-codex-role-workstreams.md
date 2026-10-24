@@ -104,11 +104,17 @@ The extended caller implementation and its verification are tracked in
 
 ## Remaining shared gates
 
-This checkpoint does not finish all core callers, producer/worker activation
-checks, tier-aware pin-migration tooling, or retained feature-specific identities.
-Review those before enabling a role. The production executable allowlist remains
-empty; no real subscription model has been accepted by this checkpoint. Native
-agent loops and remote delegation retain their existing restrictions.
+The extended branch through `57592ea142` is integrated with the core caller
+routing, native concepts/fence repair and tier-aware pin migration. The
+[core checkpoint](private-codex-core-roles.md) records retained-policy and
+producer checks. Selected combined regressions and baseline discrimination
+are recorded with the local handoff; full CI remains a release gate.
+
+The production executable allowlist remains empty. No real subscription model
+has been accepted, and no role is activated by these source changes. Protected
+runtime tests and real-model acceptance must prove the selected four model pins
+on the intended production host. Native loops and remote delegation retain
+their existing restrictions; the 39-role inventory is not all GBrain surfaces.
 
 Neither session may change the installed package, live brain content/database,
 services, credentials or production configuration as part of this development.

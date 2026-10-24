@@ -1,3 +1,4 @@
+import { readPrivateCodexConfig, privatePolicyFingerprint, requirePrivateRole, PrivateRoutingError } from '../ai/private-policy.ts';
 import type { SqlEngine, WriteRequest } from '../persistence/model.ts';
 import type { WriteAdmission } from '../persistence/journal.ts';
 import { isWriteRequestId } from '../persistence/types.ts';
@@ -15,6 +16,11 @@ export async function readThinkPlan(engine: SqlEngine, id: string, lock = false)
 }
 /** The accepted job must still own its lease at journal admission and effect commit. */
 export async function validateThinkLease(engine: SqlEngine, plan: ThinkPublicationPlan, lock: boolean): Promise<void> {
+    const policy = readPrivateCodexConfig();
+    if (!policy || (plan.payload.policyFingerprint
+        ? privatePolicyFingerprint(policy) !== plan.payload.policyFingerprint
+        : 'models' in policy)) throw new PrivateRoutingError('think_publication:policy_changed');
+    if (plan.payload.privateRole) requirePrivateRole(policy, plan.payload.privateRole);
     const fence = plan.payload.fence;
     if (fence) {
         const [job] = await engine.executeRaw<{

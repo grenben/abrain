@@ -117,6 +117,19 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     expect((await rows())[0]).toMatchObject({ status: 'rejected', claim_text: '(no gradeable claims)', codex_evidence: { source_quote: null } });
     const before = calls().length; await run(phase); expect(calls().length).toBe(before);
   });
+  // Earlier tests cover source/lease revocation, not a policy edited after acceptance or cache creation.
+  test('policy changes invalidate empty extraction caches and fence accepted batch publication', async () => {
+    const path = join(root, '.gbrain', 'config.json'), saved = readFileSync(path, 'utf8');
+    const change = () => { const next = JSON.parse(saved); next.private_codex.models.deep = 'codex-cli:changed-deep'; writeFileSync(path, JSON.stringify(next)); };
+    try {
+      reply({ takes: [] }); await run(phase); const before = calls().length;
+      change(); expect(await run(phase)).toMatchObject({ status: 'ok', details: { tombstones_written: 1, cache_hits: 0 } });
+      expect(calls().length).toBe(before + 1);
+      writeFileSync(path, saved); await engine.executeRaw('DELETE FROM take_proposals'); reply({ takes: [take] });
+      const result = await run(phase, { checkAuthorityInTransaction: async () => { change(); } });
+      expect(result.status).toBe('fail'); expect(await rows()).toHaveLength(0);
+    } finally { writeFileSync(path, saved); }
+  });
   test('transaction failure after the first row rolls back the entire batch and allows a fresh attempt', async () => {
     await engine.executeRaw("CREATE FUNCTION reject_second_fixture_take() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.claim_text='The orchard may expand its land.' THEN RAISE EXCEPTION 'synthetic effect failure'; END IF; RETURN NEW; END $$");
     await engine.executeRaw('CREATE TRIGGER reject_second_fixture_take BEFORE INSERT ON take_proposals FOR EACH ROW EXECUTE FUNCTION reject_second_fixture_take()');

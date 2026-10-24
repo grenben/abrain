@@ -1,5 +1,17 @@
 # Private Codex development status
 
+Current integration work is on source **0.60.317.0**, migration head **292**,
+with the 21 core and 18 extended role implementations combined. See the
+[core checkpoint](private-codex-core-roles.md), [extended checkpoint](private-codex-extended-roles.md)
+and [role workstreams](private-codex-role-workstreams.md) for current scope.
+Four-tier routing, explicit activation, native concept/fence proposals and
+reversible tiered pin migration are source features. Tests use synthetic
+executables and disposable databases. Production runtime and real-model
+qualification remain open; this is not deployment or activation approval.
+
+The installation/version observations and run counts below are **historical
+checkpoints**, not a fresh audit of the installed GBrain or the current tree.
+
 This is an incomplete development checkpoint, not a release or activation guide.
 The target remains: Codex proposes; GBrain authorizes, records, executes and reconciles.
 

@@ -2,7 +2,7 @@ import { getChatModel } from '../ai/gateway.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { ChatOpts } from '../ai/gateway.ts';
-import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, privateModelForRole } from '../ai/private-policy.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, privateModelForRole, privatePolicyFingerprint } from '../ai/private-policy.ts';
 import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 
 export const CODEX_GRADE_VERSION = 'codex-grounded-grade-v1';
@@ -54,5 +54,5 @@ export async function resolveGradeIdentity(engine: BrainEngine, model: string | 
   // Preserve legacy cache keys; subscription budgeting requires the provider prefix.
   const judgeModelId = privateMode ? judgeModelFull : splitProviderModelId(judgeModelFull).model || judgeModelFull;
   return { judgeModelFull, judgeModelId, privateMode,
-    promptVersion: privateMode ? `${CODEX_GRADE_VERSION}:${version}` : version };
+    promptVersion: privateMode ? `${CODEX_GRADE_VERSION}:${version}:${privatePolicyFingerprint(policy!)}` : version };
 }

@@ -1,10 +1,11 @@
+import { privatePolicyCheck } from '../ai/private-role-scope.ts';
 import { buildDreamSummarySlug } from './synthesize-summary-slug.ts';
 export { buildDreamSummarySlug } from './synthesize-summary-slug.ts';
 import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { runPrivateSynthesize } from './synthesize-codex.ts';
 import { makeJudgeClient, type JudgeClient } from './triage-client.ts';
 export { makeJudgeClient, type JudgeClient } from './triage-client.ts';
-import { assertTriageRoute, isCodexTriageModel, validateCodexTriage, triageVersionForModel } from './triage-codex.ts';
+import { assertTriageRoute, isCodexTriageModel, validateCodexTriage, triageVersionForModel, triageCacheModel, privateTriageModel } from './triage-codex.ts';
 import { observationDateLine, observationDateRule } from '../ai/date-grounding.ts';
 import { isConsumerDateGroundingOn } from '../facts/extract.ts';
 import { maintenancePreflight, publishMaintenancePage, type MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
@@ -1628,8 +1629,7 @@ export async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig>
   // resolving through the standard chain when the new key is unset.
   const triageModelOverride = await engine.getConfig('models.dream.triage');
   const verdictModel = readPrivateCodexConfig()
-    ? await resolveModel(engine, { privateRole: 'dream-triage', configKey: 'models.dream.triage',
-        deprecatedConfigKey: 'models.dream.synthesize_verdict', tier: 'utility', fallback: 'haiku' })
+    ? await privateTriageModel(engine)
     : triageModelOverride?.trim()
     ? await resolveAlias(engine, triageModelOverride.trim())
     : await resolveModel(engine, {
@@ -2139,7 +2139,7 @@ export function isTriageCacheValid(
 ): boolean {
   return cached.score !== null
     && cached.triage_version === triageVersionForModel(model, TRIAGE_VERSION)
-    && cached.model === model
+    && cached.model === triageCacheModel(model)
     && (!staleBefore || Date.parse(cached.judged_at) >= staleBefore.getTime());
 }
 
@@ -2293,6 +2293,7 @@ export async function runTriagePass(
   yieldDuringPhase?: () => Promise<void>,
 ): Promise<TriagePassResult> {
   assertTriageRoute(cfg.model, !!cfg.decide);
+  const checkPolicy = privatePolicyCheck(['dream-triage']), cacheModel = triageCacheModel(cfg.model);
   const triageVersion = triageVersionForModel(cfg.model, TRIAGE_VERSION);
   const now = cfg.now ?? Date.now;
   const start = now();
@@ -2357,6 +2358,7 @@ export async function runTriagePass(
     const t = transcripts[idx];
     // Cache lookup is always free — never deferred by the time budget.
     const existing = await engine.getDreamVerdict(t.filePath, t.contentHash);
+    checkPolicy();
     const cached = cfg.force ? null : existing;
     const cacheValid = cached !== null && isTriageCacheValid(cached, cfg.model, cfg.staleBefore);
     if (cached && cacheValid) {
@@ -2374,7 +2376,7 @@ export async function runTriagePass(
       };
       return;
     }
-    const backedOffUntil = cfg.force ? null : backoffUntil(existing, cfg.model, triageVersion);
+    const backedOffUntil = cfg.force ? null : backoffUntil(existing, cacheModel, triageVersion);
     if (backedOffUntil) {
       backoffCount++;
       reports[idx] = {
@@ -2427,6 +2429,7 @@ export async function runTriagePass(
         // be bypassed by refusals/truncations/unparseable responses.
         if (cfg.shouldStop?.()) stopped = true;
       }
+      checkPolicy();
       judged++;
       if (triage.tokens) {
         tokensIn += triage.tokens.in;
@@ -2439,7 +2442,7 @@ export async function runTriagePass(
         unreliableCount++;
         await recordUnreliableTriage(engine, t, triage.unreliable, triage.diagnostic, {
           existing, keepExisting: existing !== null && isTriageCacheValid(existing, cfg.model),
-          model: cfg.model, triageVersion, aborted: cfg.signal?.aborted === true,
+          model: cacheModel, triageVersion, aborted: cfg.signal?.aborted === true,
         });
         reports[idx] = {
           filePath: t.filePath,
@@ -2465,7 +2468,7 @@ export async function runTriagePass(
           content_type: triage.content_type,
           segments: triage.segments,
           entities: triage.entities,
-          model: cfg.model,
+          model: cacheModel,
           triage_version: triageVersion,
         }, { existing, keepExisting: existing !== null && isTriageCacheValid(existing, cfg.model), signal: cfg.signal });
       }
@@ -2477,7 +2480,7 @@ export async function runTriagePass(
         content_type: triage.content_type,
         segments: triage.segments,
         entities: triage.entities,
-        model: cfg.model,
+        model: cacheModel,
         triage_version: triageVersion,
       });
       const g = gate(triage, t.content);
@@ -2532,7 +2535,8 @@ export async function runTriagePass(
     Array.from({ length: Math.min(concurrency, Math.max(1, transcripts.length)) }, () => worker()),
   );
   if (abortError !== null) throw abortError;
-  await verdictCache.backOff(engine, { model: cfg.model, triageVersion, aborted: cfg.signal?.aborted === true });
+  checkPolicy();
+  await verdictCache.backOff(engine, { model: cacheModel, triageVersion, aborted: cfg.signal?.aborted === true });
 
   // Defensive: today every claimed index either sets its report or the pass
   // rethrows above, so no holes can exist — but a future early-exit path

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../core/engine.ts';
 import type { RunThinkOpts } from '../core/think/index.ts';
-import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { readPrivateCodexConfig, privatePolicyFingerprint } from '../core/ai/private-policy.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../core/ai/subscription-context.ts';
 import { withSubscriptionAuxiliaryBudget } from '../core/ai/subscription-auxiliary.ts';
@@ -28,8 +28,9 @@ export async function withThinkSubscription<T>(engine: BrainEngine, args: string
         throw new SubscriptionAdmissionError('subscription_required');
     if (args.some(arg => arg.startsWith('--codex-') && !THINK_ALLOWANCE_FLAGS.includes(arg)))
         throw usageError('Unknown or malformed Codex allowance flag.', 'Use the space-separated allowance flags listed by think --help.');
-    const model = await resolveModel(engine, { cliFlag: opts.model, configKey: 'models.think', tier: 'deep', fallback: 'opus' });
-    const { codexSubscription, spendAuthorization } = await prepareCodexJobSubmit(engine, 'autopilot-cycle', { phases: ['auto_think'] }, args);
+    const role = purpose === 'calibration-ab' ? 'calibration-think-ab' : opts.privateRole ?? 'think';
+    const model = await resolveModel(engine, { privateRole: role, cliFlag: opts.model, configKey: 'models.think', tier: 'deep', fallback: 'opus' });
+    const { codexSubscription, spendAuthorization } = await prepareCodexJobSubmit(engine, purpose, {}, args, role);
     if (!codexSubscription)
         throw new SubscriptionAdmissionError('subscription_required');
     const positions = args.flatMap((arg, i) => arg === '--codex-request-id' ? [i] : []);
@@ -51,7 +52,9 @@ export async function withThinkSubscription<T>(engine: BrainEngine, args: string
         if (sources.length !== ids.length)
             throw new SubscriptionAdmissionError('subscription_identity_conflict');
         const prefix = `codex-${purpose}:${requestId.toLowerCase()}:`;
-        const id = prefix + digest({ input, sources, model, bin: policy.bin, auxiliaryUsd: capUsd ?? null, embedding: !!embedQuestion });
+        const id = prefix + digest({ input, sources, model, bin: policy.bin,
+            ...(policy.models ? { policyFingerprint: privatePolicyFingerprint(policy), role } : {}),
+            auxiliaryUsd: capUsd ?? null, embedding: !!embedQuestion });
         const previous = await tx.executeRaw<{
             run_id: string;
         }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`${prefix}%`]);

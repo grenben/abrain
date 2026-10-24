@@ -8,6 +8,7 @@ import { rowToMinionJob, type MinionJob, type MinionJobContext } from './types.t
 import { jobMayGenerate } from './subscription-job-kinds.ts';
 import { validateCodexReadJob, CODEX_SKILLOPT_JOB_PROTOCOL } from './codex-action-contract.ts';
 import { validateCodexBootstrapJob } from '../skillopt/codex-bootstrap-job-contract.ts';
+import { preflightCoreJobRoles } from './subscription-job-roles.ts';
 export { CODEX_GENERATIVE_JOBS, jobMayGenerate } from './subscription-job-kinds.ts';
 
 /** Only a trusted host argument can grant this allowance. No USD conversion or quota estimate. */
@@ -25,10 +26,11 @@ export async function preflightSubscriptionJob(engine: BrainEngine, name: string
     }
   }
   await resolvePrivateModel(engine, { fallback: 'unused' }, policy);
+  await preflightCoreJobRoles(engine, name, data);
   if (name === 'contextual_reindex_per_chunk') {
     const source = data.expected_source_id;
     if (typeof source !== 'string' || !source || [data.source_id, data.sourceId].some(value => value !== undefined && value !== source)) throw new SubscriptionAdmissionError('subscription_identity_conflict');
-    await resolvePrivateModel(engine, { configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model', envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility', fallback: 'unused' }, policy);
+    await resolvePrivateModel(engine, { privateRole: 'contextual-synopsis', configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model', envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility', fallback: 'unused' }, policy);
   }
   if (name === 'subagent') {
     validateCodexReadJob(data);
@@ -103,7 +105,6 @@ export async function runWithJobSubscription<T>(engine: BrainEngine, job: Minion
   if (!jobMayGenerate(job.name, job.data ?? {}) && rows.length === 0) return run();
   const policy = readPrivateCodexConfig();
   if (!policy && rows.length === 0) return run();
-  await preflightSubscriptionJob(engine, job.name, job.data ?? {});
   if (!policy || rows.length !== 1) throw new SubscriptionAdmissionError('subscription_required');
   // Optimizer child jobs are driven only by their enclosing host, never an ordinary queue worker.
   const [rollout] = await engine.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_skillopt_rollouts WHERE job_id=$1', [job.id]);
@@ -112,6 +113,7 @@ export async function runWithJobSubscription<T>(engine: BrainEngine, job: Minion
   if (rollout && (!parent || parent.engine !== engine || parent.runId !== rollout.run_id)) throw new SubscriptionAdmissionError('subscription_required');
   const runId = await runIdentity(engine, job);
   if (rows[0]!.run_id !== runId) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  await preflightSubscriptionJob(engine, job.name, job.data ?? {});
   const checkAuthority = async (tx = engine, lock = false) => {
     parent?.signal?.throwIfAborted();
     if (lock) await parent?.checkAuthorityInTransaction?.(tx); else await parent?.checkAuthority?.();

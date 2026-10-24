@@ -1,3 +1,4 @@
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { readFileSync } from 'node:fs';
 import type { BrainEngine, LinkBatchInput } from '../engine.ts';
 import type { GBrainConfig } from '../config.ts';
@@ -430,6 +431,8 @@ export async function publishManagedAtoms(engine: BrainEngine, session: ManagedA
     } as AtomIntent });
   }
   const rows = await engine.transaction(async tx => {
+    const subscription = codexSubscriptionContext();
+    if (subscription?.engine === engine) await subscription.checkAuthorityInTransaction?.(tx);
     const children: string[] = [];
     const accepted: WriteRequest[] = [];
     for (const input of [...inputs, { slug: '__managed_atom_complete__', pageId: null,
@@ -442,6 +445,7 @@ export async function publishManagedAtoms(engine: BrainEngine, session: ManagedA
       accepted.push(row);
       if (input.intent.kind !== 'managed_atom_complete') children.push(row.id);
     }
+    if (subscription?.engine === engine) await subscription.checkAuthorityInTransaction?.(tx);
     return accepted;
   });
   const receipts: WriteReceipt[] = [];

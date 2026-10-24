@@ -78,6 +78,15 @@ for(const event of [{type:'thread.started',thread_id:'fixture'},{type:'turn.star
     rmSync(root, { recursive: true, force: true });
   });
   withCodexRoleFixture(root, ['drift'], () => {
+  test('a tier policy edit during publication authority checking refuses the report', async () => {
+    const path = join(root, '.gbrain', 'config.json'), saved = readFileSync(path, 'utf8'); let changed = false;
+    try {
+      await expect(run(phase, 2, { checkAuthorityInTransaction: async () => {
+        changed = true; const next = JSON.parse(saved); next.private_codex.models.deep = 'codex-cli:changed-deep'; writeFileSync(path, JSON.stringify(next));
+      } })).rejects.toThrow();
+      expect(changed).toBe(true); expect(await engine.getPage(reportSlug, { sourceId })).toBeNull();
+    } finally { writeFileSync(path, saved); }
+  });
   test('native transport produces a private scoped report with exact evidence, preserving takes', async () => {
     const before = await engine.executeRaw('SELECT id,weight FROM takes ORDER BY id');
     await run(async id => {

@@ -771,6 +771,7 @@ export function resolveProposeTakesDeadlineMs(
 }
 
 class ProposeTakesPhase extends BaseCyclePhase {
+  protected readonly privateRoles = ['take-proposals'] as const;
   readonly name = 'propose_takes' as CyclePhase;
   protected readonly budgetUsdKey = 'cycle.propose_takes.budget_usd';
   protected readonly budgetUsdDefault = 5.0;

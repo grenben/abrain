@@ -1,3 +1,5 @@
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
+import type { PrivateRole } from '../ai/private-roles.ts';
 /**
  * v0.36.1.0 (D21) — BaseCyclePhase abstract class for the Hindsight calibration
  * wave. Three new phases (`propose_takes`, `grade_takes`, `calibration_profile`)
@@ -100,6 +102,7 @@ export function effectivePhaseDeadlineMs(
 }
 
 export abstract class BaseCyclePhase {
+  protected readonly privateRoles?: readonly PrivateRole[];
   /** Phase name; matches a CyclePhase enum entry in cycle.ts. */
   abstract readonly name: CyclePhase;
 
@@ -227,7 +230,8 @@ export abstract class BaseCyclePhase {
     }
 
     try {
-      const out = await this.process(ctx.engine, scope, ctx, opts);
+      const process = () => this.process(ctx.engine, scope, ctx, opts);
+      const out = await (this.privateRoles ? withPrivateRoleScope(this.privateRoles, process, false) : process());
       return {
         phase: this.name,
         status: out.status ?? 'ok',

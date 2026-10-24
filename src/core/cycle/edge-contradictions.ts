@@ -1,3 +1,5 @@
+import { subscriptionTargetTransaction } from '../ai/subscription-target.ts';
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
 import { formatCycleCost } from './budget-meter.ts';
 /**
  * Dream phase `edge_contradictions`: an LLM flags which live state
@@ -310,6 +312,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
   if (allGroups.length === 0) return done('complete', `no subjects with competing live relationships${reverted ? `; ${reverted} reverted by user` : ''}`, { subjects: 0, reverted });
   if (opts.dryRun) return done('skipped', `dry-run: ${allGroups.length} subject(s) would be judged`, { subjects: allGroups.length });
 
+  return withPrivateRoleScope(['edge-contradictions'], async () => {
   const declared = await runDeclaredSingleValue(engine, allGroups, declaredMode, opts);
   const groups = allGroups.filter(g => !declared.handled.has(g));
   const declaredDetail = declared.handled.size
@@ -336,7 +339,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
     budgetUsd: config.budgetUsd, allowUnpriced: config.allowUnpriced,
     pricingOverrides: await loadPricingOverrides(engine), phase: 'edge_contradictions', auditPath: opts.auditPath,
   });
-  const judge = opts.judge ?? defaultEdgeJudge;
+  const judge = readPrivateCodexConfig() ? defaultEdgeJudge : opts.judge ?? defaultEdgeJudge;
   const totals = { subjects: groups.length, judged: 0, proposed: 0, applied: 0, born_closed: 0, undated_unresolved: 0, ambiguous_same_date: 0, compatible: 0, errors: 0, skipped_known: 0, skipped_unpublished: 0, reverted };
   let budgetExhausted = false;
 
@@ -439,6 +442,7 @@ export async function runPhaseEdgeContradictions(engine: BrainEngine, opts: Edge
     `. Cost: ${formatCycleCost(meter.totalSpent)} / $${config.budgetUsd.toFixed(2)} with ${model}${declaredDetail}`;
   const status = budgetExhausted || totals.errors ? (totals.judged ? 'partial' : 'failed') : 'complete';
   return done(status, detail, withDeclared(totals));
+  }, false);
 }
 
 export type SingleValueMode = 'apply' | 'propose' | 'off';
@@ -561,7 +565,9 @@ async function recordProposal(
   engine: BrainEngine, g: SubjectGroup, a: CandidateRow, b: CandidateRow, hash: string,
   p: { status: string; model: string; confidence?: number | null; endingTo?: number; closeDate?: string; bornClosed?: boolean; line?: string; detail?: string },
 ): Promise<number | null> {
-  return engine.transaction(async tx => {
+  const native = p.model.startsWith('codex-cli:') && !!readPrivateCodexConfig();
+  const transaction = native ? (run: (tx: BrainEngine) => Promise<number | null>) => subscriptionTargetTransaction(engine, run) : engine.transaction.bind(engine);
+  return transaction(async tx => {
     // The judge saw a snapshot. Lock both live relationships and their pages
     // before publishing anything inferred from it. A re-derivation, deletion,
     // title change or changed temporal tie-breaker makes the verdict stale.
@@ -593,6 +599,7 @@ async function recordProposal(
      RETURNING id`,
     [g.sourceId, g.fromId, Number(a.to_page_id), Number(b.to_page_id), g.linkType, hash, snapshotHash, p.status,
       p.endingTo ?? null, p.closeDate ?? null, p.bornClosed ?? false, p.model, p.confidence ?? null, p.line ?? null, p.detail ?? null]);
+    if (native) await codexSubscriptionContext()?.checkAuthorityInTransaction?.(tx);
     return rows[0] ? Number(rows[0].id) : null;
   });
 }

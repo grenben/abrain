@@ -1,3 +1,4 @@
+import type { PrivateRole } from '../ai/private-roles.ts';
 import type { ThinkResult } from './index.ts';
 import type { WriteAdmission } from '../persistence/journal.ts';
 import type { WriteAuthority } from '../persistence/model.ts';
@@ -19,6 +20,8 @@ export interface ThinkEvidence {
 export interface ThinkPublicationPayload {
     version: 1;
     inputHash: string;
+    policyFingerprint?: string;
+    privateRole?: PrivateRole;
     result: ThinkResult;
     evidence: ThinkEvidence[];
     fence?: CodexSubscriptionContext['publicationFence'];

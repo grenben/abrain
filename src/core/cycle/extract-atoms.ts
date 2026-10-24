@@ -1,3 +1,5 @@
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
 import { resolveExtractAtomsModel } from './extract-atoms-model.ts';
 export { resolveExtractAtomsModel, resolveExtractAtomsModelWithSource } from './extract-atoms-model.ts';
 // v0.41.2.1 — extract_atoms cycle phase, post-fix-wave rebuild.
@@ -610,8 +612,12 @@ export async function runPhaseExtractAtoms(
   engine: BrainEngine,
   opts: ExtractAtomsOpts = {},
 ): Promise<PhaseResult> {
+  return opts.dryRun ? extractAtoms(engine, opts) : withPrivateRoleScope(['atoms'], () => extractAtoms(engine, opts));
+}
+
+async function extractAtoms(engine: BrainEngine, opts: ExtractAtomsOpts): Promise<PhaseResult> {
   const sourceId = opts.sourceId ?? 'default';
-  const chat = opts._chat ?? gatewayChat;
+  const chat = readPrivateCodexConfig() ? gatewayChat : opts._chat ?? gatewayChat;
   const managed = await managedAtomSession(engine, sourceId, opts._managedRetry, opts.attempt?.writeWait);
   const atomFiles = await derivedWriteThrough(engine, 'extract_atoms', sourceId, { managed: managed !== null, dryRun: opts.dryRun ?? false });
   const writeRequests: WriteReceipt[] = [];

@@ -1,11 +1,19 @@
+import type { BrainEngine } from '../engine.ts';
+import { resolveModel } from '../model-config.ts';
 import { normalizeModelId } from '../model-id.ts';
-import { assertPrivateRoute, readPrivateCodexConfig, PrivateRoutingError } from '../ai/private-policy.ts';
+import { assertPrivateRoute, readPrivateCodexConfig, PrivateRoutingError, privatePolicyFingerprint } from '../ai/private-policy.ts';
 import { prepareCodexSchema } from '../ai/providers/codex-schema.ts';
 
 /** Separate identity from legacy prompt-only verdicts, including their backoff markers. */
 export const CODEX_TRIAGE_VERSION = 1001;
 export const isCodexTriageModel = (model: string): boolean => normalizeModelId(model).startsWith('codex-cli:');
 export const triageVersionForModel = (model: string, legacy: number): number => isCodexTriageModel(model) ? CODEX_TRIAGE_VERSION : legacy;
+
+/** Cache metadata only; never dispatch this policy-qualified key as a model. */
+export function triageCacheModel(model: string): string {
+  const policy = readPrivateCodexConfig();
+  return policy && isCodexTriageModel(model) ? `${model}#${privatePolicyFingerprint(policy)}` : model;
+}
 
 export function assertTriageRoute(model: string, hasDecide = false): void {
   const policy = readPrivateCodexConfig();
@@ -51,4 +59,13 @@ export function validateCodexTriage(model: string, text: string, sample: string,
   }
   if (verdict.entities.some(e => !collapse(e) || !source.toLowerCase().includes(collapse(e).toLowerCase())) ||
       verdict.reasons.some(r => !collapse(r))) return invalid();
+}
+
+/** Validate both deprecated spellings even when the preferred pin shadows them. */
+export async function privateTriageModel(engine: BrainEngine): Promise<string> {
+  const model = await resolveModel(engine, { privateRole: 'dream-triage', configKey: 'models.dream.triage',
+    deprecatedConfigKey: 'models.dream.synthesize_verdict', tier: 'utility', fallback: 'haiku' });
+  const shadowed = await engine.getConfig('dream.synthesize.verdict_model');
+  if (shadowed?.trim()) assertPrivateRoute(shadowed.trim(), 'dream.synthesize.verdict_model', undefined, 'dream-triage');
+  return model;
 }

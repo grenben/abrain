@@ -529,6 +529,7 @@ function verdictToResolution(verdict: JudgeVerdict, resolvedByLabel: string): Ta
 const GRADE_TAKES_PHASE_DEADLINE_MS = 30 * 60 * 1000;
 
 class GradeTakesPhase extends BaseCyclePhase {
+  protected readonly privateRoles = ['take-grading'] as const;
   readonly name = 'grade_takes' as CyclePhase;
   protected readonly budgetUsdKey = 'cycle.grade_takes.budget_usd';
   protected readonly budgetUsdDefault = 3.0;
@@ -548,7 +549,6 @@ class GradeTakesPhase extends BaseCyclePhase {
     _ctx: OperationContext,
     opts: GradeTakesOpts,
   ): Promise<{ summary: string; details: Record<string, unknown>; status?: PhaseStatus }> {
-    const judge = opts.judge ?? defaultJudge;
     // #2811: bind the engine here so the injected-seam type stays
     // (take, scope) => Promise<string>.
     const evidenceRetriever: EvidenceRetrieverFn =
@@ -563,6 +563,7 @@ class GradeTakesPhase extends BaseCyclePhase {
       engine, opts.model, opts.ensembleJudges, opts.promptVersion ?? GRADE_TAKES_PROMPT_VERSION,
     );
 
+    const judge = privateMode ? defaultJudge : opts.judge ?? defaultJudge;
     const useEnsemble = opts.useEnsemble ?? false;
     const ensembleThreshold = opts.ensembleThreshold ?? 0.85;
     const ensembleTriggerBand = opts.ensembleTriggerBand ?? [0.6, 0.95];
