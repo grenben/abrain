@@ -70,6 +70,8 @@ export interface RepairItem {
 }
 
 export interface RepairPlan {
+  /** Host-owned subscription lane; USD caps never authorize or meter these turns. */
+  subscription?: boolean;
   /** Operator warnings the preview prints before its items (for example an older writer that can undo the repair). */
   warnings?: string[];
   items: RepairItem[];
@@ -334,7 +336,7 @@ async function runRepairScoped(ctx: OperationContext, handler: RepairHandler, sc
   const pending = opts.limit !== undefined ? plan.items.slice(0, opts.limit) : plan.items;
   const counters = await capacity(ctx);
   const admits = (handler.publication ?? 'coordinated') === 'coordinated' ? pending.length : 0;
-  const llm = spec?.spends === 'llm';
+  const llm = spec?.spends === 'llm' && !plan.subscription;
   const llmLeft = (spent: number): number | null => {
     const caps = [plan.llm?.cap_remaining_usd, opts.maxLlmUsd].filter((cap): cap is number => typeof cap === 'number');
     return caps.length ? Math.max(0, Math.min(...caps) - spent) : null;
@@ -344,6 +346,7 @@ async function runRepairScoped(ctx: OperationContext, handler: RepairHandler, sc
     sample: plan.items.slice(0, SAMPLE).map(item => `${item.source_id}:${item.slug}`), residuals: plan.residuals,
     cost: { lifetime_ids: admits, receipt_bytes: admits * RECEIPT_RESERVATION_FLOOR, embedding_pages: handler.embeds === false ? 0 : pending.length,
       embedding_usd: embeddingUsd(pending.reduce((sum, item) => sum + item.chars, 0), opts.embeddingModel),
+      ...(plan.subscription ? { llm_usd: null, llm_cap_remaining_usd: null } : {}),
       ...(llm ? { llm_usd: opts.apply || !plan.llm ? 0 : plan.llm.usd === null ? null
         : pending.some(item => item.llm_usd !== undefined) ? pending.reduce((sum, item) => sum + (item.llm_usd ?? 0), 0) : plan.llm.usd,
       llm_cap_remaining_usd: llmLeft(0) } : {}) },
@@ -356,7 +359,7 @@ async function runRepairScoped(ctx: OperationContext, handler: RepairHandler, sc
         ...(opts.requests ?? []).flatMap(id => ['--request', id]),
         ...(opts.allDrifted ? ['--all-drifted'] : []), ...(opts.driftClass ? ['--class', opts.driftClass] : []), ...(opts.since ? ['--since', opts.since] : []),
         ...(opts.prefer ? ['--prefer', opts.prefer] : [])].map(arg => ` ${shellQuote([arg])}`).join('')}`
-      + `${opts.includeAmbiguous ? ' --include-ambiguous' : ''}${llm && opts.noLlm ? ' --no-llm' : ''}${llm && opts.maxLlmUsd !== undefined ? ` --max-usd ${opts.maxLlmUsd}` : ''}`
+      + `${opts.includeAmbiguous ? ' --include-ambiguous' : ''}${spec?.spends === 'llm' && opts.noLlm ? ' --no-llm' : ''}${llm && opts.maxLlmUsd !== undefined ? ` --max-usd ${opts.maxLlmUsd}` : ''}`
       + ` --apply${plan.preview_hash ? ` --expect ${plan.preview_hash}` : ''}${spec?.consent === 'destructive' ? ' --yes' : ''}`,
     ...(plan.scan ? { scan: plan.scan } : {}),
   };

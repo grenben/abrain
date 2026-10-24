@@ -624,6 +624,7 @@ test('two concurrent appliers at the daily cap: one model call, the other stops 
   const spent = Number(before?.spent ?? 0);
   // Room for exactly one call today: one worst-case estimate, while a call settles at its real (much smaller) cost.
   const estimate = details(await a.run()).llm_items[0]!.estimate_usd;
+  if (estimate === null) throw new Error('Expected an API-priced fence estimate');
   await engine.setConfig('fences.repair.max_usd_per_day', (spent + estimate + 0.001).toFixed(4));
   const results = await Promise.all([a.run({ apply: true }), b.run({ apply: true })]);
   expect(calls).toHaveLength(1);
@@ -643,6 +644,7 @@ test('the maintenance phase repairs held fences with the real kind, and the dail
   const day = new Date().toISOString().slice(0, 10);
   const [before] = await engine.executeRaw<{ spent: string | null }>("SELECT (reserved_usd + committed_usd)::text AS spent FROM budget_ledger WHERE scope='llm_repair' AND resolver_id='fences' AND local_date=$1::date", [day]);
   const estimate = details(await a.run()).llm_items[0]!.estimate_usd;
+  if (estimate === null) throw new Error('Expected an API-priced fence estimate');
   await engine.setConfig('fences.repair.max_usd_per_day', (Number(before?.spent ?? 0) + estimate + 0.001).toFixed(4));
   const tick = () => runFenceRepairPhase(engine, { dryRun: false, deadlineAtMs: Date.now() + 600_000 });
   const first = await tick();

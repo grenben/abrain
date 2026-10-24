@@ -1,3 +1,5 @@
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 /**
  * #6188 fence repair I/O: which sources this host may repair, reading one
  * candidate's current bytes, and the four write-back paths.
@@ -224,6 +226,10 @@ export type ReceiptParts = Omit<FenceRepairReceipt, 'before_sha256' | 'after_sha
 
 /** Writes one repaired candidate through its mode's path. Trusted local callers only (the caller checks `ctx.remote === false`). */
 export async function writeFenceRepair(ctx: OperationContext, src: FenceSource, target: FenceTarget, after: FencePage, parts: ReceiptParts, opts: { embed: boolean }): Promise<WriteOutcome> {
+  if (parts.model?.startsWith('codex-cli:') && readPrivateCodexConfig()) {
+    if (!src.managed || target.mode === 'legacy') throw new Error('codex_publication_requires_managed_persistence');
+    await codexSubscriptionContext()?.checkAuthority?.();
+  }
   const engine = ctx.engine;
   const local = { ...ctx, remote: false, sourceId: src.id } as OperationContext;
   const clearCensus = async () => {

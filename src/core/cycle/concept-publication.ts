@@ -21,6 +21,7 @@ import { acquirePageLock } from '../page-lock.ts';
 import { derivedFileTarget, writeDerivedPageThrough } from './derived-write-through.ts';
 import { fileDatabaseDriftToken, replaceableFile } from '../facts/file-body-guard.ts';
 import { declareDerivation, deriveTrust, lowerDerivedPage } from '../trust/taint.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 
 /** #5575 I2: the narrative carries the tier of the member atoms its prompt was built from (capped at agent_written). */
 const conceptDerivation = (engine: BrainEngine, sourceId: string, members: readonly string[]) =>
@@ -76,8 +77,11 @@ export async function publishManagedConcept(engine: BrainEngine, authority: Main
 /** Provenance edges inside a coordinated transaction scoped to the concept's source. */
 export async function addManagedProvenanceLinks(engine: BrainEngine, sourceId: string, links: LinkBatchInput[]): Promise<number> {
   const attribution = await maintenanceAttribution(engine);
-  return engine.transaction(tx => withCoordinatedWrite(tx, [sourceId], () =>
-    tx.addLinksBatch(links, { auditSite: 'cycle.synthesize_concepts.provenance' }), attribution)); // gbrain-allow-direct-insert: concept-provenance edges derived from the synthesis itself, inside the coordinated transaction
+  return engine.transaction(async tx => {
+    await codexSubscriptionContext()?.checkAuthorityInTransaction?.(tx);
+    return withCoordinatedWrite(tx, [sourceId], () =>
+      tx.addLinksBatch(links, { auditSite: 'cycle.synthesize_concepts.provenance' }), attribution); // gbrain-allow-direct-insert: concept-provenance edges derived from the synthesis itself, inside the coordinated transaction
+  });
 }
 
 /**

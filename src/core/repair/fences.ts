@@ -1,3 +1,6 @@
+import { readPrivateCodexConfig, privatePolicyFingerprint, PrivateRoutingError } from '../ai/private-policy.ts';
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
+import { assertSubscriptionTarget } from '../ai/subscription-target.ts';
 /**
  * `gbrain repair fences` (#6188): repairs malformed facts and takes fences
  * that sync held, that pages store, or that a checkout holds unsynced.
@@ -88,13 +91,14 @@ interface Selection { source_ids: string[]; only: string[]; skip: string[]; slug
 
 /** One previewed repair: everything the hash binds (location, hashes, tier), never a cell value. */
 interface ApprovedFence {
+  private_policy?: string;
   source_id: string; key: string; slug: string; path: string | null; mode: FenceRepairMode;
   before: string; revision: string | null; page_id: number | null;
   tier: RepairTier;
   /** sha256 of the repaired bytes (Tier 1/2); null for Tier 3 (rewritten at apply time). */
   after: string | null;
   classes: string[]; rows: number[]; columns: string[];
-  estimate_usd: number;
+  estimate_usd: number | null;
   held: boolean;
   /** Model items from this one to the end of the plan (the pages a budget stop leaves waiting). */
   llm_waiting: number;
@@ -110,9 +114,10 @@ export interface FencesPreviewDetails {
   llm_enabled: boolean;
   samples: Partial<Record<RepairTier, FileDiff>>;
   diffs: FileDiff[];
-  llm_items: Array<{ item: string; rows: number[]; reasons: string[]; estimate_usd: number }>;
+  llm_items: Array<{ item: string; rows: number[]; reasons: string[]; estimate_usd: number | null }>;
   held: HeldEntry[];
-  caps: { max_usd_per_page: number; max_usd_per_day: number; day_remaining_usd: number | null; run_max_usd: number | null };
+  subscription?: boolean;
+  caps: { max_usd_per_page: number | null; max_usd_per_day: number | null; day_remaining_usd: number | null; run_max_usd: number | null };
   next_actions: Action[];
 }
 
@@ -160,9 +165,10 @@ interface Settings {
 
 async function settings(engine: BrainEngine, opts: Pick<RepairPlanOptions, 'noLlm' | 'maxLlmUsd'>): Promise<Settings> {
   const caps = await readFenceRepairCaps(engine);
-  const model = await resolveFenceRepairModel(engine);
+  const llmEnabled = !opts.noLlm && await fenceRepairLlmEnabled(engine);
+  const model = readPrivateCodexConfig() && !llmEnabled ? null : await resolveFenceRepairModel(engine);
   const day = await dailyLedger(engine, FENCE_REPAIR_LEDGER).readDay().catch(() => null);
-  return { llmEnabled: !opts.noLlm && await fenceRepairLlmEnabled(engine), model, overrides: await loadPricingOverrides(engine),
+  return { llmEnabled, model, overrides: await loadPricingOverrides(engine),
     capSource: caps.perPageSource === 'user' || caps.perDaySource === 'user' || opts.maxLlmUsd !== undefined ? 'user' : 'default',
     perPageUsd: caps.perPageUsd, perDayUsd: caps.perDayUsd, dayRemaining: day ? Math.max(0, caps.perDayUsd - day.committedUsd - day.reservedUsd) : null,
     runMaxUsd: opts.maxLlmUsd ?? null };
@@ -212,7 +218,7 @@ const rotationKey = (entry: Pick<ApprovedFence, 'source_id' | 'key'>) => rotatio
 
 function item(entry: ApprovedFence, index: number, hash: string | null, last: boolean, partial: boolean): FenceItem {
   return { cursor: { phase: 1, id: index + 1 }, source_id: entry.source_id, slug: entry.slug, chars: 0, action: `${entry.tier}:${entry.path ?? entry.slug}`,
-    ...(entry.tier === 'llm' ? { llm_usd: entry.estimate_usd } : {}), entry, hash, last, scan_partial: partial };
+    ...(entry.tier === 'llm' && entry.estimate_usd !== null ? { llm_usd: entry.estimate_usd } : {}), entry, hash, last, scan_partial: partial };
 }
 
 /** The hold reason of an owner refusal: the matrix reason where the fence reason table has it, else the generic `owner_unavailable`. */
@@ -245,7 +251,7 @@ export const fencesRepair: RepairHandler = {
       if (approved.items.some(entry => digestOf(entry.selection) !== digestOf(selection))) throw previewChangedError(opts.expect, shellQuote(preview));
       const items = approved.items.map(({ selection: _chosen, ...entry }, index) => item(entry, index, opts.expect!, index === approved.items.length - 1, false));
       const s = await settings(engine, opts);
-      return { items, preview_hash: opts.expect, residuals: {}, llm: { usd: items.reduce((sum, i) => sum + (i.llm_usd ?? 0), 0), cap_remaining_usd: s.llmEnabled ? s.dayRemaining : 0 } };
+      return { items, preview_hash: opts.expect, residuals: {}, subscription: !!readPrivateCodexConfig(), llm: { usd: readPrivateCodexConfig() ? null : items.reduce((sum, i) => sum + (i.llm_usd ?? 0), 0), cap_remaining_usd: s.llmEnabled ? s.dayRemaining : 0 } };
     }
     const now = Date.now();
     const runs = await runFenceCensus(engine, { sourceIds: scope.source_ids, deadline: Math.min(now + SCAN_MS(), opts?.deadline ?? Infinity) });
@@ -330,7 +336,7 @@ export const fencesRepair: RepairHandler = {
         unpricedWarned = true;
         warnings.push(`gbrain has no price for the fence repair model ${model}; model repair runs under the default caps and is metered at an estimated ceiling (the highest chat rate gbrain knows). Make it exact with: ${pricingSetCommand(model, 'chat')}`);
       }
-      if (s.perPageUsd === 0 || s.perDayUsd === 0) {
+      if (!readPrivateCodexConfig() && (s.perPageUsd === 0 || s.perDayUsd === 0)) {
         await llmHeld('budget_exhausted', `Model repair spend is set to 0 (fences.repair.max_usd_per_${s.perPageUsd === 0 ? 'page' : 'day'}), so these rows stay held. Raising it is the user's call: gbrain config set fences.repair.max_usd_per_${s.perPageUsd === 0 ? 'page' : 'day'} <usd>.`);
         continue;
       }
@@ -345,8 +351,8 @@ export const fencesRepair: RepairHandler = {
           + `Fix row(s) ${(memo.rows ?? at.rows).join(', ') || '?'} by hand.`, ...(memo.gate ? { gate: memo.gate as GateLetter } : {}), ...(memo.rows ? { rows: memo.rows } : {}) });
         continue;
       }
-      approved.push({ ...base, tier: 'llm', after: null, classes: [...new Set([...classesOf(analysis.fixes), ...reasons])].sort(), ...at, estimate_usd: estimate.usd, llm_waiting: 0 });
-      llmItems.push({ item: name, rows: at.rows, reasons, estimate_usd: estimate.usd });
+      approved.push({ ...base, tier: 'llm', after: null, classes: [...new Set([...classesOf(analysis.fixes), ...reasons])].sort(), ...at, estimate_usd: readPrivateCodexConfig() ? null : estimate.usd, llm_waiting: 0, ...(readPrivateCodexConfig() ? { private_policy: privatePolicyFingerprint(readPrivateCodexConfig()!) } : {}) });
+      llmItems.push({ item: name, rows: at.rows, reasons, estimate_usd: readPrivateCodexConfig() ? null : estimate.usd });
     }
     let waiting = 0;
     for (const entry of [...approved].reverse()) { if (entry.tier === 'llm') waiting++; entry.llm_waiting = entry.tier === 'llm' ? waiting : 0; }
@@ -357,28 +363,32 @@ export const fencesRepair: RepairHandler = {
     const freshAt = runs.every(run => run.fresh_at) ? runs.map(run => run.fresh_at!).sort()[0] ?? null : null;
     const listing: RepairListing[] = [
       ...approved.map(entry => ({ item: itemName(entry), class: entry.tier, detail: `${entry.classes.join(', ')}${entry.rows.length ? `; rows ${entry.rows.join(', ')}` : ''}`
-        + `${entry.tier === 'llm' ? `; rewritten by ${s.model} at apply time, gated by (a)-(g); est. $${entry.estimate_usd.toFixed(4)}` : ''}` })),
+        + `${entry.tier === 'llm' ? `; rewritten by ${s.model} at apply time, gated by (a)-(g); ${entry.estimate_usd === null ? 'explicit subscription allowance required' : `est. $${entry.estimate_usd.toFixed(4)}`}` : ''}` })),
       ...held.map(entry => ({ item: entry.item, class: entry.reason, detail: entry.resolution })),
     ];
-    const llmUsd = approved.reduce((sum, entry) => sum + entry.estimate_usd, 0);
+    const llmUsd = approved.reduce((sum, entry) => sum + (entry.estimate_usd ?? 0), 0);
     const apply = [...preview, ...(s.runMaxUsd !== null ? ['--max-usd', String(s.runMaxUsd)] : []), '--apply', '--expect', hash];
     const next_actions: Action[] = approved.length ? [{ argv: apply, consent: [], actor: 'agent', requires_exclusive: false, plan_hash: hash, preview_argv: preview,
-      why: `Applies exactly the ${approved.length} previewed fence repair(s)${llmItems.length ? `, ${llmItems.length} of them by the model (estimated $${llmUsd.toFixed(4)})` : ''}; a file or page that changed since this preview is skipped.`,
+      why: `Applies exactly the ${approved.length} previewed fence repair(s)${llmItems.length ? `, ${llmItems.length} of them by the model (${readPrivateCodexConfig() ? 'explicit subscription allowance' : `estimated $${llmUsd.toFixed(4)}`})` : ''}; a file or page that changed since this preview is skipped.`,
       verify: { argv: ['gbrain', 'doctor', '--only', 'fence_integrity', '--json'] } }] : [];
     const counts = { deterministic: 0, resolver: 0, llm: 0, held: held.length };
     for (const entry of approved) counts[entry.tier]++;
     const details: FencesPreviewDetails = { counts, model: s.llmEnabled ? s.model : null, llm_enabled: s.llmEnabled,
       samples: Object.fromEntries((['deterministic', 'resolver'] as const).flatMap(tier => { const d = diffs.find(x => x.tier === tier); return d ? [[tier, d]] : []; })),
-      diffs, llm_items: llmItems, held, caps: { max_usd_per_page: s.perPageUsd, max_usd_per_day: s.perDayUsd, day_remaining_usd: s.dayRemaining, run_max_usd: s.runMaxUsd }, next_actions };
+      diffs, llm_items: llmItems, held, subscription: !!readPrivateCodexConfig(), caps: readPrivateCodexConfig() ? { max_usd_per_page: null, max_usd_per_day: null, day_remaining_usd: null, run_max_usd: null } : { max_usd_per_page: s.perPageUsd, max_usd_per_day: s.perDayUsd, day_remaining_usd: s.dayRemaining, run_max_usd: s.runMaxUsd }, next_actions };
     return { items: approved.map((entry, index) => item(entry, index, null, index === approved.length - 1, partial)), preview_hash: hash, residuals, listing,
       ...(warnings.length ? { warnings } : {}), details: details as unknown as Record<string, unknown>,
-      llm: { usd: llmUsd, cap_remaining_usd: s.llmEnabled ? s.dayRemaining : 0 }, scan: { fresh_at: freshAt, partial } };
+      subscription: !!readPrivateCodexConfig(), llm: { usd: readPrivateCodexConfig() ? null : llmUsd, cap_remaining_usd: readPrivateCodexConfig() ? null : s.llmEnabled ? s.dayRemaining : 0 }, scan: { fresh_at: freshAt, partial } };
   },
   async apply(ctx, raw, opts): Promise<RepairItemOutcome> {
     if (ctx.remote !== false) throw trustedCliRequired('gbrain repair fences writes files and may call a paid model, so it runs only from the trusted local CLI or the maintenance job on the brain host.');
     const { entry, hash, last } = raw as FenceItem;
     try {
-      return await applyFence(ctx, entry, { embed: opts?.embed === true, expect: hash, allowanceUsd: opts?.llmAllowanceUsd, deadline: opts?.deadline, noLlm: opts?.noLlm === true });
+      const apply = () => applyFence(ctx, entry, { embed: opts?.embed === true, expect: hash, allowanceUsd: opts?.llmAllowanceUsd, deadline: opts?.deadline, noLlm: opts?.noLlm === true });
+      const policy = readPrivateCodexConfig();
+      if (!policy || entry.tier !== 'llm') return await apply();
+      if (entry.private_policy !== privatePolicyFingerprint(policy)) throw new PrivateRoutingError('fence-repair:policy_changed');
+      return await withPrivateRoleScope(['fence-repair'], async () => { await assertSubscriptionTarget(ctx.engine); return apply(); });
     } finally {
       if (hash && last) await clearApprovedSet(ctx.engine, { command: 'fences', hash });
       if (!hash) await saveRotation(ctx.engine, ROTATION_OP, await rotationBrain(ctx.engine), rotationKey(entry)).catch(() => undefined);
@@ -388,13 +398,13 @@ export const fencesRepair: RepairHandler = {
     const d = details as unknown as FencesPreviewDetails;
     const lines = [`  tiers: deterministic=${d.counts.deterministic}, resolver=${d.counts.resolver}, llm=${d.counts.llm}, held=${d.counts.held}`
       + `${d.llm_enabled ? `; model ${d.model}` : '; model repair off'}`];
-    const capLine = `  model caps: $${d.caps.max_usd_per_page.toFixed(2)}/page, $${d.caps.max_usd_per_day.toFixed(2)}/day${d.caps.day_remaining_usd !== null ? ` ($${d.caps.day_remaining_usd.toFixed(4)} left today)` : ''}`
+    const capLine = d.subscription ? '  model budget: explicit subscription attempt, turn and deadline allowance; USD cost unknown' : `  model caps: $${d.caps.max_usd_per_page!.toFixed(2)}/page, $${d.caps.max_usd_per_day!.toFixed(2)}/day${d.caps.day_remaining_usd !== null ? ` ($${d.caps.day_remaining_usd.toFixed(4)} left today)` : ''}`
       + `${d.caps.run_max_usd !== null ? `; this run at most $${d.caps.run_max_usd.toFixed(4)}` : ''}`;
     if (d.counts.llm || d.held.some(h => h.tier === 'llm')) lines.push(capLine);
     const shown = opts.diff ? d.diffs : Object.values(d.samples);
     for (const diff of shown) lines.push(`  ${diff.tier}: ${diff.item} (${diff.classes.join(', ')})`, ...diff.diff.split('\n').map(line => `    ${line}`));
     if (!opts.diff && d.diffs.length > shown.length) lines.push(`  (one sample diff per tier; --diff or --json shows all ${d.diffs.length})`);
-    for (const llm of d.llm_items) lines.push(`  llm: ${llm.item}${llm.rows.length ? ` rows ${llm.rows.join(', ')}` : ''} (${llm.reasons.join(', ')}): rewritten by ${d.model} at apply time, gated by (a)-(g); est. $${llm.estimate_usd.toFixed(4)}`);
+    for (const llm of d.llm_items) lines.push(`  llm: ${llm.item}${llm.rows.length ? ` rows ${llm.rows.join(', ')}` : ''} (${llm.reasons.join(', ')}): rewritten by ${d.model} at apply time, gated by (a)-(g); ${llm.estimate_usd === null ? 'explicit subscription allowance required' : `est. $${llm.estimate_usd.toFixed(4)}`}`);
     for (const h of d.held) lines.push(`  held ${h.item} [${h.reason}${h.gate ? `, gate ${h.gate}` : ''}]: ${h.resolution}`);
     for (const action of d.next_actions) lines.push(`  next: ${shellQuote(action.argv!)}`);
     return lines;
@@ -417,6 +427,7 @@ async function applyFence(ctx: OperationContext, entry: ApprovedFence, opts: App
   const skipped = (reason: string, message: string): RepairItemOutcome => ({ applied: false, outcome: 'skipped', reason, detail: { ...where, message } });
   const src = await loadFenceSource(engine, entry.source_id, { remote: ctx.remote !== false });
   if (!src) return skipped(moved, `Source ${entry.source_id} is gone or archived.`);
+  if (entry.tier === 'llm' && readPrivateCodexConfig() && !src.managed) throw new Error('codex_publication_requires_managed_persistence');
   const heldOutcome = async (reason: string, message: string, extra: { gate?: GateLetter; rows?: number[]; next?: string | null; tier?: FenceTier } = {}): Promise<RepairItemOutcome> => {
     await recordHeld(engine, src, entry, { reason, ...extra });
     return { applied: false, outcome: 'held', reason, detail: { ...where, tier: extra.tier ?? heldTier(reason), message, ...(extra.gate ? { gate: extra.gate } : {}), ...(extra.rows?.length ? { rows: extra.rows } : {}) } };
@@ -491,7 +502,7 @@ async function tier3(ctx: OperationContext, src: FenceSource, target: FenceTarge
   if (!s.llmEnabled) return held('llm_disabled', `Model repair is off; row(s) ${rows.join(', ')} stay held.`, { rows, tier: 'llm' });
   const model = s.model;
   if (!model) return held('no_measured_model', noMeasuredModel(rows), { rows, tier: 'llm' });
-  if (s.perPageUsd === 0 || s.perDayUsd === 0) return held('budget_exhausted', 'Model repair spend is set to 0.', { rows, tier: 'llm' });
+  if (!readPrivateCodexConfig() && (s.perPageUsd === 0 || s.perDayUsd === 0)) return held('budget_exhausted', 'Model repair spend is set to 0.', { rows, tier: 'llm' });
   const now = () => new Date();
   const timeoutMs = Math.max(5_000, Math.min(CALL_TIMEOUT_MS(), opts.deadline !== undefined ? opts.deadline - Date.now() : Infinity));
   const result = await runTier3(target, analysis, src.incarnation, { ledger: dailyLedger(engine, FENCE_REPAIR_LEDGER), store: attemptStore(engine), model, overrides: s.overrides,
@@ -514,7 +525,7 @@ async function tier3(ctx: OperationContext, src: FenceSource, target: FenceTarge
       inputs: [{ name: 'usd', how: 'The new daily cap in USD the user agrees to; it must exceed what is already spent today.' }],
       verify: { argv: ['gbrain', 'doctor', '--only', 'fence_integrity', '--json'] } } } };
   }
-  const written = await write(ctx, src, target, result.after, { tier: 'llm', classes: classesOf(analysis.fixes, result.cleared), ...fixLocation(analysis.fixes, analysis.residual), model, cost: result.spentUsd,
+  const written = await write(ctx, src, target, result.after, { tier: 'llm', classes: classesOf(analysis.fixes, result.cleared), ...fixLocation(analysis.fixes, analysis.residual), model, cost: readPrivateCodexConfig() ? null : result.spentUsd,
     merged: mergedReceipt(target.page, analysis.fixes) }, opts, held);
   const store = attemptStore(engine);
   if (written.applied) await store.publish(result.claim);
@@ -560,7 +571,7 @@ async function reportFences(ctx: OperationContext, scope: RepairScope, result: R
   const spent = typeof result.cost.llm_usd === 'number' ? result.cost.llm_usd : 0;
   const verification: FenceRepairVerification = { candidates: result.affected + Object.values(result.residuals).reduce((a, b) => a + b, 0) - (result.residuals.already_clean ?? 0),
     repaired_by_tier: repairedByTier, held_by_reason: Object.fromEntries(Object.entries(remaining).filter(([reason]) => reason !== 'pending_repair')),
-    oldest_hold_at: oldest?.held_at ?? null, llm_repairs: llmRepairs, llm_usd_per_repair: llmRepairs ? spent / llmRepairs : null, partial: result.scan?.partial ?? false };
+    oldest_hold_at: oldest?.held_at ?? null, llm_repairs: llmRepairs, llm_usd_per_repair: llmRepairs && !readPrivateCodexConfig() ? spent / llmRepairs : null, partial: result.scan?.partial ?? false };
   return { repaired, remaining, verification: verification as unknown as Record<string, unknown> };
 }
 
