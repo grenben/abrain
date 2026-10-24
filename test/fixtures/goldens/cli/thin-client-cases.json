@@ -446,6 +446,10 @@
         "  gbrain conversation-parser validate ./my-pattern.json",
         "",
         "Global flags:",
+        "  --polish             Opt-in prose formatting preview for scan; original evidence stays intact.",
+        "  --codex-max-attempts N --codex-max-turns N --codex-deadline UTC",
+        "                       Explicit subscription limits required with --polish.",
+        "  --codex-request-id UUID  Reuse unchanged input and limits for recovery.",
         "  --json               Emit JSON envelope on stdout (where applicable).",
         "  --help, -h           Print this help."
       ]

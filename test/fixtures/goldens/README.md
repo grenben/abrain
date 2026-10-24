@@ -105,6 +105,9 @@ reproduce byte for byte. Each file is written by `test/helpers/golden.ts` as
   `test/helpers/cli-dispatch-extract.ts`), literal command imports, the thin-client
   refusal matrix for every `handleCliOnly` case, and engine-free commands against an
   unreachable database. Normalizers in `test/helpers/cli-golden-normalize.ts`.
+  The parser-polish integration adds four help lines for opt-in formatting and
+  explicit subscription limits to `cli/thin-client-cases.json`; refusal and
+  routing behavior remain pinned by the existing matrix.
 
 ## Schema catalog and upgrade replay (E4 / EO3 / EO12)
 
