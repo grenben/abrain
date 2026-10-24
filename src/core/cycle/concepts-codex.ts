@@ -10,8 +10,10 @@ import { stripFenceSections } from './concept-publication.ts';
 import type { SynthesizeConceptsOpts } from './synthesize-concepts.ts';
 import type { PhaseResult } from '../cycle.ts';
 import { isQuarantined } from '../quarantine.ts';
+import { overlayWithdrawalBody } from '../facts/withdrawal-overlay.ts';
+import { isSegmentedPage } from '../page-body/page-shape.ts';
 
-interface Members { atomSlugs: string[]; atomTitles: string[]; atomBodies: string[] }
+interface Members { atomSlugs: string[]; atomTitles: string[]; atomBodies: string[]; atomRevisions?: string[] }
 export interface PrivateConceptScope {
   fingerprint: string;
   capture: (members: Members) => Promise<void>;
@@ -42,7 +44,10 @@ export async function withPrivateConcepts(engine: BrainEngine, opts: SynthesizeC
       const captured = [];
       for (const [i, slug] of members.atomSlugs.entries()) {
         const snapshot = await engine.readPageSnapshot(slug, { sourceId, excludePrivate: true });
-        if (!snapshot || snapshot.page.compiled_truth !== members.atomBodies[i] || snapshot.page.title !== members.atomTitles[i]
+        const body = members.atomBodies[i]!;
+        if (!snapshot || !members.atomRevisions?.[i] || snapshot.revision !== members.atomRevisions[i]
+          || isSegmentedPage(snapshot.page) || snapshot.page.title !== members.atomTitles[i]
+          || overlayWithdrawalBody(body, body, snapshot.withdrawals) !== body
           || isQuarantined(snapshot.page.frontmatter)) invalid();
         captured.push({ slug, revision: snapshot!.revision });
       }

@@ -148,6 +148,7 @@ interface AtomGroup {
   atomSlugs: string[];
   atomTitles: string[];
   atomBodies: string[];
+  atomRevisions: string[];
   /** #5525: strictest effective visibility of the member atoms. */
   visibility: Visibility;
   tier: 'T1' | 'T2' | 'T3' | 'T4';
@@ -182,6 +183,7 @@ async function synthesizeConcepts(
 
   // 1. Get atom pages (test seam OR DB query)
   let atoms = opts._atoms ?? [];
+  const selectedRevisions = new Map<string, string>();
   if (atoms.length === 0 && opts._atoms === undefined) {
     try {
       const rows = await engine.executeRaw<{
@@ -190,11 +192,12 @@ async function synthesizeConcepts(
         compiled_truth: string;
         frontmatter: { concepts?: string[]; imported_from?: string };
         private: boolean;
+        knowledge_revision: string | null;
       }>(
         // Codex P2: scoped to the cycle source — the provenance edges below
         // are pinned to it, so a brain-global scan grouped same-slug atoms
         // from OTHER sources into this source's concepts.
-        `SELECT slug, title, compiled_truth, frontmatter, NOT (${privatePagesFilterFragment('pages')}) AS private
+        `SELECT slug, title, compiled_truth, frontmatter, knowledge_revision, NOT (${privatePagesFilterFragment('pages')}) AS private
            FROM pages
           WHERE type = 'atom'
             AND source_id = $1
@@ -202,6 +205,7 @@ async function synthesizeConcepts(
             AND (frontmatter->>'imported_from') IS NULL${privateScope ? ` AND (${privatePagesFilterFragment('pages')})` : ''}`,
         [opts.sourceId ?? 'default'],
       );
+      for (const row of rows) selectedRevisions.set(row.slug, row.knowledge_revision == null ? '' : String(row.knowledge_revision));
       atoms = rows
         .filter((r) => Array.isArray(r.frontmatter?.concepts) && r.frontmatter.concepts.length > 0)
         .map((r) => ({
@@ -254,6 +258,7 @@ async function synthesizeConcepts(
       atomSlugs: data.slugs,
       atomTitles: data.titles,
       atomBodies: data.bodies,
+      atomRevisions: data.slugs.map(slug => selectedRevisions.get(slug) ?? ''),
       visibility: strictestVisibility(data.visibilities),
       tier,
     });

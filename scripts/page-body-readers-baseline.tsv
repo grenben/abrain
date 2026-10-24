@@ -123,7 +123,7 @@ src/core/cycle/extract-atoms-page-state.ts	transferLegacyAtomPageState	field	MET
 src/core/cycle/extract-atoms.ts	discoverExtractablePages	field	STREAM	see sql row; CAS is on content_hash + knowledge_revision
 src/core/cycle/extract-atoms.ts	discoverExtractablePages	sql	STREAM	minCompiledTruthChars is false for NULL: segmented pages are never discovered (skip until per-segment extraction, PR 4)
 src/core/cycle/extract-atoms.ts	minCompiledTruthChars	sql	STREAM	false for a segmented page (NULL body): skip
-src/core/cycle/extract-atoms.ts	runPhaseExtractAtoms	call:serializeMarkdown	SEGW	
+src/core/cycle/extract-atoms.ts	extractAtoms	call:serializeMarkdown	SEGW	Existing canonical atom serialization moved into the scoped helper
 src/core/cycle/extract-facts.ts	canonicalCacheState	field	INLINE	inline arm; a segmented page compares its stored regions with the canonical file by length and SHA-256 (segmentedBodyMatchesFile)
 src/core/cycle/extract-facts.ts	planFenceReconcile	field	NONE	view.timeline is the parsed facts fence of the timeline section (FactsFenceView); a segmented page reads it from its marker segments (segmentedFactsFenceView)
 src/core/cycle/extract-facts.ts	sameBody	field	INLINE	inline arm; segmented pages compare content_hash and body_bytes
@@ -157,8 +157,8 @@ src/core/cycle/propose-takes.ts	ProposeTakesPhase.process	call:contentHash	META
 src/core/cycle/propose-takes.ts	ProposeTakesPhase.process	field	STREAM	
 src/core/cycle/synthesize-codex-proposal.ts	proposeSynthesis	call:serializeMarkdown	NONE	serializes a newly proposed synthesis page
 src/core/cycle/synthesize-codex.ts	addSynthesisSummary	call:serializeMarkdown	NONE	serializes a newly generated summary page
-src/core/cycle/synthesize-concepts.ts	runPhaseSynthesizeConcepts	field	INLINE	
-src/core/cycle/synthesize-concepts.ts	runPhaseSynthesizeConcepts	sql	INLINE	
+src/core/cycle/synthesize-concepts.ts	synthesizeConcepts	field	INLINE	Existing concept body reads moved into the scoped helper; segmented getters refuse
+src/core/cycle/synthesize-concepts.ts	synthesizeConcepts	sql	INLINE	Existing atom query moved into the scoped helper; private capture refuses segmented snapshots
 src/core/cycle/synthesize-postprocess.ts	postprocessManagedSynthesis	call:serializePageToMarkdown	INLINE	
 src/core/cycle/synthesize-postprocess.ts	postprocessManagedSynthesis	field	INLINE	
 src/core/cycle/synthesize-postprocess.ts	sameBody	field	INLINE	

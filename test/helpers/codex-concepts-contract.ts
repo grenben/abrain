@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, test, expect } from 'bun:test';
+import { beforeAll, afterAll, test, expect, spyOn } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,6 +13,9 @@ import { claimWorktree } from '../../src/core/persistence/ownership.ts';
 import { disposePersistenceConsumer } from '../../src/core/persistence/service.ts';
 import { __setMaintenanceWriteWaitForTests } from '../../src/core/persistence/maintenance-wait.ts';
 import { withCodexRoleFixture, withDistinctCodexModels } from './codex-role-fixture.ts';
+import { withCoordinatedWrite } from '../../src/core/persistence/context.ts';
+import { declarePersistenceProtocol } from '../../src/core/persistence/protocol.ts';
+import { TEST_WRITE_ATTRIBUTION } from './write-attribution.ts';
 
 // Real phase → native executable → prepared publication, on both engines.
 // Existing concept tests inject plain chat and cannot discriminate native
@@ -60,6 +63,12 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     return { sourceId, runId, run, opts, proposal };
   }
   const accepted = async (runId: string) => (await engine.executeRaw<{ accepted_turns: number }>('SELECT accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [runId]))[0]!.accepted_turns;
+  const changeRevision = (sourceId: string, slug: string) => engine.transaction(async tx => {
+    await declarePersistenceProtocol(tx);
+    await withCoordinatedWrite(tx, [sourceId], () => tx.executeRaw(
+      'UPDATE pages SET knowledge_revision=$1::uuid WHERE source_id=$2 AND slug=$3',
+      [randomUUID(), sourceId, slug]), TEST_WRITE_ATTRIBUTION);
+  });
   withCodexRoleFixture(root, ['concepts'], () => {
     test('exhausted allowance refuses synthesis without a call or fallback page', async () => {
       const f = await fixture(), before = calls().length;
@@ -105,8 +114,33 @@ for(const e of [{type:'thread.started',thread_id:'fixture'},{type:'turn.started'
     });
     test('changed atom revision cannot accept or publish a stale narrative', async () => {
       const f = await fixture(), before = calls().length;
-      await expect(f.run(async () => { if (calls().length > before) await engine.executeRaw('UPDATE pages SET knowledge_revision=$1::uuid WHERE source_id=$2 AND slug=$3', [randomUUID(), f.sourceId, 'atoms/lesson-0']); })).rejects.toThrow();
+      let changed = false;
+      await expect(f.run(async () => { if (!changed && calls().length > before) {
+        await changeRevision(f.sourceId, 'atoms/lesson-0'); changed = true;
+      } })).rejects.toMatchObject({ reason: 'invalid_output' });
+      expect(changed).toBe(true);
       expect(await accepted(f.runId)).toBe(0); expect(await engine.getPage('concepts/review', { sourceId: f.sourceId })).toBeNull();
+    });
+    // The earlier case changes a revision after inference. This exercises the
+    // selection-to-capture race: unchanged body/title cannot adopt a new revision.
+    // Reverting the revision comparison admits a model call and publication.
+    test('an atom revision changed after selection refuses before inference', async () => {
+      const f = await fixture(), before = calls().length, original = engine.executeRaw.bind(engine);
+      let changed = false;
+      const race = spyOn(engine, 'executeRaw').mockImplementation(async <T>(sql: string, params?: unknown[], opts?: Parameters<BrainEngine['executeRaw']>[2]): Promise<T[]> => {
+        const rows = await original<T>(sql, params, opts);
+        if (!changed && sql.startsWith('SELECT slug, title, compiled_truth, frontmatter') && params?.[0] === f.sourceId) {
+          // Restore before entering a transaction: its executor must retain its
+          // own receiver, rather than accidentally querying the outer engine.
+          race.mockRestore();
+          await changeRevision(f.sourceId, 'atoms/lesson-0'); changed = true;
+        }
+        return rows;
+      });
+      try { await expect(f.run()).rejects.toMatchObject({ reason: 'invalid_output' }); }
+      finally { race.mockRestore(); }
+      expect(changed).toBe(true); expect(calls()).toHaveLength(before); expect(await accepted(f.runId)).toBe(0);
+      expect(await engine.getPage('concepts/review', { sourceId: f.sourceId })).toBeNull();
     });
     test('private member atoms stay outside inference and publication', async () => {
       const f = await fixture(5, 'private'), before = calls().length;

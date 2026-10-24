@@ -12,6 +12,13 @@ A changed input revision or policy refuses publication. API-priced budgets do
 not meter subscription calls; cost remains unknown. Inference errors do not
 publish fallback pages. Small concept groups keep deterministic synthesis.
 
+Concept selection carries each atom's recorded revision into capture. Capture
+checks that revision, title, visibility/quarantine state and withdrawal overlay
+before inference, comparing revisions instead of whole-body strings. A metadata-only revision
+change between selection and capture refuses, as does a later revision change
+before acceptance/publication. Segmented atom snapshots are refused in this
+inline concept path.
+
 Fence repair uses the deep tier and one bounded native proposal per candidate.
 Table repairs and tail classifications must pass the existing preservation and
 exposure gates before the turn is accepted. The runner retains explicit model
