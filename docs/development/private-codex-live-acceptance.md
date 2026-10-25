@@ -102,6 +102,30 @@ assertion and an accepted model turn are both required. The harness blocks HTTP
 from its own process; only the contained subscription subprocess may call its
 provider. No fake executable or injected model output is involved.
 
+The automation cases cover `auto-think`, `iterative-minions`, `brainstorm`,
+`brainstorm-judge`, `skillopt-judge`, `skillopt-optimizer` and `skillopt-bootstrap`.
+Automatic think retains a source-grounded draft; its fixture disables automatic
+publication. The action case uses the real queue, claim, handler and completion
+paths for one scoped page read and its grounded final answer. Brainstorm uses
+normal retrieval, one cross and the separate judge, retaining an unpublished
+result. A separate judge case checks exact IDs, axis bounds and the host verdict.
+Skill scoring and reflection use explicitly synthetic completed trajectories;
+they do not claim a full optimizer campaign or model-generated rollout quality.
+Bootstrap writes an owner-only draft whose review marker remains enforced.
+Stored outputs check no-call replay and no duplicate state.
+
+New batches declare the fixed `codex-subscription` job account lane before
+admission; older manifests retain their original lane. Queued action children
+consume their existing case's two-call cap and the original 16-call parent cap.
+Attempt receipts include descendant ledgers once. No new child grants increase
+the aggregate budget. The action case qualifies inline queue/handler behavior,
+not a background daemon, native provider tools, write actions or delegation.
+Brainstorm requires its judge role in the retained batch.
+
+```sh
+python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles auto-think,iterative-minions,brainstorm,brainstorm-judge,skillopt-judge,skillopt-optimizer,skillopt-bootstrap
+```
+
 The first seven-role batch retained one utility-model OCR failure and a passing
 reasoning-model retry on the same image. Its early prototype recorded HEAD and
 harness hash, but did not record the dirty source delta. That batch must be

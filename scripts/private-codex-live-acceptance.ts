@@ -9,6 +9,7 @@ import { isAbsolute, join } from 'node:path';
 import { WORKFLOW_ROLES, exerciseWorkflow } from './private-codex-live-workflows.ts';
 import { CONTENT_ROLES, exerciseContent } from './private-codex-live-content.ts';
 import { CORE_ROLES, exerciseCore } from './private-codex-live-core.ts';
+import { AUTOMATION_ROLES, exerciseAutomation } from './private-codex-live-automation.ts';
 
 const args = process.argv.slice(2);
 const value = (name: string) => args[args.indexOf(name) + 1];
@@ -27,12 +28,12 @@ assert(!process.env.DATABASE_URL && !process.env.OPENAI_API_KEY && !process.env.
 
 const { PRIVATE_GENERATION_ROLES, privateRoleTier } = await import('../src/core/ai/private-roles.ts');
 type Role = typeof PRIVATE_GENERATION_ROLES[number][0];
-const implemented = ['chat', 'query-expansion', 'ocr', 'facts', 'classifiers', 'page-summary', 'think', ...WORKFLOW_ROLES, ...CONTENT_ROLES, ...CORE_ROLES] as const;
+const implemented = ['chat', 'query-expansion', 'ocr', 'facts', 'classifiers', 'page-summary', 'think', ...WORKFLOW_ROLES, ...CONTENT_ROLES, ...CORE_ROLES, ...AUTOMATION_ROLES] as const;
 const selected = value('--roles')!.split(',') as Role[];
 assert(selected.length > 0 && new Set(selected).size === selected.length);
 assert(selected.every(role => (implemented as readonly string[]).includes(role)), 'role needs a real caller case before selection');
 const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as {
-  runId: string; deadline: string; maxAttempts: number; maxTurns: number; roles?: Role[]; roleLimits?: Partial<Record<Role, number>>;
+  runId: string; deadline: string; maxAttempts: number; maxTurns: number; roles?: Role[]; roleLimits?: Partial<Record<Role, number>>; accountLane?: string;
 };
 const allowed = manifest.roles ?? selected;
 assert(selected.every(role => allowed.includes(role)), 'selection must stay within the retained batch');
@@ -41,6 +42,12 @@ assert(!selected.includes('dream-synthesis') || allowed.includes('dream-triage')
   'dream-synthesis also requires dream-triage in the retained batch');
 assert(!selected.includes('take-calibration') || allowed.includes('calibration-voice-judge'),
   'take-calibration also requires calibration-voice-judge in the retained batch');
+assert(!selected.includes('brainstorm') || allowed.includes('brainstorm-judge'),
+  'brainstorm also requires brainstorm-judge in the retained batch');
+assert(manifest.accountLane === undefined || manifest.accountLane === 'codex-subscription');
+const accountLane = manifest.accountLane ?? manifest.runId;
+assert(!selected.includes('iterative-minions') || accountLane === 'codex-subscription',
+  'queued actions require the fixed job account lane declared before this batch starts');
 assert(manifest.maxAttempts === 16 && manifest.maxTurns === 16);
 assert(Object.entries(manifest.roleLimits ?? {}).every(([role, cap]) => role === 'take-calibration' && cap === 4 && allowed.includes(role)),
   'only the explicit four-call calibration repair case may widen the two-call case default');
@@ -90,6 +97,7 @@ const trackedDiffSha256 = createHash('sha256').update(git('diff', '--binary', 'H
 const harnessSha256 = createHash('sha256').update(await readFile(import.meta.path)).digest('hex');
 
 async function exercise(role: Role): Promise<Record<string, unknown>> {
+  if ((AUTOMATION_ROLES as readonly string[]).includes(role)) return exerciseAutomation(role, { engine, root, models });
   if ((CORE_ROLES as readonly string[]).includes(role)) return exerciseCore(role, { engine, root, models });
   if ((CONTENT_ROLES as readonly string[]).includes(role)) return exerciseContent(role, { engine, root, models });
   if ((WORKFLOW_ROLES as readonly string[]).includes(role)) return exerciseWorkflow(role, { engine, root, sourceId, models });
@@ -154,14 +162,14 @@ try {
     const page = await engine.putPage('notes/launch', { type: 'note', title: 'Synthetic Orbit', compiled_truth: launch }, { sourceId });
     await engine.addTakesBatch([{ page_id: page.id, row_num: 1, claim: launch, kind: 'fact', holder: 'world', weight: 1 }]);
   }
-  await createSubscriptionRun(engine, { runId: manifest.runId, accountLane: manifest.runId,
+  await createSubscriptionRun(engine, { runId: manifest.runId, accountLane,
     maxAttempts: manifest.maxAttempts, maxTurns: manifest.maxTurns, deadline: new Date(manifest.deadline) });
   for (const role of selected) {
     if (results.some(row => row.role === role && row.status === 'pass')) continue;
     if (results.some(row => row.role === role && row.status === 'fail') && !args.includes('--retry')) throw new Error('explicit --retry required; original allowance is retained');
     const runId = `${manifest.runId}:${role}`;
     const limit = manifest.roleLimits?.[role] ?? 2;
-    await createSubscriptionRun(engine, { runId, parentRunId: manifest.runId, accountLane: manifest.runId,
+    await createSubscriptionRun(engine, { runId, parentRunId: manifest.runId, accountLane,
       maxAttempts: limit, maxTurns: limit, deadline: new Date(manifest.deadline) });
     const started = Date.now();
     const row: Result = { role, model: models[privateRoleTier(role)], status: 'fail', elapsedMs: 0,
@@ -177,7 +185,13 @@ try {
       row.error = { name: e.name, code: e.code, reason: e.reason, validationCode: e.validationCode, message: e.message.slice(0, 500) };
     }
     row.elapsedMs = Date.now() - started;
-    row.attempts = await engine.executeRaw('SELECT state,accepted,input_tokens,cached_input_tokens,output_tokens,failure_code FROM codex_subscription_attempts WHERE run_id=$1 ORDER BY created_at', [runId]);
+    // Queued host actions have a child ledger. Count each actual attempt once,
+    // while ancestor counters continue enforcing the original aggregate caps.
+    row.attempts = await engine.executeRaw(`WITH RECURSIVE runs AS (
+      SELECT run_id FROM codex_subscription_runs WHERE run_id=$1
+      UNION ALL SELECT child.run_id FROM codex_subscription_runs child JOIN runs parent ON child.parent_run_id=parent.run_id
+    ) SELECT state,accepted,input_tokens,cached_input_tokens,output_tokens,failure_code
+      FROM codex_subscription_attempts WHERE run_id IN (SELECT run_id FROM runs) ORDER BY created_at`, [runId]);
     results.push(row); await writeFile(resultsPath, JSON.stringify(results, null, 2) + '\n', { mode: 0o600 });
     console.log(JSON.stringify(row));
     if (row.status !== 'pass') { process.exitCode = 1; break; }

@@ -60,7 +60,7 @@ def main():
     parser.add_argument('--support-roles', help='Additional explicitly enabled workflow dependencies; no standalone case is run for these roles')
     parser.add_argument('--calibration-repair', action='store_true', help='New batch only: explicitly allow calibration one rewrite and second voice review (four calls total)')
     parser.add_argument('--root', type=Path, help='Resume the same retained batch and allowance')
-    parser.add_argument('--retry', action='store_true', help='Retry a failed role within its existing two-attempt allowance')
+    parser.add_argument('--retry', action='store_true', help='Retry a failed role within its unchanged original allowance')
     args = parser.parse_args()
     roles = args.roles.split(',')
     support = args.support_roles.split(',') if args.support_roles else []
@@ -68,6 +68,8 @@ def main():
         parser.error('select one to eight distinct roles per bounded batch')
     if args.calibration_repair and ('take-calibration' not in roles or 'calibration-voice-judge' not in roles + support):
         parser.error('calibration repair requires take-calibration and its voice-judge dependency')
+    if not args.root and 'brainstorm' in roles and 'brainstorm-judge' not in roles + support:
+        parser.error('brainstorm requires its brainstorm-judge dependency')
     repo = Path(__file__).resolve().parent.parent
     if args.root:
         root = args.root.resolve(strict=True)
@@ -90,6 +92,7 @@ def main():
             'runId': 'acceptance-' + str(uuid.uuid4()),
             'deadline': (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=2)).isoformat(),
             'maxAttempts': 16, 'maxTurns': 16, 'roles': roles + support, 'selectedRoles': roles,
+            'accountLane': 'codex-subscription',
             'roleLimits': {'take-calibration': 4} if args.calibration_repair else {},
         }))
         (root / 'orchard.png').write_bytes(synthetic_image())
