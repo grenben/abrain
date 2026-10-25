@@ -141,14 +141,38 @@ before claiming ownership and checks its agreement before inference. No runtime
 publication guard was weakened, no allowance was reset, and these retries made
 no additional provider calls. All five content roles used one accepted turn each.
 
-Together these batches have passing live evidence for nineteen roles. Results
+The core batch passed grounded take proposals, calibration with its real voice
+gate, contextual synopsis, advisory edge contradictions and preview-bound fence
+repair. The calibration repair case used four calls: generation, rejected voice
+review, rewritten generation and accepted review. Its source/holder metrics
+retained four correct forecasts out of five, and replay added no profile or
+model call. The profile remains unpublished. Fence repair preserved the claim,
+confidence and private visibility, with matching file/database content and no
+duplicate writes. Take and edge proposals remained advisory.
+
+Four failed acceptance rows remain. The original two-call calibration allowance
+could not cover its existing repair path and stays exhausted; a separately
+declared four-call case passed. The original contextual assertion incorrectly
+expected standalone caching and consumed two calls. A separate corrected
+one-call case passed and verified that reindexing refuses unauthorized embedding
+spend before inference; full contextual reindexing is not qualified. Edge setup
+failed twice before inference because plain mentions and unrecognized wording
+did not form typed relationships. Its retained synthetic fixture was corrected
+through the normal revision-checked write and extraction paths; its first model
+call passed. A preparation write without a revision was refused, and a later
+preparation assertion was corrected to distinguish visibility projections. Those
+preparation outcomes remain in the sanitized receipt. No runtime guard or old
+allowance was weakened. Fresh execution of the corrected edge seeding branch
+is not separately claimed.
+
+Together these batches have passing live evidence for twenty-four roles. Results
 are reconciled across source checkpoints, including five earlier failed role
-calls (one OCR and four polish) and the two content-harness failures, not a full
-green run on one commit. The remaining twenty roles still need live acceptance.
-The remaining core cases are take proposals, take calibration, contextual
-synopsis, edge contradictions and fence repair; automation and evaluation roles
-follow. Passing phase cases do not replace complete-cycle, interruption/recovery,
-fresh backup/rollback or production cutover gates.
+calls (one OCR and four polish), two content-harness failures and the four core
+acceptance failures, not a full green run on one commit. Fifteen automation and
+evaluation roles still need live acceptance. Passing phase cases do not replace
+complete-cycle, interruption/recovery, fresh backup/rollback or production cutover
+gates. Small synthetic cases also do not establish sustained model availability,
+statistical quality or native Mac runtime compatibility.
 
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
