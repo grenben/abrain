@@ -87,11 +87,32 @@ utility model, preserving canonical evidence and quoted spacing. Each earlier
 grant and failure remains intact; no allowance was reset. The original generic
 errors do not retrospectively prove that all four failures had the same cause.
 
-Together these batches exercise fourteen roles. Their passing results are
-reconciled across source checkpoints, including five retained failed attempts
-(one OCR and four polish), not a full green run on one commit. The remaining
-twenty-five roles still need live acceptance. Even the passing caller smokes do
-not replace managed workflow, rollback, interruption or production cutover gates.
+The content batch passed atom discovery/extraction, cached triage feeding
+synthesis, concept publication and enrichment. Atoms published two verified
+quotations, synthesis published a reflection plus its required summary, concepts
+retained five source links, and enrichment cited its supporting fact. Publication
+receipts committed; replay required no additional model calls or writes.
+
+Two failed acceptance rows are retained as harness corrections. The initial
+concept assertion incorrectly required a file for a newly generated concept;
+verification resumed against the same accepted database-only publication. The
+enrichment fixture initially lacked the input file corresponding to its database
+stub, so the normal missing-file guard refused publication after inference.
+An isolated correction exclusively created that missing synthetic input after
+checking the stub and the absence of admitted writes. The retry reused the
+cached model result and published successfully. The harness now seeds the file
+before claiming ownership and checks its agreement before inference. No runtime
+publication guard was weakened, no allowance was reset, and these retries made
+no additional provider calls. All five content roles used one accepted turn each.
+
+Together these batches have passing live evidence for nineteen roles. Results
+are reconciled across source checkpoints, including five earlier failed role
+calls (one OCR and four polish) and the two content-harness failures, not a full
+green run on one commit. The remaining twenty roles still need live acceptance.
+The remaining core cases are take proposals, take calibration, contextual
+synopsis, edge contradictions and fence repair; automation and evaluation roles
+follow. Passing phase cases do not replace complete-cycle, interruption/recovery,
+fresh backup/rollback or production cutover gates.
 
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
