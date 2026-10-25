@@ -84,9 +84,9 @@ test('tiered adapter passes the role model to the executable, including expansio
     }
     await withRun(() => expand('synthetic'));
     await withRun(() => generateOcrText(PNG_PIXEL, 'image/png'));
-    for (const line of readFileSync(capture, 'utf8').trim().split('\n').slice(-2)) {
+    for (const [index, line] of readFileSync(capture, 'utf8').trim().split('\n').slice(-2).entries()) {
       const { args } = JSON.parse(line);
-      expect(args[args.indexOf('--model') + 1]).toBe('utility-test');
+      expect(args[args.indexOf('--model') + 1]).toBe(['utility-test', 'reasoning-test'][index]);
     }
   } finally { restoreScalarPolicy(); }
 });

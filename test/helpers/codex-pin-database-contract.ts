@@ -79,7 +79,7 @@ export function codexPinDatabaseContract(factory: () => Promise<{ engine: BrainE
   test('tiered plans map role pins and reversibly retire the conflicting global default', async () => {
     const tiers = { utility: 'codex-cli:utility', reasoning: 'codex-cli:reasoning', deep: 'codex-cli:deep', subagent: 'codex-cli:subagent' };
     const keys = { 'models.dream.synthesize': 'reasoning', 'models.think': 'deep', 'models.subagent': 'subagent',
-      'contextual_retrieval.haiku_model': 'utility' } as const;
+      'contextual_retrieval.haiku_model': 'utility', 'embedding_image_ocr_model': 'reasoning' } as const;
     try {
       for (const key of Object.keys(keys)) await engine.setConfig(key, 'anthropic:fixture');
       const p = await previewDatabasePins(engine, tiers); expect(p.version).toBe(2);

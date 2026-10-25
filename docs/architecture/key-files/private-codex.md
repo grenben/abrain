@@ -13,6 +13,9 @@ The [role development workstreams](../../development/private-codex-role-workstre
 define the 21-core/18-extended split and the tiered policy contract.
 `private-policy.ts` accepts explicit tier pins and enabled roles while retaining
 legacy scalar identities; `private-roles.ts` assigns each role a tier.
+OCR uses reasoning after a same-image live comparison; `private-pin-target.ts`
+derives its legacy file/database OCR alias from that role assignment so a tiered
+migration agrees with dispatch. Scalar migration behavior is unchanged.
 Gateway `ChatOpts.privateRole` and direct dispatcher `role` carry trusted caller
 identity. Dispatch acceptance and proposal caches bind role and complete policy;
 queue/recovery bindings use the policy fingerprint for tiered configurations.

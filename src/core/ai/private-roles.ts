@@ -27,7 +27,7 @@ export const PRIVATE_GENERATION_ROLES = [
   ['skillopt-bootstrap',undefined,'deep','skillopt/bootstrap-benchmark.ts'],
   ['parser-fallback',undefined,'utility','conversation-parser/llm-codex-fallback.ts'],
   ['parser-polish',undefined,'utility','conversation-parser/llm-base.ts'],
-  ['ocr',undefined,'utility','ai/gateway.ts'],
+  ['ocr',undefined,'reasoning','ai/gateway.ts'],
   ['nightly-probes','models.eval.longmemeval','reasoning','../commands/autopilot-probes.ts'],
   ['longmemeval-reader','models.eval.longmemeval','reasoning','../eval/longmemeval/reader.ts'],
   ['longmemeval-fact-keys-paper',undefined,'utility','../eval/longmemeval/codex-fact-keys-extract.ts'],

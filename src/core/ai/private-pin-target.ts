@@ -1,4 +1,4 @@
-import { PRIVATE_GENERATION_ROLES, PRIVATE_MODEL_TIERS, type PrivateModelTier } from './private-roles.ts';
+import { PRIVATE_GENERATION_ROLES, PRIVATE_MODEL_TIERS, privateRoleTier, type PrivateModelTier } from './private-roles.ts';
 import { OperationError } from '../ops/contract.ts';
 
 export type PinTarget = string | Record<PrivateModelTier, string>;
@@ -18,7 +18,8 @@ export function pinTargetForKey(target: PinTarget, key: string): string | null {
   if (key.startsWith('models.tier.')) return target[key.slice('models.tier.'.length) as PrivateModelTier];
   const tier = PRIVATE_GENERATION_ROLES.find(([, config]) => config === key)?.[2];
   if (tier) return target[tier];
-  const utility = ['expansion_model', 'embedding_image_ocr_model', 'models.dream.synthesize_verdict', 'dream.synthesize.verdict_model', 'contextual_retrieval.haiku_model'];
+  if (key === 'embedding_image_ocr_model') return target[privateRoleTier('ocr')];
+  const utility = ['expansion_model', 'models.dream.synthesize_verdict', 'dream.synthesize.verdict_model', 'contextual_retrieval.haiku_model'];
   if (utility.includes(key)) return target.utility;
   if (/^models\.eval\.cross_modal\.slot_[abc]$/.test(key)) return target.deep;
   return target.reasoning;

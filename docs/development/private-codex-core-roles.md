@@ -65,6 +65,13 @@ All 21 registered core roles now have source implementations. Together with the
 18 extended roles, this covers the 39-role inventory. Synthetic coverage is
 specific to these bounded entrypoints, not a full-suite or production claim.
 Runtime qualification and real-model acceptance remain required for every role.
+The first isolated live batch now has passing chat, expansion, OCR, facts,
+classifier, page-summary and think smokes. OCR failed the visible-text fixture
+on the utility model and passed the same image on the reasoning model. OCR's
+role assignment and legacy `embedding_image_ocr_model` migration alias therefore
+use reasoning. This is one reconciled image comparison, not a general OCR
+benchmark or full acceptance of these features. The initial failure remains
+in the sanitized acceptance evidence; no production setting was changed.
 Legacy unmanaged writes retain their existing persistence semantics; production
 qualification must use the managed source and canonical writer configuration.
 

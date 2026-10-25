@@ -107,13 +107,16 @@ test('invalid or unconfirmed CLI mutations refuse before a database connection',
 // Scalar receipts cannot prove tier mapping or object-target replay. These use
 // the actual journal and CLI; no transport or filesystem seam is added.
 test('tiered file pins survive replay and rollback without touching activation or auxiliary settings', async () => {
+  const original = { ...config, embedding_image_ocr_model: 'anthropic:fixture' };
+  writeFileSync(file, JSON.stringify(original));
   const p = previewFilePins(tiers); expect(p.version).toBe(2);
   const applied = await applyFilePins(tiers, p.plan_hash), value = JSON.parse(readFileSync(file, 'utf8'));
   expect(value.chat_model).toBe(tiers.reasoning); expect(value.expansion_model).toBe(tiers.utility);
+  expect(value.embedding_image_ocr_model).toBe(tiers.reasoning);
   expect(value.chat_fallback_chain).toEqual([tiers.reasoning]); expect(value.embedding_model).toBe(config.embedding_model);
   expect(value.private_codex).toBeUndefined(); expect(value.anthropic_api_key).toBe(config.anthropic_api_key);
   expect((await applyFilePins({ ...tiers }, p.plan_hash)).id).toBe(applied.id);
-  await rollbackFilePins(applied.id, p.plan_hash); expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(config);
+  await rollbackFilePins(applied.id, p.plan_hash); expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(original);
 });
 test('tiered CLI preview accepts exactly four pins and refuses mixed target forms before connecting', async () => {
   const written: string[] = [], spy = spyOn(output, 'writeStdoutFinal').mockImplementation(async text => { written.push(text); });
