@@ -208,11 +208,11 @@ The corrected check compares the complete serializable result and reused the
 accepted result without inference. Neither correction changed the runtime
 implementation, reset counters or repeated provider calls.
 
-Together these batches have passing bounded live evidence for thirty-one roles.
+Through the automation checkpoint, these batches had passing bounded live evidence for thirty-one roles.
 Results are reconciled across source checkpoints, including five earlier failed
 role calls (one OCR and four polish), two content-harness failures, four core
 acceptance failures and two automation-harness failures, not a full green run on
-one commit. Eight evaluation roles still need live acceptance. Full optimizer
+one commit. The evaluation batch below exercises the remaining eight roles. Full optimizer
 campaigns, queued/background lifecycle and write-action acceptance, complete-cycle
 interruption/recovery, fresh backup/rollback and production cutover remain separate
 gates. Small synthetic cases also do not establish sustained model availability,
@@ -239,6 +239,35 @@ Judge quality is not retried to pursue a preferred verdict.
 ```sh
 python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles calibration-think-ab,longmemeval-reader,longmemeval-judge,longmemeval-extractor,longmemeval-fact-keys-paper,longmemeval-fact-keys-production,longmemeval-synopsis,nightly-probes
 ```
+
+The evaluation batch passed seven of eight cases with eleven provider calls and
+nine accepted turns. A/B retained two grounded drafts and no preference. The
+one-question keyword benchmark answered correctly, received an affirmative judge
+verdict, retained both canonical receipts and replayed without inference. The
+standalone judge rejected a deliberately incorrect answer. Both fact-key
+extractors and the synopsis transformer produced grounded proposals; their
+embedding-dependent workflows refused before inference without auxiliary
+authorization and left scratch vectors unchanged. The nightly judge produced one
+valid slot and replayed it; its panel remained inconclusive without quorum.
+
+Three failed acceptance rows remain. One was a harness assertion expecting the
+stage name `judge` instead of the application's `judged`; correcting it reused
+the accepted reader/judge results without calls. The claim extractor returned
+two completed native responses that failed semantic validation, with zero
+accepted turns and zero inserted claims. The second attempt used identical input,
+model and validators within the original allowance. That allowance is exhausted.
+Rejected proposal text is not retained, so the exact failed field is unknown;
+no root cause or runtime fix is claimed. Field-level content-free diagnostics and
+a reviewed correction are the next development step before another bounded
+qualification campaign. No existing counter, deadline or validation was changed.
+
+There are now **38 of 39 roles with passing bounded live caller evidence** and
+one unresolved live acceptance failure (`longmemeval-extractor`). The live result
+remains reconciled across checkpoints, not one exact-current green run. Full
+vector stages, a scheduled nightly probe, statistical quality, integrated
+recovery and production qualification remain separate gates. The separately
+requested paired brainstorm quality comparison used one additional call and is
+not counted as another role case.
 
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
