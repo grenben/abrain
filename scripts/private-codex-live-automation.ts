@@ -76,7 +76,7 @@ async function actions({ engine }: Context): Promise<Record<string, unknown>> {
     allowProtectedSubmit: true, codexSubscription: { parentRunId: host.runId, maxAttempts: 2, maxTurns: 2,
       deadline: new Date((await engine.executeRaw<{ deadline: string }>('SELECT deadline FROM codex_subscription_runs WHERE run_id=$1', [host.runId]))[0]!.deadline) } });
   if (job.status !== 'completed') {
-    if (job.status !== 'active') { const claimed = await queue.claim('live-acceptance', 600000, sourceId, ['subagent']); assert.equal(claimed?.id, job.id); job = claimed!; }
+    if (job.status !== 'active') { const claimed = await queue.claim('live-acceptance', 600000, job.queue, ['subagent']); assert.equal(claimed?.id, job.id); job = claimed!; }
     assert(job.lock_token);
     const ctx = buildJobContext(engine, queue, job, job.lock_token!, new AbortController().signal, new AbortController().signal);
     const handler = makeSubagentHandler({ engine, makeAnthropic: () => { throw new Error('API client forbidden in subscription acceptance'); } });
