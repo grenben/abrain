@@ -105,6 +105,30 @@ export function codexEvalContract(f: Fixture) { describe('native evaluation role
     expect(await facts()).toEqual([{ fact: body, source_session: sessionId, source_id: f.sourceId }]);
     expect(f.calls().at(-1)!.schema.required).toContain('claims');
   });
+  test.each([
+    ['empty_entity', { entity: ' ' }], ['empty_text', { text: ' ' }],
+    ['source_quote', { text: 'Synthetic unsupported claim' }], ['entity_quote', { entity: 'Other synthetic entity' }],
+    ['invalid_date', { valid_from: '2026-02-30' }], ['unanchored_date', { valid_from: '2026-06-03' }],
+    ['claim_kind', { metric: 'team_size', value: 99 }],
+    ['metric_name', { metric: 'Team Size', value: 99, event_type: null }],
+    ['metric_value', { metric: 'team_size', value: null, event_type: null }],
+    ['numeric_quote', { metric: 'team_size', value: 99, event_type: null }],
+    ['event_name', { event_type: 'Location Change' }], ['event_value', { value: 99 }],
+    ['empty_unit', { unit: ' ' }], ['empty_period', { period: ' ' }], ['duplicate_claim', {}],
+  ])('extractor reports a content-free validation reason without accepting or caching (%s)', async (code, changes) => {
+    f.reply({ claims: [claim, { ...claim, ...changes as object }] });
+    await cache(() => f.run(async id => {
+      let rejected: unknown;
+      try { await extract(); } catch (error) { rejected = error; }
+      expect(rejected).toMatchObject({ reason: 'invalid_output', validationCode: `extractor_${code}` });
+      expect((rejected as Error).message).toBe('codex-cli proposal failed: invalid_output');
+      expect(await facts()).toHaveLength(0);
+      expect(await f.engine().executeRaw('SELECT response_text FROM codex_proposal_cache WHERE run_id=$1', [id])).toHaveLength(0);
+      const [ledger] = await f.engine().executeRaw<{ attempts: number; accepted_turns: number }>(
+        'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [id]);
+      expect(Number(ledger!.attempts)).toBe(1); expect(Number(ledger!.accepted_turns)).toBe(0);
+    }));
+  });
   test.each(['malformed', 'quote', 'entity', 'date', 'numeric', 'both', 'duplicate', 'authority'])('invalid extraction never inserts a partial batch (%s)', async kind => {
     const c: any = { ...claim };
     if (kind === 'quote') c.text = 'Invented assertion';

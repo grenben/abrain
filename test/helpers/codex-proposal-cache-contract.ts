@@ -7,6 +7,7 @@ import { withCodexProposalCache, cachedCodexProposal } from '../../src/core/ai/c
 import { codexSynopsis } from '../../src/core/ai/codex-synopsis.ts';
 import { digest } from '../../src/core/persistence/digest.ts';
 import { v274 } from '../../src/core/schema-migrations/v274-codex-proposal-cache.ts';
+import { CodexValidationError, type CodexValidationCode } from '../../src/core/ai/providers/codex-contract.ts';
 interface Fixture {
   engine(): BrainEngine;
   run<T>(fn: (id: string) => Promise<T>, hooks?: Partial<CodexSubscriptionContext>, maxAttempts?: number): Promise<T>;
@@ -39,6 +40,29 @@ export function codexProposalCacheContract(f: Fixture) { describe('durable nativ
   test('without a cache scope every call retains normal admission', async () => {
     f.reply(valid); const before = f.calls().length;
     await f.run(async () => { await synopsis(); await synopsis(); }); expect(f.calls().length - before).toBe(2);
+  });
+  test.each(['typed', 'unknown-code', 'plain-error'])('validation diagnostics cannot relay provider content (%s)', async kind => {
+    const s = scope(), secret = 'synthetic-private-output-marker'; f.reply(valid);
+    await withCodexProposalCache(s, () => f.run(async id => {
+      await synopsis();
+      const wire = f.calls().at(-1)!, prompt = JSON.parse(wire.prompt);
+      const error = kind === 'plain-error' ? new Error(secret) : new CodexValidationError(
+        kind === 'typed' ? 'extractor_source_quote' : secret as CodexValidationCode);
+      error.message = secret; Object.assign(error, { cause: secret, rejectedText: secret });
+      let rejected: unknown;
+      try {
+        await cachedCodexProposal({ ...prompt, model: 'codex-cli:gpt-test', maxTokens: 512,
+          responseSchema: { name: 'diagnostic-privacy', schema: wire.schema, validateCodexProposal: () => { throw error; } } });
+      } catch (failure) { rejected = failure; }
+      expect(rejected).toMatchObject({ reason: 'invalid_output', message: 'codex-cli proposal failed: invalid_output' });
+      expect((rejected as CodexValidationError).validationCode).toBe(kind === 'typed' ? 'extractor_source_quote' : undefined);
+      expect(JSON.stringify(rejected)).not.toContain(secret);
+      expect((rejected as Error).stack).not.toContain(secret);
+      expect(await rows(s.namespace)).toHaveLength(1); // only the accepted synopsis
+      const [ledger] = await f.engine().executeRaw<{ attempts: number; accepted_turns: number }>(
+        'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [id]);
+      expect(Number(ledger!.attempts)).toBe(2); expect(Number(ledger!.accepted_turns)).toBe(1);
+    }));
   });
   test.each([{ raw: 'malformed' }, { refusal: true }, { missingCompletion: true }, { ...valid, source_quote: 'invented' },
     { ...valid, evidence_hash: 'forged' }, { ...valid, synopsis: '' }])('failed proposals never create cache entries', async value => {

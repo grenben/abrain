@@ -16,6 +16,23 @@ export class CodexProposalError extends Error {
   }
 }
 
+/** Closed host-owned diagnostics: never accept a field value or provider text. */
+const validationCodes = [
+  'extractor_empty_entity', 'extractor_empty_text', 'extractor_source_quote', 'extractor_entity_quote',
+  'extractor_invalid_date', 'extractor_unanchored_date', 'extractor_claim_kind', 'extractor_metric_name',
+  'extractor_metric_value', 'extractor_numeric_quote', 'extractor_event_name', 'extractor_event_value',
+  'extractor_empty_unit', 'extractor_empty_period', 'extractor_duplicate_claim',
+] as const;
+export type CodexValidationCode = typeof validationCodes[number];
+export class CodexValidationError extends CodexProposalError {
+  readonly validationCode?: CodexValidationCode;
+  constructor(code: CodexValidationCode) {
+    super('invalid_output');
+    // Runtime validation also covers JS callers and tampered exceptions.
+    if ((validationCodes as readonly unknown[]).includes(code)) this.validationCode = code;
+  }
+}
+
 export interface CodexUsage {
   inputTokens: number;
   cachedInputTokens: number;

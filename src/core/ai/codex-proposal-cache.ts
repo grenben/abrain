@@ -4,7 +4,7 @@ import { assertPrivateRoute, readPrivateCodexConfig, requirePrivateRole, private
 import { codexSubscriptionContext } from './subscription-context.ts';
 import { SubscriptionAdmissionError } from './subscription-admission.ts';
 import { prepareCodexSchema } from './providers/codex-schema.ts';
-import { CodexProposalError } from './providers/codex-contract.ts';
+import { CodexProposalError, CodexValidationError } from './providers/codex-contract.ts';
 import { digest } from '../persistence/digest.ts';
 import type { BrainEngine } from '../engine.ts';
 
@@ -50,7 +50,13 @@ export async function cachedCodexProposal(original: ChatOpts): Promise<CachedCod
     try {
       if (Buffer.byteLength(text) > 262144 || !prepared.validate(JSON.parse(text))) throw new Error();
       validateSemantic(text);
-    } catch { throw new CodexProposalError('invalid_output'); }
+    } catch (error) {
+      // Reconstruct only an allowlisted host code; do not relay messages, causes,
+      // stacks or arbitrary properties that might contain rejected source text.
+      if (error instanceof CodexValidationError && error.validationCode)
+        throw new CodexValidationError(error.validationCode);
+      throw new CodexProposalError('invalid_output');
+    }
   };
   opts.responseSchema!.validateCodexProposal = validate;
   const context = codexSubscriptionContext();

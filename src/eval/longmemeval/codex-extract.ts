@@ -2,7 +2,7 @@ import type { ThinkLLMClient } from '../../core/think/index.ts';
 import type { ExtractedClaim } from './extract.ts';
 import { isGatewayThinkClient } from './gateway-client.ts';
 import { cachedCodexProposal } from '../../core/ai/codex-proposal-cache.ts';
-import { CodexProposalError } from '../../core/ai/providers/codex-contract.ts';
+import { CodexProposalError, CodexValidationError, type CodexValidationCode } from '../../core/ai/providers/codex-contract.ts';
 import { digest } from '../../core/persistence/digest.ts';
 import { CODEX_EXTRACTOR_PROTOCOL } from './codex-protocols.ts';
 import { codexSubscriptionContext } from '../../core/ai/subscription-context.ts';
@@ -10,6 +10,7 @@ import { resolveModel } from '../../core/model-config.ts';
 
 const nullableLabel = { type: ['string', 'null'], minLength: 1, maxLength: 64 };
 const dateValid = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
+const reject = (code: CodexValidationCode): never => { throw new CodexValidationError(code); };
 export async function codexExtract(input: { client: ThinkLLMClient; body: string; model: string; sessionDate?: string }) {
   if (!isGatewayThinkClient(input.client) || !input.body.trim() || Buffer.byteLength(input.body) > 160000) throw new CodexProposalError('invalid_input');
   await resolveModel(codexSubscriptionContext()?.engine ?? null, { privateRole: 'longmemeval-extractor', cliFlag: input.model, tier: 'utility', fallback: 'unused' });
@@ -34,13 +35,26 @@ export async function codexExtract(input: { client: ThinkLLMClient; body: string
       const { claims } = JSON.parse(text) as { claims: ExtractedClaim[] }, seen = new Set<string>();
       for (const c of claims) {
         const key = digest(c);
-        if (!c.entity.trim() || !c.text.trim() || !input.body.includes(c.text) || !c.text.toLowerCase().includes(c.entity.toLowerCase()) ||
-          !dateValid(c.valid_from) || c.valid_from !== sessionDate && !c.text.includes(c.valid_from) ||
-          Boolean(c.metric) === Boolean(c.event_type) ||
-          c.metric !== null && (!/^[a-z][a-z0-9_]{0,63}$/.test(c.metric) || c.value === null || !Number.isFinite(c.value) ||
-            !Array.from(c.text.replaceAll(',', '').matchAll(/-?\d+(?:\.\d+)?/g), m => Number(m[0])).includes(c.value)) ||
-          c.event_type !== null && (!/^[a-z][a-z0-9_]{0,63}$/.test(c.event_type) || c.value !== null) ||
-          [c.unit, c.period].some(v => v !== null && !v.trim()) || seen.has(key)) throw new CodexProposalError('invalid_output');
+        if (!c.entity.trim()) reject('extractor_empty_entity');
+        if (!c.text.trim()) reject('extractor_empty_text');
+        if (!input.body.includes(c.text)) reject('extractor_source_quote');
+        if (!c.text.toLowerCase().includes(c.entity.toLowerCase())) reject('extractor_entity_quote');
+        if (!dateValid(c.valid_from)) reject('extractor_invalid_date');
+        if (c.valid_from !== sessionDate && !c.text.includes(c.valid_from)) reject('extractor_unanchored_date');
+        if (Boolean(c.metric) === Boolean(c.event_type)) reject('extractor_claim_kind');
+        if (c.metric !== null) {
+          if (!/^[a-z][a-z0-9_]{0,63}$/.test(c.metric)) reject('extractor_metric_name');
+          if (c.value === null || !Number.isFinite(c.value)) reject('extractor_metric_value');
+          if (!Array.from(c.text.replaceAll(',', '').matchAll(/-?\d+(?:\.\d+)?/g), m => Number(m[0])).includes(c.value!))
+            reject('extractor_numeric_quote');
+        }
+        if (c.event_type !== null) {
+          if (!/^[a-z][a-z0-9_]{0,63}$/.test(c.event_type)) reject('extractor_event_name');
+          if (c.value !== null) reject('extractor_event_value');
+        }
+        if (c.unit !== null && !c.unit.trim()) reject('extractor_empty_unit');
+        if (c.period !== null && !c.period.trim()) reject('extractor_empty_period');
+        if (seen.has(key)) reject('extractor_duplicate_claim');
         seen.add(key);
       }
     } } });
