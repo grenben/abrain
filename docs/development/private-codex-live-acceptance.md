@@ -159,7 +159,7 @@ spend before inference; full contextual reindexing is not qualified. Edge setup
 failed twice before inference because plain mentions and unrecognized wording
 did not form typed relationships. Its retained synthetic fixture was corrected
 through the normal revision-checked write and extraction paths; its first model
-call passed. A preparation write without a revision was refused, and a later
+call passed. Two preparation writes without a revision were refused, and a later
 preparation assertion was corrected to distinguish visibility projections. Those
 preparation outcomes remain in the sanitized receipt. No runtime guard or old
 allowance was weakened. Fresh execution of the corrected edge seeding branch
