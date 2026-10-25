@@ -197,7 +197,7 @@ idea and the standalone judge example were rejected by their quality threshold;
 passing workflow checks do not certify idea quality. Skill scoring returned the
 correct arithmetic score, reflection proposed a valid body edit while preserving
 frontmatter, and bootstrap wrote two draft tasks with its review gate intact.
-These last two optimizer callers used explicit synthetic trajectory evidence;
+Skill scoring and reflection used explicit synthetic trajectory evidence;
 they do not qualify a full campaign or held-out improvement.
 
 Two automation harness failures remain. The queued-action case initially passed
