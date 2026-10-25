@@ -44,9 +44,13 @@ Contextual embeddings and other API auxiliaries are outside this harness.
 
 The content batch adds `atoms`, `dream-triage`, `dream-synthesis`, `concepts` and
 `enrichment`. It uses normal discovery and real phase entrypoints, then checks
-managed publication, file/database agreement and replay without additional model
-calls or duplicate writes. Triage caches the same synthetic file subsequently
-used by synthesis; concept and enrichment cases have separate controlled sources.
+managed publication, the expected storage mode and replay without additional model
+calls or duplicate writes. Atoms, synthesis and enrichment require matching files;
+new concepts preserve their documented database-only storage with committed
+receipts, citations and five provenance links. Triage caches the same synthetic
+file subsequently used by synthesis; concept and enrichment cases have separate
+controlled sources. A concept assertion may resume verification of an already
+accepted publication without another model call; the original failure is retained.
 These are phase acceptance cases, not a single complete production cycle.
 Select both dream roles when creating a synthesis batch; synthesis requires the
 triage role to remain enabled even when its verdict is already cached.

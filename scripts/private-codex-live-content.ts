@@ -46,16 +46,22 @@ async function managed<T>(engine: BrainEngine, run: () => Promise<T>): Promise<T
   }
 }
 
-async function published(engine: BrainEngine, sourceId: string, dir: string, slugs: string[]) {
+async function published(engine: BrainEngine, sourceId: string, dir: string, slugs: string[], storage: 'filesystem' | 'database' = 'filesystem') {
   assert(slugs.length > 0, 'at least one published page required');
   for (const slug of slugs) {
     const page = await engine.getPage(slug, { sourceId }); assert(page);
-    const file = parseMarkdown(await readFile(join(dir, slug + '.md'), 'utf8'), slug);
-    assert.equal(file.compiled_truth.trim(), page.compiled_truth.trim(), 'canonical file must match database');
+    if (storage === 'filesystem') {
+      const file = parseMarkdown(await readFile(join(dir, slug + '.md'), 'utf8'), slug);
+      assert.equal(file.compiled_truth.trim(), page.compiled_truth.trim(), 'canonical file must match database');
+    } else {
+      assert.equal(page.source_path ?? null, null, 'a new concept must retain its database-only storage');
+      await assert.rejects(readFile(join(dir, slug + '.md')), { code: 'ENOENT' });
+    }
   }
-  const receipts = await engine.executeRaw<{ id: string; state: string }>(
-    'SELECT id,state FROM persistence_requests WHERE source_id=$1 ORDER BY id', [sourceId]);
+  const receipts = await engine.executeRaw<{ id: string; state: string; worktree_id: string | null }>(
+    'SELECT id,state,worktree_id FROM persistence_requests WHERE source_id=$1 ORDER BY id', [sourceId]);
   assert(receipts.length > 0 && receipts.every(row => row.state === 'committed'), 'all canonical writes must be committed');
+  assert(receipts.every(row => (row.worktree_id !== null) === (storage === 'filesystem')), 'receipts must use the expected storage mode');
   return receipts.map(row => row.id);
 }
 
@@ -150,18 +156,26 @@ async function concepts(context: Context): Promise<Record<string, unknown>> {
   });
   const { runPhaseSynthesizeConcepts } = await import('../src/core/cycle/synthesize-concepts.ts');
   return managed(engine, async () => {
+    const slug = 'concepts/review-evidence', prior = await engine.getPage(slug, { sourceId }), before = await attempts(engine);
     const run = () => runPhaseSynthesizeConcepts(engine, { sourceId, brainDir: dir });
     const result = await run(); assert.equal(result.status, 'ok', JSON.stringify(result));
-    assert.equal((result.details?.synthesis_mode_counts as Record<string, unknown>)?.llm, 1);
-    const slug = 'concepts/review-evidence', page = await engine.getPage(slug, { sourceId }); assert(page);
+    if (prior) {
+      // A failed post-publication assertion may be resumed without spending
+      // another turn or replacing the already accepted synthetic narrative.
+      assert(before >= 1 && prior.frontmatter.synthesis_mode === 'llm');
+      assert.deepEqual(result.details?.skipped_unchanged, [slug]);
+      assert.equal(await attempts(engine), before);
+    } else assert.equal((result.details?.synthesis_mode_counts as Record<string, unknown>)?.llm, 1);
+    const page = await engine.getPage(slug, { sourceId }); assert(page);
     assert.equal(page.frontmatter.visibility, 'world'); assert(page.compiled_truth.includes('[Source: [[atoms/review-'));
     const links = await engine.getLinks(slug, { sourceId });
     assert.equal(links.filter(link => link.link_source === 'concept-provenance').length, 5);
-    const receipts = await published(engine, sourceId, dir, [slug]), count = await attempts(engine);
+    const receipts = await published(engine, sourceId, dir, [slug], 'database'), count = await attempts(engine);
     const replay = await run(); assert.deepEqual(replay.details?.skipped_unchanged, [slug]);
-    assert.equal(await attempts(engine), count); assert.deepEqual(await published(engine, sourceId, dir, [slug]), receipts);
+    assert.equal(await attempts(engine), count); assert.deepEqual(await published(engine, sourceId, dir, [slug], 'database'), receipts);
     return { concept_published: true, five_source_provenance_links: true, cited_evidence_validated: true,
-      canonical_files_match: true, replay_model_calls: 0, duplicate_writes: 0 };
+      database_only_storage_preserved: true, receipts_committed: true, retained_publication: prior !== null,
+      replay_model_calls: 0, duplicate_writes: 0 };
   });
 }
 
