@@ -113,7 +113,11 @@ async function brainstorm({ engine, models }: Context): Promise<Record<string, u
   }
   assert(/harvest|pick|ripeness/i.test(idea.text) && /feedback|control|adjust|target|error/i.test(idea.text));
   assert.equal(idea.passes, idea.judge.passes); assert.equal(result.cost.actual_usd, null);
-  const count = await attempts(engine); assert.equal(count, 2); assert.deepEqual(await run(), result); assert.equal(await attempts(engine), count);
+  // Retained JSON omits optional undefined properties from the first in-memory
+  // result. Compare the complete serializable result, including every idea,
+  // quote, score, citation, model usage and request identity.
+  const count = await attempts(engine); assert.equal(count, 2);
+  assert.deepEqual(await run(), JSON.parse(JSON.stringify(result))); assert.equal(await attempts(engine), count);
   return { real_retrieval_cross_and_judge: true, generated_ideas: 1, exact_source_quotes: 2, judge_pass_count: idea.passes ? 1 : 0,
     generator_model: models.deep, judge_model: models.utility, retained_result_replay_model_calls: 0, published: false };
 }
