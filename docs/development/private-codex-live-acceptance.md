@@ -218,6 +218,28 @@ interruption/recovery, fresh backup/rollback and production cutover remain separ
 gates. Small synthetic cases also do not establish sustained model availability,
 statistical quality or native Mac runtime compatibility.
 
+The evaluation batch implements the remaining eight cases under the same
+two-call per-case and sixteen-call aggregate limits. Its plan is fixed before
+inference: two calls for a retained calibration A/B trial, two for a one-question
+keyword reader/judge benchmark, and one each for the standalone negative judge
+control, grounded claim extractor, two fact-key extractors, synopsis transformer
+and nightly judge slot (ten expected calls). The A/B trial uses a labeled seeded
+profile and leaves preference unselected. The reader requires its judge role to
+remain enabled and replays the durable answer and judgment without new calls.
+The claim extractor checks exact quotes and source/session attribution.
+
+Fact-key and synopsis cases invoke the real vector workflow's auxiliary guard,
+then test the native proposal separately. They must leave scratch embeddings
+unchanged; passing does not qualify full vector retrieval. Nightly acceptance
+uses one real judge slot and the normal QA rubric. Its panel must remain
+inconclusive because quorum is absent; it does not qualify the full scheduled
+probe, model diversity, or embedding-dependent retrieval. No schedule is enabled.
+Judge quality is not retried to pursue a preferred verdict.
+
+```sh
+python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles calibration-think-ab,longmemeval-reader,longmemeval-judge,longmemeval-extractor,longmemeval-fact-keys-paper,longmemeval-fact-keys-production,longmemeval-synopsis,nightly-probes
+```
+
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
 provider artifacts and temporary runtime state. Do not include authentication

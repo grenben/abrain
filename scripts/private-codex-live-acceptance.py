@@ -70,6 +70,8 @@ def main():
         parser.error('calibration repair requires take-calibration and its voice-judge dependency')
     if not args.root and 'brainstorm' in roles and 'brainstorm-judge' not in roles + support:
         parser.error('brainstorm requires its brainstorm-judge dependency')
+    if not args.root and 'longmemeval-reader' in roles and 'longmemeval-judge' not in roles + support:
+        parser.error('the reader benchmark case requires its longmemeval-judge dependency')
     repo = Path(__file__).resolve().parent.parent
     if args.root:
         root = args.root.resolve(strict=True)
