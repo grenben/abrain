@@ -69,10 +69,10 @@ async function calibration({ engine, models }: Context): Promise<Record<string, 
   const run = () => runPhaseCalibrationProfile(operation(engine, sourceId), { holder, gradeCompletion: 1 });
   const result = await run(); assert.equal(result.status, 'ok', JSON.stringify(result));
   assert.equal(result.details?.profiles_completed, 1);
-  const rows = () => engine.executeRaw<{ id: string; published: boolean; total_resolved: number; voice_gate_passed: boolean;
+  const rows = () => engine.executeRaw<{ id: string; published: boolean; total_resolved: number; voice_gate_passed: boolean; voice_gate_attempts: number;
     model_id: string; codex_evidence: { scorecard: { correct: number; incorrect: number }; snapshot_hash: string;
       facts: Array<{ id: string; quote: string }>; proposal: { patterns: Array<{ fact_id: string; statement: string }> } } }>(
-    'SELECT id,published,total_resolved,voice_gate_passed,model_id,codex_evidence FROM calibration_profiles WHERE source_id=$1 AND holder=$2 ORDER BY id', [sourceId, holder]);
+    'SELECT id,published,total_resolved,voice_gate_passed,voice_gate_attempts,model_id,codex_evidence FROM calibration_profiles WHERE source_id=$1 AND holder=$2 ORDER BY id', [sourceId, holder]);
   const saved = await rows(); assert.equal(saved.length, 1); const profile = saved[0]!;
   assert.equal(profile.published, false); assert.equal(Number(profile.total_resolved), 5);
   assert.equal(profile.voice_gate_passed, true); assert.equal(profile.model_id, models.reasoning);
@@ -82,12 +82,14 @@ async function calibration({ engine, models }: Context): Promise<Record<string, 
     const fact = profile.codex_evidence.facts.find(fact => fact.id === pattern.fact_id); assert(fact);
     assert(pattern.statement.includes(fact.quote));
   }
-  const count = await attempts(engine); assert.equal(count, 2, 'profile generation and its real voice judge each consume one turn');
+  const generations = Number(profile.voice_gate_attempts); assert(generations === 1 || generations === 2);
+  const count = await attempts(engine); assert.equal(count, 2 * generations, 'each profile generation must have its own real voice review');
   const replay = await run(); assert.equal(replay.status, 'ok'); assert.equal(replay.details?.profile_written, false);
   assert.equal(await attempts(engine), count); assert.deepEqual(await rows(), saved);
   return { source_and_holder_scoped: true, resolved_forecasts: 5, correct: 4, incorrect: 1,
     exact_metric_quotes_preserved: true, voice_gate_passed: true, published: false,
-    profile_model: models.reasoning, voice_model: models.utility, cache_replay_model_calls: 0, duplicate_profiles: 0 };
+    profile_model: models.reasoning, voice_model: models.utility, generation_attempts: generations, provider_calls: count,
+    cache_replay_model_calls: 0, duplicate_profiles: 0 };
 }
 
 async function contextual({ engine, models }: Context): Promise<Record<string, unknown>> {
@@ -109,13 +111,12 @@ async function contextual({ engine, models }: Context): Promise<Record<string, u
   const result = await generatePerChunkSynopsis(args); assert.equal(result.kind, 'success');
   if (result.kind !== 'success') throw new Error('contextual synopsis failed');
   assert(/Orchard/.test(result.synopsis) && /June|harvest|apples/.test(result.synopsis));
-  const count = await attempts(engine), replay = await generatePerChunkSynopsis(args);
-  assert.equal(replay.kind, 'success');
-  if (replay.kind !== 'success') throw new Error('contextual synopsis replay failed');
-  assert.equal(replay.cacheHit, true); assert.equal(replay.synopsis, result.synopsis); assert.equal(await attempts(engine), count);
+  // This transformer intentionally has no cache without a caller-owned scope.
+  // Full reindexing and its embedding stage remain outside this subscription-only case.
+  assert.equal(result.cacheHit, false); assert.equal(await attempts(engine), before + 1);
   assert.deepEqual(await engine.getChunks(slug, { sourceId, includeEmbedding: true }), chunks);
   assert.equal((await engine.getPage(slug, { sourceId }))!.contextual_retrieval_mode, page.contextual_retrieval_mode);
-  return { grounded_native_synopsis: true, role_identity: 'contextual-synopsis', cached_replay_equal: true,
+  return { grounded_native_synopsis: true, role_identity: 'contextual-synopsis', standalone_cache_expected: false,
     auxiliary_spend_refused_before_inference: true, embeddings_unchanged: true, full_reindex_qualified: false };
 }
 
@@ -131,6 +132,12 @@ async function edges({ engine, root, models }: Context): Promise<Record<string, 
     ]) await put.handler(operation(engine, id), { slug, content: `---\ntype: ${type}\ntitle: ${title}\n---\n\n${body}` });
   });
   const { runPhaseEdgeContradictions, loadEdgeContradictionsConfig } = await import('../src/core/cycle/edge-contradictions.ts');
+  // put_page adds plain mentions. Typed relationships are derived by the normal
+  // host extraction pass before the contradiction phase can discover candidates.
+  const { extractStaleFromDB } = await import('../src/commands/extract.ts');
+  const extracted = await extractStaleFromDB(engine, { sourceIdFilter: sourceId, dryRun: false, jsonMode: false,
+    quiet: true, catchUp: false, timeBudgetMs: 10_000 });
+  assert.equal(extracted.linkFailed ?? 0, 0, JSON.stringify(extracted));
   await engine.setConfig('dream.single_value.mode', 'off');
   assert.equal((await loadEdgeContradictionsConfig(engine, models.utility)).mode, 'propose');
   const page = await engine.getPage(subject, { sourceId }); assert(page);
@@ -146,7 +153,7 @@ async function edges({ engine, root, models }: Context): Promise<Record<string, 
   assert.deepEqual(await relations(), originalRelations);
   const count = await attempts(engine), replay = await run(); assert.equal(replay.status, 'complete'); assert.equal(replay.totals?.judged, 0);
   assert.equal(await attempts(engine), count); assert.deepEqual(await rows(), saved);
-  return { conflicting_relationships_proposed: 1, default_mode: 'propose', timeline_and_relationships_unchanged: true,
+  return { normal_typed_link_extraction: true, conflicting_relationships_proposed: 1, default_mode: 'propose', timeline_and_relationships_unchanged: true,
     replay_model_calls: 0, duplicate_proposals: 0 };
 }
 

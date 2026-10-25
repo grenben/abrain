@@ -20,8 +20,9 @@ it verifies that the original login bytes remain unchanged.
 
 Each batch creates a private `/var/tmp/gbrain-live-roles-*` directory and prints
 its path before starting. The parent allowance is sixteen attempts and sixteen
-accepted turns with a two-hour deadline; each selected role gets at most two
-attempts and turns. The batch supports up to eight distinct roles. A failure
+accepted turns with a two-hour deadline; each selected role defaults to two
+attempts and turns. The explicit calibration repair case below permits four.
+The batch supports up to eight distinct roles. A failure
 stops the batch and returns a nonzero exit status after resource cleanup.
 
 Resume with the printed root and the same role selection. A failed role requires
@@ -66,21 +67,29 @@ real voice judgment, and fence repair applies a saved preview while preserving
 the claim, confidence, visibility and matching canonical file. Replays check
 that proposals, profiles and writes are not duplicated.
 
+The edge case runs normal typed-link extraction first: the page-write effect
+alone adds plain mentions, which are not competing state relationships.
+
 Calibration needs `calibration-voice-judge` enabled as a supporting role. The
 explicit `--support-roles` option records that dependency in the retained policy
 without running a separate standalone case. Supporting calls consume the parent
-case's original two-turn allowance; a normal calibration case consumes both
-turns. The total selected and supporting roles cannot exceed eight. Resumption
+case's original allowance; one generation and voice review consume two turns.
+For a new batch only, `--calibration-repair` explicitly reserves four attempts
+and turns for that case, covering the existing one-rewrite/second-review path.
+This option cannot extend a resumed allowance. A two-call case that exhausts
+its grant remains exhausted and is not silently upgraded. The total selected
+and supporting roles cannot exceed eight. Resumption
 retains the original supporting roles and must omit `--support-roles`.
 
 The contextual case exercises the actual synopsis transformer with its own role
-identity and validated cache. It also calls the real reindex service to verify
+identity. This standalone transformer has no cache unless its caller supplies
+a cache scope; this case does not claim cache replay. It also calls the real reindex service to verify
 that missing embedding authorization refuses before inference and leaves the
 vectors unchanged. It does not authorize paid embeddings or qualify full
 contextual reindexing.
 
 ```sh
-python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles take-proposals,take-calibration,contextual-synopsis,edge-contradictions,fence-repair --support-roles calibration-voice-judge
+python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles take-proposals,take-calibration,contextual-synopsis,edge-contradictions,fence-repair --support-roles calibration-voice-judge --calibration-repair
 ```
 
 `results.json` records each pass or failure, model, elapsed time, ledger usage,

@@ -32,7 +32,7 @@ const selected = value('--roles')!.split(',') as Role[];
 assert(selected.length > 0 && new Set(selected).size === selected.length);
 assert(selected.every(role => (implemented as readonly string[]).includes(role)), 'role needs a real caller case before selection');
 const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as {
-  runId: string; deadline: string; maxAttempts: number; maxTurns: number; roles?: Role[];
+  runId: string; deadline: string; maxAttempts: number; maxTurns: number; roles?: Role[]; roleLimits?: Partial<Record<Role, number>>;
 };
 const allowed = manifest.roles ?? selected;
 assert(selected.every(role => allowed.includes(role)), 'selection must stay within the retained batch');
@@ -42,6 +42,8 @@ assert(!selected.includes('dream-synthesis') || allowed.includes('dream-triage')
 assert(!selected.includes('take-calibration') || allowed.includes('calibration-voice-judge'),
   'take-calibration also requires calibration-voice-judge in the retained batch');
 assert(manifest.maxAttempts === 16 && manifest.maxTurns === 16);
+assert(Object.entries(manifest.roleLimits ?? {}).every(([role, cap]) => role === 'take-calibration' && cap === 4 && allowed.includes(role)),
+  'only the explicit four-call calibration repair case may widen the two-call case default');
 const models = JSON.parse(await readFile(join(root, 'models.json'), 'utf8'));
 const bin = '/usr/local/lib/gbrain-codex/50ed828f357c655a3c82054d346cab8434f24901f14ec19b8267571bdd008b38/codex';
 const { validatePrivateCodexConfig } = await import('../src/core/ai/private-policy.ts');
@@ -158,8 +160,9 @@ try {
     if (results.some(row => row.role === role && row.status === 'pass')) continue;
     if (results.some(row => row.role === role && row.status === 'fail') && !args.includes('--retry')) throw new Error('explicit --retry required; original allowance is retained');
     const runId = `${manifest.runId}:${role}`;
+    const limit = manifest.roleLimits?.[role] ?? 2;
     await createSubscriptionRun(engine, { runId, parentRunId: manifest.runId, accountLane: manifest.runId,
-      maxAttempts: 2, maxTurns: 2, deadline: new Date(manifest.deadline) });
+      maxAttempts: limit, maxTurns: limit, deadline: new Date(manifest.deadline) });
     const started = Date.now();
     const row: Result = { role, model: models[privateRoleTier(role)], status: 'fail', elapsedMs: 0,
       attempts: [], sourceCommit, sourceTree, sourceDirty, trackedDiffSha256, harnessSha256 };

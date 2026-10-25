@@ -58,6 +58,7 @@ def main():
     parser.add_argument('--models', type=Path, help='JSON object with exactly four explicitly approved tier pins; required for a new batch')
     parser.add_argument('--roles', required=True)
     parser.add_argument('--support-roles', help='Additional explicitly enabled workflow dependencies; no standalone case is run for these roles')
+    parser.add_argument('--calibration-repair', action='store_true', help='New batch only: explicitly allow calibration one rewrite and second voice review (four calls total)')
     parser.add_argument('--root', type=Path, help='Resume the same retained batch and allowance')
     parser.add_argument('--retry', action='store_true', help='Retry a failed role within its existing two-attempt allowance')
     args = parser.parse_args()
@@ -65,6 +66,8 @@ def main():
     support = args.support_roles.split(',') if args.support_roles else []
     if not (1 <= len(roles) and len(roles + support) <= 8 and len(set(roles + support)) == len(roles + support)):
         parser.error('select one to eight distinct roles per bounded batch')
+    if args.calibration_repair and ('take-calibration' not in roles or 'calibration-voice-judge' not in roles + support):
+        parser.error('calibration repair requires take-calibration and its voice-judge dependency')
     repo = Path(__file__).resolve().parent.parent
     if args.root:
         root = args.root.resolve(strict=True)
@@ -72,6 +75,7 @@ def main():
         assert root.stat().st_mode & 0o077 == 0
         assert args.models is None, 'resuming cannot replace the approved model pins'
         assert args.support_roles is None, 'resuming retains the originally enabled supporting roles'
+        assert not args.calibration_repair, 'resuming cannot extend an existing allowance'
     else:
         assert args.models and not args.retry, 'a new batch requires --models, without --retry'
         models = json.loads(args.models.read_text())
@@ -86,6 +90,7 @@ def main():
             'runId': 'acceptance-' + str(uuid.uuid4()),
             'deadline': (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=2)).isoformat(),
             'maxAttempts': 16, 'maxTurns': 16, 'roles': roles + support, 'selectedRoles': roles,
+            'roleLimits': {'take-calibration': 4} if args.calibration_repair else {},
         }))
         (root / 'orchard.png').write_bytes(synthetic_image())
     print(json.dumps({'root': str(root)}), flush=True)
