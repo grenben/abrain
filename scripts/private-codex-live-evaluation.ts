@@ -65,7 +65,7 @@ async function reader({ engine, root }: Context): Promise<Record<string, unknown
   assert.equal(answer.judge_cost_usd, null);
   const runId = codexSubscriptionContext()!.runId;
   const retained = await engine.executeRaw<{ stage: string }>('SELECT stage FROM codex_eval_results WHERE run_id=$1 ORDER BY stage', [runId]);
-  assert.deepEqual(retained.map(row => row.stage), ['answer', 'judge']);
+  assert.deepEqual(retained.map(row => row.stage), ['answer', 'judged']);
   const count = await attempts(engine); assert.equal(count, 2);
   await run(); assert.equal(await attempts(engine), count);
   assert.deepEqual((await readFile(output, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).find(row => row.question_id === answer.question_id), answer);
