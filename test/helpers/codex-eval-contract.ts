@@ -12,6 +12,7 @@ import { generateAnswer } from '../../src/eval/longmemeval/reader.ts';
 import { extractAndInsertClaims, makeAliasMap } from '../../src/eval/longmemeval/extract.ts';
 import { CODEX_READER_ABSTENTION, CODEX_READER_PROTOCOL, CODEX_JUDGE_PROTOCOL } from '../../src/eval/longmemeval/codex-protocols.ts';
 import { withCodexProposalCache } from '../../src/core/ai/codex-proposal-cache.ts';
+import { prepareCodexSchema } from '../../src/core/ai/providers/codex-schema.ts';
 import { digest } from '../../src/core/persistence/digest.ts';
 import { chat } from '../../src/core/ai/gateway.ts';
 import { runJudge, BudgetLedger } from '../../src/eval/shared/judge-runner.ts';
@@ -110,10 +111,9 @@ export function codexEvalContract(f: Fixture) { describe('native evaluation role
     ['source_quote', { text: 'Synthetic unsupported claim' }], ['entity_quote', { entity: 'Other synthetic entity' }],
     ['invalid_date', { valid_from: '2026-02-30' }], ['unanchored_date', { valid_from: '2026-06-03' }],
     ['claim_kind', { metric: 'team_size', value: 99 }],
-    ['metric_name', { metric: 'Team Size', value: 99, event_type: null }],
     ['metric_value', { metric: 'team_size', value: null, event_type: null }],
     ['numeric_quote', { metric: 'team_size', value: 99, event_type: null }],
-    ['event_name', { event_type: 'Location Change' }], ['event_value', { value: 99 }],
+    ['event_value', { value: 99 }],
     ['empty_unit', { unit: ' ' }], ['empty_period', { period: ' ' }], ['duplicate_claim', {}],
   ])('extractor reports a content-free validation reason without accepting or caching (%s)', async (code, changes) => {
     f.reply({ claims: [claim, { ...claim, ...changes as object }] });
@@ -128,6 +128,24 @@ export function codexEvalContract(f: Fixture) { describe('native evaluation role
         'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [id]);
       expect(Number(ledger!.attempts)).toBe(1); expect(Number(ledger!.accepted_turns)).toBe(0);
     }));
+  });
+  test.each(['metric', 'event_type'] as const)('extractor wire schema enforces the host identifier contract (%s)', async field => {
+    f.reply({ claims: [claim] }); await f.run(() => extract());
+    const wire = f.calls().at(-1)!, validate = prepareCodexSchema(wire.schema).validate;
+    const envelope = (row: object) => ({ evidence_hash: wire.schema.properties.evidence_hash.enum[0], claims: [row] });
+    expect(validate(envelope(claim))).toBe(true);
+    const row = field === 'metric' ? { ...claim, metric: 'team_size', value: 12, event_type: null } : claim;
+    expect(validate(envelope(row))).toBe(true);
+    for (const invalid of ['Location Change', 'location-change', '2location', 'location.change'])
+      expect(validate(envelope({ ...row, [field]: invalid }))).toBe(false);
+    f.reply(envelope({ ...row, [field]: 'Location Change' }));
+    await f.run(async id => {
+      await expect(extract()).rejects.toMatchObject({ reason: 'invalid_output' });
+      const [ledger] = await f.engine().executeRaw<{ attempts: number; accepted_turns: number }>(
+        'SELECT attempts,accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [id]);
+      expect(Number(ledger!.attempts)).toBe(1); expect(Number(ledger!.accepted_turns)).toBe(0);
+    });
+    expect(await facts()).toHaveLength(1); // invalid response did not add a second claim
   });
   test.each(['malformed', 'quote', 'entity', 'date', 'numeric', 'both', 'duplicate', 'authority'])('invalid extraction never inserts a partial batch (%s)', async kind => {
     const c: any = { ...claim };

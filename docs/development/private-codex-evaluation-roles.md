@@ -24,6 +24,19 @@ authority fields and malformed output reject the whole batch. Valid empty output
 is explicit. The old parsed-text cache is bypassed; scoped native reuse retains
 the raw proposal and revalidates it through the v274 cache.
 
+Extractor protocol v2 also puts the host's existing identifier rule in the native
+schema: metric and event labels start with a lowercase letter and contain only
+lowercase letters, digits or underscores, such as `team_size` or
+`location_change`. The prompt explains that format. Unit and period strings keep
+their original rules. Host quote, date, entity and value checks are unchanged;
+v2 changes the model request and cache/resume identity, not the acceptance bar.
+
+Closed `extractor_*` diagnostic codes distinguish semantic rejection categories
+without including rejected values or source text. The cache boundary reconstructs
+only those host-owned codes and discards arbitrary messages and attached data.
+Schema failures may still report generic `invalid_output` before semantic checks.
+Neither failure path can insert claims or produce an accepted turn/cache entry.
+
 Private entity resolution uses the existing strict resolver with storage errors
 propagated. It refuses ambiguous identities and cannot turn a failed lookup into
 a guessed slug. The full batch is inserted atomically under source-incarnation,
