@@ -128,7 +128,7 @@ async function edges({ engine, root, models }: Context): Promise<Record<string, 
     for (const [slug, title, type, body] of [
       ['companies/edge-orchard', 'Edge Orchard', 'company', 'A synthetic company.'],
       ['companies/edge-meadow', 'Edge Meadow', 'company', 'Another synthetic company.'],
-      [subject, 'Edge Aster', 'person', 'Aster works full-time at [Edge Orchard](../companies/edge-orchard) and [Edge Meadow](../companies/edge-meadow).\n\n## Timeline\n\n- **2019-02-01** | synthetic — joined [Edge Orchard](../companies/edge-orchard)\n- **2024-05-01** | synthetic — joined [Edge Meadow](../companies/edge-meadow)'],
+      [subject, 'Edge Aster', 'person', 'Aster works at [Edge Orchard](../companies/edge-orchard) in a full-time exclusive role.\nAster works at [Edge Meadow](../companies/edge-meadow) in a full-time exclusive role.\n\n## Timeline\n\n- **2019-02-01** | synthetic — joined [Edge Orchard](../companies/edge-orchard)\n- **2024-05-01** | synthetic — joined [Edge Meadow](../companies/edge-meadow)'],
     ]) await put.handler(operation(engine, id), { slug, content: `---\ntype: ${type}\ntitle: ${title}\n---\n\n${body}` });
   });
   const { runPhaseEdgeContradictions, loadEdgeContradictionsConfig } = await import('../src/core/cycle/edge-contradictions.ts');
