@@ -189,12 +189,32 @@ preparation outcomes remain in the sanitized receipt. No runtime guard or old
 allowance was weakened. Fresh execution of the corrected edge seeding branch
 is not separately claimed.
 
-Together these batches have passing live evidence for twenty-four roles. Results
-are reconciled across source checkpoints, including five earlier failed role
-calls (one OCR and four polish), two content-harness failures and the four core
-acceptance failures, not a full green run on one commit. Fifteen automation and
-evaluation roles still need live acceptance. Passing phase cases do not replace
-complete-cycle, interruption/recovery, fresh backup/rollback or production cutover
+The automation batch passed all seven bounded cases with nine accepted calls.
+Automatic think retained a cited draft. Queued actions completed one permitted
+page read and a grounded final answer, with replay using saved history. Brainstorm
+retained an idea with two exact source quotes and its judge verdict. Both that
+idea and the standalone judge example were rejected by their quality threshold;
+passing workflow checks do not certify idea quality. Skill scoring returned the
+correct arithmetic score, reflection proposed a valid body edit while preserving
+frontmatter, and bootstrap wrote two draft tasks with its review gate intact.
+These last two optimizer callers used explicit synthetic trajectory evidence;
+they do not qualify a full campaign or held-out improvement.
+
+Two automation harness failures remain. The queued-action case initially passed
+a source ID as a queue name and claimed no job; it consumed no calls. The correct
+queue resumed the same pending job and grant. Brainstorm's initial replay check
+distinguished an optional undefined property from its omission in stored JSON.
+The corrected check compares the complete serializable result and reused the
+accepted result without inference. Neither correction changed the runtime
+implementation, reset counters or repeated provider calls.
+
+Together these batches have passing bounded live evidence for thirty-one roles.
+Results are reconciled across source checkpoints, including five earlier failed
+role calls (one OCR and four polish), two content-harness failures, four core
+acceptance failures and two automation-harness failures, not a full green run on
+one commit. Eight evaluation roles still need live acceptance. Full optimizer
+campaigns, queued/background lifecycle and write-action acceptance, complete-cycle
+interruption/recovery, fresh backup/rollback and production cutover remain separate
 gates. Small synthetic cases also do not establish sustained model availability,
 statistical quality or native Mac runtime compatibility.
 
