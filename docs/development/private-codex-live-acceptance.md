@@ -42,6 +42,19 @@ receipts, generated files and source provenance edges. Judge-only cases do not
 qualify the corresponding background phase or its publication/recovery path.
 Contextual embeddings and other API auxiliaries are outside this harness.
 
+The content batch adds `atoms`, `dream-triage`, `dream-synthesis`, `concepts` and
+`enrichment`. It uses normal discovery and real phase entrypoints, then checks
+managed publication, file/database agreement and replay without additional model
+calls or duplicate writes. Triage caches the same synthetic file subsequently
+used by synthesis; concept and enrichment cases have separate controlled sources.
+These are phase acceptance cases, not a single complete production cycle.
+Select both dream roles when creating a synthesis batch; synthesis requires the
+triage role to remain enabled even when its verdict is already cached.
+
+```sh
+python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles atoms,dream-triage,dream-synthesis,concepts,enrichment
+```
+
 `results.json` records each pass or failure, model, elapsed time, ledger usage,
 commit/tree, dirty state, tracked-diff hash and harness hash. Per-run receipts
 record the terminal exit status and credential cleanup checks. A passed semantic

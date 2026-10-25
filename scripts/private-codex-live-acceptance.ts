@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { WORKFLOW_ROLES, exerciseWorkflow } from './private-codex-live-workflows.ts';
+import { CONTENT_ROLES, exerciseContent } from './private-codex-live-content.ts';
 
 const args = process.argv.slice(2);
 const value = (name: string) => args[args.indexOf(name) + 1];
@@ -25,7 +26,7 @@ assert(!process.env.DATABASE_URL && !process.env.OPENAI_API_KEY && !process.env.
 
 const { PRIVATE_GENERATION_ROLES, privateRoleTier } = await import('../src/core/ai/private-roles.ts');
 type Role = typeof PRIVATE_GENERATION_ROLES[number][0];
-const implemented = ['chat', 'query-expansion', 'ocr', 'facts', 'classifiers', 'page-summary', 'think', ...WORKFLOW_ROLES] as const;
+const implemented = ['chat', 'query-expansion', 'ocr', 'facts', 'classifiers', 'page-summary', 'think', ...WORKFLOW_ROLES, ...CONTENT_ROLES] as const;
 const selected = value('--roles')!.split(',') as Role[];
 assert(selected.length > 0 && new Set(selected).size === selected.length);
 assert(selected.every(role => (implemented as readonly string[]).includes(role)), 'role needs a real caller case before selection');
@@ -35,6 +36,8 @@ const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'))
 const allowed = manifest.roles ?? selected;
 assert(selected.every(role => allowed.includes(role)), 'selection must stay within the retained batch');
 assert(allowed.every(role => (implemented as readonly string[]).includes(role)));
+assert(!selected.includes('dream-synthesis') || allowed.includes('dream-triage'),
+  'dream-synthesis also requires dream-triage in the retained batch');
 assert(manifest.maxAttempts === 16 && manifest.maxTurns === 16);
 const models = JSON.parse(await readFile(join(root, 'models.json'), 'utf8'));
 const bin = '/usr/local/lib/gbrain-codex/50ed828f357c655a3c82054d346cab8434f24901f14ec19b8267571bdd008b38/codex';
@@ -82,6 +85,7 @@ const trackedDiffSha256 = createHash('sha256').update(git('diff', '--binary', 'H
 const harnessSha256 = createHash('sha256').update(await readFile(import.meta.path)).digest('hex');
 
 async function exercise(role: Role): Promise<Record<string, unknown>> {
+  if ((CONTENT_ROLES as readonly string[]).includes(role)) return exerciseContent(role, { engine, root, models });
   if ((WORKFLOW_ROLES as readonly string[]).includes(role)) return exerciseWorkflow(role, { engine, root, sourceId, models });
   if (role === 'chat') {
     const answer = await chat({ privateRole: role, messages: [{ role: 'user', content:
