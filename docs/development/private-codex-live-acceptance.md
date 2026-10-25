@@ -261,13 +261,35 @@ no root cause or runtime fix is claimed. Field-level content-free diagnostics an
 a reviewed correction are the next development step before another bounded
 qualification campaign. No existing counter, deadline or validation was changed.
 
-There are now **38 of 39 roles with passing bounded live caller evidence** and
+At the initial evaluation checkpoint there were **38 of 39 roles with passing bounded live caller evidence** and
 one unresolved live acceptance failure (`longmemeval-extractor`). The live result
 remains reconciled across checkpoints, not one exact-current green run. Full
 vector stages, a scheduled nightly probe, statistical quality, integrated
 recovery and production qualification remain separate gates. The separately
 requested paired brainstorm quality comparison used one additional call and is
 not counted as another role case.
+
+The subsequent extractor diagnostic campaign added closed rejection codes while
+keeping the original prompt, schema and acceptance predicates. One real probe
+reported `extractor_event_name`: the native schema admitted label formats the
+host rejected. Offline regressions independently demonstrated that mismatch for
+both metric and event labels. Protocol v2 now exposes the existing identifier
+pattern in the schema and explains it in the prompt. Host grounding and
+acceptance checks are unchanged.
+
+The same new diagnostic case's reserved second attempt passed after that
+correction, inserting one exactly quoted claim with source/session provenance.
+Its two-attempt limit and deadline were unchanged; the earlier exhausted case
+remains exhausted. The new rejection and both earlier failures remain evidence.
+The diagnostic identifies the new rejection's category; the exact fields in the
+two earlier responses cannot be recovered from their retained metadata.
+
+**All 39 roles now have passing bounded live caller evidence**, reconciled across
+commits. This does not qualify full workflows or production. The 73 focused
+evaluation/cache tests passed with diagnostic reporting. The broader corrected
+caller contract run had 423 passes and 43 bootstrap filesystem-guard failures;
+the same 43 cases also failed at the pre-schema diagnostic checkpoint. These
+are retained failures, not a full green suite, and require separate investigation.
 
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
