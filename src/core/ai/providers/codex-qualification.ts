@@ -7,11 +7,14 @@ import { CodexProposalError } from './codex-contract.ts';
 import { codexNamespaceLaunch } from './codex-namespace.ts';
 
 /**
- * Intentionally empty until a pinned official build proves pre-execution denial,
- * including hook failure, inherited configuration, instructions and hosted tools.
- * Help flags and post-hoc JSONL rejection do not establish that property.
+ * Inspected official Linux 0.162.0 build, admitted after native protected-inode,
+ * tool/configuration, cancellation and bounded live transport qualification.
+ * The digest never replaces the per-launch protected-inode and host checks.
+ * Role activation and feature acceptance remain separate operator gates.
  */
-const QUALIFIED_SHA256 = new Set<string>();
+const QUALIFIED_SHA256 = new Set<string>([
+  '50ed828f357c655a3c82054d346cab8434f24901f14ec19b8267571bdd008b38',
+]);
 const fixtures = new Map<string, string>();
 
 /** A real runtime must exclude managed overrides and use a trusted namespace launcher. */
@@ -76,9 +79,10 @@ export async function openQualifiedCodexRuntime(bin: string): Promise<OpenCodexR
   if (!QUALIFIED_SHA256.size && !fixtures.has(bin)) throw new CodexProposalError('runtime_unqualified');
   let file: FileHandle | undefined;
   try {
-    file = await open(bin, constants.O_RDONLY);
+    file = await open(bin, constants.O_RDONLY | constants.O_NONBLOCK);
     const info = await file.stat();
-    if (!info.isFile() || !info.size || !(info.mode & 0o111)) throw new Error('not executable');
+    if (!info.isFile() || !info.size || info.size > 1024 * 1024 * 1024 || !(info.mode & 0o111)) throw new Error('not executable');
+    if (!fixtures.has(bin)) assertTrustedCodexExecutable(info);
     const hash = createHash('sha256');
     const chunk = Buffer.allocUnsafe(1024 * 1024);
     for (let offset = 0; offset < info.size;) {

@@ -1,10 +1,27 @@
-# Codex runtime qualification remains incomplete
+# Codex runtime qualification and feature acceptance
 
-The production `QUALIFIED_SHA256` registry in `codex-qualification.ts` is empty.
-Only test fixtures register synthetic executable hashes. GBrain refuses real
-Codex dispatch before reserving a subscription attempt until the runtime's
-pre-execution isolation is proven. Post-hoc rejection of native-action events
-does not prove those actions were prevented.
+The development candidate admits the inspected Linux 0.162.0 digest below.
+Every launch still requires the protected inode, supported non-root Linux host,
+trusted namespace launch chain and absence of managed Codex overrides. Invalid
+or unsupported runtimes refuse before subscription admission. This source
+change does not install GBrain or activate a production role or schedule.
+
+On 25 October, the operator-staged root-owned 0555 copy passed the credential-free
+boundary, abort and timeout probes at source commit `cd8d0fcba5`. All captured
+requests advertised zero tools; forced native calls and typed shell/patch/search
+paths were denied, ancestor instructions were ignored, and the synthetic image
+reached the mock provider. Abort settled in 446 ms and timeout in 5,281 ms.
+
+The approved `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6-astra` pins each then passed
+one bounded signed-in schema/image transport check, including exact quotation
+and lifecycle/answer consistency. Those trials used synthetic data and an
+isolated temporary login copy; the original login file was unchanged. They do
+not establish acceptance of all 39 role workflows. Feature acceptance, managed
+publication/recovery and explicit production activation remain separate gates.
+
+The investigation notes below preserve earlier observations, including the
+then-empty registry and user-owned executable. Post-hoc lifecycle rejection
+alone remains insufficient proof that a native action was prevented.
 
 ## Staging a protected copy without activation
 

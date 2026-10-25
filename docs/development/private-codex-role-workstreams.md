@@ -110,9 +110,11 @@ routing, native concepts/fence repair and tier-aware pin migration. The
 producer checks. Selected combined regressions and baseline discrimination
 are recorded with the local handoff; full CI remains a release gate.
 
-The production executable allowlist remains empty. No real subscription model
-has been accepted, and no role is activated by these source changes. Protected
-runtime tests and real-model acceptance must prove the selected four model pins
+The development candidate admits one reviewed protected Linux runtime digest;
+the bounded runtime and three-model transport evidence is recorded in the
+[runtime qualification checkpoint](private-codex-runtime-qualification.md).
+No production role is activated by these source changes. Real-model feature
+acceptance must still prove the four selected tier pins through their callers
 on the intended production host. Native loops and remote delegation retain
 their existing restrictions; the 39-role inventory is not all GBrain surfaces.
 

@@ -73,4 +73,5 @@ protected-runtime qualification and real-model acceptance. The 20 October handof
 backup/rollback and graph rehearsals on the earlier v317 baseline. Cutover still
 needs a writer-quiesced paired snapshot and rehearsal/acceptance of the final
 source candidate, paired backup/rollback, service switch and graph catch-up gates. This work selects no live model and enables no production
-role, schedule or service. The production executable allowlist remains empty.
+role, schedule or service. The development candidate admits only the inspected
+protected Linux runtime after host checks; role-level live acceptance remains open.
