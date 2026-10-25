@@ -141,8 +141,13 @@ async function edges({ engine, root, models }: Context): Promise<Record<string, 
   await engine.setConfig('dream.single_value.mode', 'off');
   assert.equal((await loadEdgeContradictionsConfig(engine, models.utility)).mode, 'propose');
   const page = await engine.getPage(subject, { sourceId }); assert(page);
-  const relations = () => engine.executeRaw('SELECT to_page_id,link_type,valid_ranges::text FROM link_relationships WHERE source_id=$1 AND from_page_id=$2 ORDER BY to_page_id', [sourceId, page.id]);
-  const originalRelations = await relations(); assert.equal(originalRelations.length, 2);
+  const relations = () => engine.executeRaw<{ scope: string; semantics: string; link_type: string }>(
+    'SELECT to_page_id,link_type,scope,semantics,valid_ranges::text FROM link_relationships WHERE source_id=$1 AND from_page_id=$2 ORDER BY to_page_id,scope', [sourceId, page.id]);
+  const originalRelations = await relations();
+  // The phase judges the all-visibility projection. Public synthetic facts also
+  // have a world projection; both must survive an advisory-only judgment.
+  assert.equal(originalRelations.length, 4);
+  for (const scope of ['all', 'world']) assert.equal(originalRelations.filter(r => r.scope === scope && r.semantics === 'state' && r.link_type === 'works_at').length, 2);
   const run = () => runPhaseEdgeContradictions(engine, { auditPath: join(root, 'edge-budget.jsonl') });
   const result = await run(); assert.equal(result.status, 'complete', JSON.stringify(result));
   assert.equal(result.totals?.proposed, 1); assert.equal(result.totals?.applied, 0);

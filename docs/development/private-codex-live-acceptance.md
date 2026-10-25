@@ -69,6 +69,9 @@ that proposals, profiles and writes are not duplicated.
 
 The edge case runs normal typed-link extraction first: the page-write effect
 alone adds plain mentions, which are not competing state relationships.
+Explicit `works at` statements seed two relationships in each of the `all`
+and `world` visibility projections. The phase judges `all`; the case checks
+that both projections remain unchanged after its advisory proposal.
 
 Calibration needs `calibration-voice-judge` enabled as a supporting role. The
 explicit `--support-roles` option records that dependency in the retained policy
