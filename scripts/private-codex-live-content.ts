@@ -7,7 +7,7 @@ import type { PrivateRole, PrivateModelTier } from '../src/core/ai/private-roles
 import { codexSubscriptionContext } from '../src/core/ai/subscription-context.ts';
 import { claimWorktree } from '../src/core/persistence/ownership.ts';
 import { disposePersistenceConsumer } from '../src/core/persistence/service.ts';
-import { parseMarkdown } from '../src/core/markdown.ts';
+import { parseMarkdown, serializePageToMarkdown } from '../src/core/markdown.ts';
 
 export const CONTENT_ROLES = ['atoms', 'dream-triage', 'dream-synthesis', 'concepts', 'enrichment'] as const;
 type Context = { engine: BrainEngine; root: string; models: Record<PrivateModelTier, string> };
@@ -181,12 +181,19 @@ async function concepts(context: Context): Promise<Record<string, unknown>> {
 
 async function enrichment(context: Context): Promise<Record<string, unknown>> {
   const { engine, models } = context, slug = 'people/aster-example';
-  const { sourceId, dir } = await source(context, 'enrichment', async id => {
-    await engine.putPage(slug, { type: 'person', title: 'Aster Example', compiled_truth: 'Synthetic person stub.',
+  const { sourceId, dir } = await source(context, 'enrichment', async (id, path) => {
+    const page = await engine.putPage(slug, { type: 'person', title: 'Aster Example', compiled_truth: 'Synthetic person stub.',
       frontmatter: { visibility: 'world' } }, { sourceId: id });
+    // Seed both sides before claiming the synthetic worktree. A missing file
+    // on an existing managed page correctly refuses enrichment publication.
+    await mkdir(join(path, 'people'), { mode: 0o700 });
+    await writeFile(join(path, slug + '.md'), serializePageToMarkdown(page, []), { mode: 0o600, flag: 'wx' });
     await engine.executeRaw('INSERT INTO facts(source_id,entity_slug,fact,source,valid_from) VALUES($1,$2,$3,$4,now())',
       [id, slug, 'Aster Example led the synthetic Orchard launch in 2026 and introduced early evidence reviews.', 'synthetic-acceptance']);
   });
+  const input = await engine.getPage(slug, { sourceId }); assert(input);
+  assert.equal(parseMarkdown(await readFile(join(dir, slug + '.md'), 'utf8'), slug).compiled_truth.trim(),
+    input.compiled_truth.trim(), 'the synthetic enrichment input must match its canonical file before inference');
   const { runEnrichCore } = await import('../src/commands/enrich.ts');
   return managed(engine, async () => {
     const run = () => runEnrichCore(engine, { sourceId, model: models.reasoning, limit: 1, minContextChars: 20 });
