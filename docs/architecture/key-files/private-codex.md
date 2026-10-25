@@ -7,6 +7,8 @@
 
 ## Experimental private Codex source
 
+- `scripts/private-codex-live-acceptance.{py,ts}` and `scripts/private-codex-live-workflows.ts` — explicitly invoked real-model smoke harness. Disposable synthetic data, retained bounded admission, isolated login copy and per-attempt source provenance; no production activation. See [live acceptance](../../development/private-codex-live-acceptance.md) for limits and the distinction between caller smokes and full workflow qualification.
+
 - `src/core/ai/providers/codex-namespace.ts` — trusted Linux parent-death launch chain with a startup parent-PID check, followed by PID-namespace containment. `codex-process.ts` uses it for production execution and `codex-qualification.ts` uses the same chain for host availability. Admission requires protected `setpriv`, `dash`, `unshare` and `true` executables; unsupported hosts refuse before subscription admission.
 
 The [role development workstreams](../../development/private-codex-role-workstreams.md)
