@@ -59,6 +59,30 @@ triage role to remain enabled even when its verdict is already cached.
 python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles atoms,dream-triage,dream-synthesis,concepts,enrichment
 ```
 
+The core batch adds `take-proposals`, `take-calibration`, `contextual-synopsis`,
+`edge-contradictions` and `fence-repair`. Take and relationship proposals must
+remain advisory, calibration retains source/holder-scoped host metrics and its
+real voice judgment, and fence repair applies a saved preview while preserving
+the claim, confidence, visibility and matching canonical file. Replays check
+that proposals, profiles and writes are not duplicated.
+
+Calibration needs `calibration-voice-judge` enabled as a supporting role. The
+explicit `--support-roles` option records that dependency in the retained policy
+without running a separate standalone case. Supporting calls consume the parent
+case's original two-turn allowance; a normal calibration case consumes both
+turns. The total selected and supporting roles cannot exceed eight. Resumption
+retains the original supporting roles and must omit `--support-roles`.
+
+The contextual case exercises the actual synopsis transformer with its own role
+identity and validated cache. It also calls the real reindex service to verify
+that missing embedding authorization refuses before inference and leaves the
+vectors unchanged. It does not authorize paid embeddings or qualify full
+contextual reindexing.
+
+```sh
+python3 scripts/private-codex-live-acceptance.py --live --auth-file /path/to/codex/auth.json --models /path/to/approved-tier-models.json --roles take-proposals,take-calibration,contextual-synopsis,edge-contradictions,fence-repair --support-roles calibration-voice-judge
+```
+
 `results.json` records each pass or failure, model, elapsed time, ledger usage,
 commit/tree, dirty state, tracked-diff hash and harness hash. Per-run receipts
 record the terminal exit status and credential cleanup checks. A passed semantic

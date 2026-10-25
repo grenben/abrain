@@ -57,11 +57,13 @@ def main():
     parser.add_argument('--auth-file', type=Path, required=True)
     parser.add_argument('--models', type=Path, help='JSON object with exactly four explicitly approved tier pins; required for a new batch')
     parser.add_argument('--roles', required=True)
+    parser.add_argument('--support-roles', help='Additional explicitly enabled workflow dependencies; no standalone case is run for these roles')
     parser.add_argument('--root', type=Path, help='Resume the same retained batch and allowance')
     parser.add_argument('--retry', action='store_true', help='Retry a failed role within its existing two-attempt allowance')
     args = parser.parse_args()
     roles = args.roles.split(',')
-    if not (1 <= len(roles) <= 8 and len(set(roles)) == len(roles)):
+    support = args.support_roles.split(',') if args.support_roles else []
+    if not (1 <= len(roles) and len(roles + support) <= 8 and len(set(roles + support)) == len(roles + support)):
         parser.error('select one to eight distinct roles per bounded batch')
     repo = Path(__file__).resolve().parent.parent
     if args.root:
@@ -69,6 +71,7 @@ def main():
         assert (root / '.gbrain-live-acceptance').read_text() == 'synthetic-only-v1\n'
         assert root.stat().st_mode & 0o077 == 0
         assert args.models is None, 'resuming cannot replace the approved model pins'
+        assert args.support_roles is None, 'resuming retains the originally enabled supporting roles'
     else:
         assert args.models and not args.retry, 'a new batch requires --models, without --retry'
         models = json.loads(args.models.read_text())
@@ -82,7 +85,7 @@ def main():
         (root / 'manifest.json').write_text(json.dumps({
             'runId': 'acceptance-' + str(uuid.uuid4()),
             'deadline': (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=2)).isoformat(),
-            'maxAttempts': 16, 'maxTurns': 16, 'roles': roles,
+            'maxAttempts': 16, 'maxTurns': 16, 'roles': roles + support, 'selectedRoles': roles,
         }))
         (root / 'orchard.png').write_bytes(synthetic_image())
     print(json.dumps({'root': str(root)}), flush=True)
