@@ -40,7 +40,12 @@ export async function runPrivateParserCall<T>(opts: RunLlmCallOpts<T>): Promise<
       const value = opts.parse(raw);
       if (value === null) throw new Error();
       return value;
-    } catch { throw new CodexProposalError('invalid_output'); }
+    } catch (error) {
+      // Known invalid-output errors carry content-free diagnostics; JSON/parser
+      // exceptions still get normalized so provider text cannot escape.
+      if (error instanceof CodexProposalError && error.reason === 'invalid_output') throw error;
+      throw new CodexProposalError('invalid_output');
+    }
   };
   // Cache IO errors propagate: a damaged or unavailable required cache must not
   // silently spend another allowance. Old parsed-value caches have different keys.

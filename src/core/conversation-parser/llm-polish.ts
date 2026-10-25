@@ -5,6 +5,12 @@ import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { digest } from '../persistence/digest.ts';
 
 export const PARSER_POLISH_VERSION = 'parser-prose-polish-v1';
+/** Content-free diagnostics distinguish preservation failures without retaining model text. */
+class PolishValidationError extends CodexProposalError {
+  constructor(readonly validationCode: 'parser_polish_binding' | 'parser_polish_content_changed' | 'parser_polish_literal_changed') {
+    super('invalid_output');
+  }
+}
 export interface PolishedConversation {
   /** Canonical evidence is never replaced by generated prose. */
   parsed: ParseResult;
@@ -42,15 +48,15 @@ export async function polishConversation(input: {
     parse: raw => {
       const value = JSON.parse(raw) as { evidence_hash: string; presentation: PolishedConversation['presentation'] };
       if (value.evidence_hash !== evidenceHash || !Array.isArray(value.presentation) || value.presentation.length !== parsed.messages.length)
-        throw new CodexProposalError('invalid_output');
+        throw new PolishValidationError('parser_polish_binding');
       for (const [index, row] of value.presentation.entries()) {
         if (row.message_index !== index || typeof row.prose !== 'string' || !row.prose.trim() ||
             row.prose.trim().replace(/\s+/g, ' ') !== parsed.messages[index]!.text.trim().replace(/\s+/g, ' ') ||
             /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(row.prose))
-          throw new CodexProposalError('invalid_output');
+          throw new PolishValidationError('parser_polish_content_changed');
         // Whitespace inside literal quotes/code is evidence too.
         const literals = parsed.messages[index]!.text.match(/```[\s\S]*?```|`[^`]*`|"[^"\n]*"|“[^”]*”/g) ?? [];
-        if (literals.some(literal => !row.prose.includes(literal))) throw new CodexProposalError('invalid_output');
+        if (literals.some(literal => !row.prose.includes(literal))) throw new PolishValidationError('parser_polish_literal_changed');
       }
       return value.presentation;
     } });

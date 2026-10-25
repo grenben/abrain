@@ -52,7 +52,11 @@ export function codexParserPolishContract(f: Fixture) {
     ])('rejects changed evidence, identity fields and provider failures', async value => {
       f.reply(value);
       await f.run(async id => {
-        await expect(polish()).rejects.toMatchObject({ reason: 'refusal' in value ? 'refusal' : 'missingCompletion' in value ? 'missing_completion' : 'invalid_output' });
+        // The prior generic error hid this literal-preservation failure. Keep
+        // its content-free diagnostic across the real parser/cache boundary.
+        const literalChanged = 'presentation' in value && value.presentation?.[0]?.prose.includes('"keep this"');
+        await expect(polish()).rejects.toMatchObject({ reason: 'refusal' in value ? 'refusal' : 'missingCompletion' in value ? 'missing_completion' : 'invalid_output',
+          ...(literalChanged ? { validationCode: 'parser_polish_literal_changed' } : {}) });
         const [row] = await f.engine().executeRaw<{ accepted_turns: number }>('SELECT accepted_turns FROM codex_subscription_runs WHERE run_id=$1', [id]);
         expect(Number(row!.accepted_turns)).toBe(0);
         expect(parsed.messages[0]!.speaker).toBe('Aster');

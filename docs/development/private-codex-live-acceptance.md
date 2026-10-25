@@ -58,6 +58,16 @@ returned zero after the semantic failure because database cleanup reset the
 exit status; the failure row is authoritative. The committed harness publishes
 its final verdict after cleanup.
 
+The next seven-role batch passed parsing, voice judgment, take grading, drift,
+contradiction detection and managed pattern publication. Parser polishing failed
+local output validation twice on the utility model, including after clarifying
+the literal-preservation instruction. Its allowance is exhausted; neither failure
+is a successful parse or an accepted turn. The original generic error does not
+establish which validation rule failed. Content-free preservation diagnostics
+now distinguish binding, changed content and changed quoted/code literals for
+future calls. They do not retrospectively diagnose those two failures. A further
+model comparison requires a separately reviewed allowance; do not reset this one.
+
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
 provider artifacts and temporary runtime state. Do not include authentication

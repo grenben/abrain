@@ -61,7 +61,7 @@ const sourceId = 'live-acceptance-synthetic';
 const orchard = 'The synthetic orchard has twelve apple trees.';
 const launch = 'The synthetic Orbit project launched in March 2026.';
 type Result = { role: Role; model: string; status: 'pass' | 'fail'; elapsedMs: number;
-  evidence?: Record<string, unknown>; error?: { name: string; code?: string; reason?: string; message: string };
+  evidence?: Record<string, unknown>; error?: { name: string; code?: string; reason?: string; validationCode?: string; message: string };
   attempts: unknown[]; sourceCommit: string; sourceTree: string; sourceDirty: boolean;
   trackedDiffSha256: string; harnessSha256: string };
 const resultsPath = join(root, 'results.json');
@@ -162,8 +162,8 @@ try {
       assert(Number(ledger!.attempts) >= 1 && Number(ledger!.accepted_turns) >= 1, 'a real accepted model turn is required');
       row.status = 'pass';
     } catch (error) {
-      const e = error as Error & { code?: string; reason?: string };
-      row.error = { name: e.name, code: e.code, reason: e.reason, message: e.message.slice(0, 500) };
+      const e = error as Error & { code?: string; reason?: string; validationCode?: string };
+      row.error = { name: e.name, code: e.code, reason: e.reason, validationCode: e.validationCode, message: e.message.slice(0, 500) };
     }
     row.elapsedMs = Date.now() - started;
     row.attempts = await engine.executeRaw('SELECT state,accepted,input_tokens,cached_input_tokens,output_tokens,failure_code FROM codex_subscription_attempts WHERE run_id=$1 ORDER BY created_at', [runId]);
