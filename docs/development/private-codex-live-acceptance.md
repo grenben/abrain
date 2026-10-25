@@ -60,13 +60,21 @@ its final verdict after cleanup.
 
 The next seven-role batch passed parsing, voice judgment, take grading, drift,
 contradiction detection and managed pattern publication. Parser polishing failed
-local output validation twice on the utility model, including after clarifying
-the literal-preservation instruction. Its allowance is exhausted; neither failure
-is a successful parse or an accepted turn. The original generic error does not
-establish which validation rule failed. Content-free preservation diagnostics
-now distinguish binding, changed content and changed quoted/code literals for
-future calls. They do not retrospectively diagnose those two failures. A further
-model comparison requires a separately reviewed allowance; do not reset this one.
+local output validation twice on the utility model. A separate bounded comparison
+also failed twice on the reasoning model. Content-free preservation diagnostics
+identified changed content; read-only observation of the last synthetic response
+showed that the model copied the enclosing JSON record into `prose` instead of
+formatting its `text` field. The caller now explicitly identifies that input field.
+The corrected caller passed a separate bounded verification on the original
+utility model, preserving canonical evidence and quoted spacing. Each earlier
+grant and failure remains intact; no allowance was reset. The original generic
+errors do not retrospectively prove that all four failures had the same cause.
+
+Together these batches exercise fourteen roles. Their passing results are
+reconciled across source checkpoints, including five retained failed attempts
+(one OCR and four polish), not a full green run on one commit. The remaining
+twenty-five roles still need live acceptance. Even the passing caller smokes do
+not replace managed workflow, rollback, interruption or production cutover gates.
 
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
