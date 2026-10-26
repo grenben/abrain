@@ -9,3 +9,6 @@ test('SIGKILL after committed private write reconciles one canonical effect on a
 for (const point of ['checkpoint', 'result', 'file'] as const) {
   test(`SIGKILL after optimizer ${point} resumes the original queued workflow without duplicate effects`, () => verifyOptimizerCrashRecovery(point), 240_000);
 }
+for (const point of ['shared-result', 'shared-committed', 'cycle-file', 'cycle-complete'] as const) {
+  test(`SIGKILL at ${point} preserves managed publication or scheduled cycle receipts`, () => verifyOptimizerCrashRecovery(point), 600_000);
+}

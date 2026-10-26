@@ -71,6 +71,12 @@ dispatcher, queued maintenance handler, optimizer, ledger and file publication
 using synthetic fixtures and a qualified fake Codex executable. See the
 [development checkpoint](private-codex-status.md) for exact results.
 
+The [process-recovery lane](private-codex-workflow-recovery.md) also kills a queued
+two-skill maintenance worker after its first draft and after retained cycle
+completion. It resumes the original job and frozen membership, preserves the
+cooldown, and checks that only successful completion earns the global stamp.
+That lane selects only `skillopt`; it does not qualify every maintenance phase.
+
 These tests verify source. Runtime qualification, live subscription checks,
 production migrations, installation and activation remain separate gates.
 Queued batch submission is available through the public trusted package API;

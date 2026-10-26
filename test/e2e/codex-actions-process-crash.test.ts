@@ -18,8 +18,8 @@ async function verifyPostgresCrashRecovery(scenario: Scenario | OptimizerCrashPo
     created = true;
     const target = new URL(url!);
     target.pathname = `/${database}`;
-    if (scenario === 'checkpoint' || scenario === 'result' || scenario === 'file') await verifyOptimizerCrashRecovery(scenario, target.toString());
-    else await verifyCrashRecovery(scenario, target.toString());
+    if (scenario === 'read' || scenario === 'write-before' || scenario === 'write-after') await verifyCrashRecovery(scenario, target.toString());
+    else await verifyOptimizerCrashRecovery(scenario, target.toString());
   } finally {
     try { if (created) await admin.unsafe(`DROP DATABASE ${database} WITH (FORCE)`); }
     finally { await admin.end({ timeout: 5 }); }
@@ -32,5 +32,8 @@ describe.skipIf(!url)('PostgreSQL private Codex action process-kill recovery', (
   test('a killed worker reconciles one committed write', () => verifyPostgresCrashRecovery('write-after'), 180_000);
   for (const point of ['checkpoint', 'result', 'file'] as const) {
     test(`a killed optimizer resumes after ${point} without duplicate effects`, () => verifyPostgresCrashRecovery(point), 240_000);
+  }
+  for (const point of ['shared-result', 'shared-committed', 'cycle-file', 'cycle-complete'] as const) {
+    test(`a killed worker resumes ${point} with the original receipts`, () => verifyPostgresCrashRecovery(point), 600_000);
   }
 });
