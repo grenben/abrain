@@ -299,7 +299,7 @@ No runtime, test, guard, ownership marker or allowance was changed to obtain tha
 green run, and it consumed no real model calls. Keep the earlier red receipts as
 environment-failure evidence; the new result is one complete green contract-file
 run, not a full repository or live-model campaign. The
-[scratch preflight recipe](../TESTING.md#unmanaged-scratch-directories-for-legacy-filesystem-tests)
+[scratch preflight recipe](../../test/ai/README.md)
 checks ancestor markers before a repeat run.
 
 For review, export only source, sanitized result metadata and checksums. Never
