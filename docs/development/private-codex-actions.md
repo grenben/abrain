@@ -107,7 +107,10 @@ retained but before admission, and after a canonical page write commits but
 before its action ledger settles. A second process expires and reclaims each
 lease. The read retains one ledger identity with no repeated inference; both
 write cases retain one ledger identity and one committed file/database effect,
-with no second write admission. PostgreSQL process-kill recovery remains open.
+with no second write admission. The same process-kill cases now have a passing
+disposable PostgreSQL run. Both wrappers also cover queued optimizer recovery;
+see [workflow recovery evidence](private-codex-workflow-recovery.md) for the
+current scope and retained limitations.
 
 ```sh
 bun test --timeout=60000 test/ai/codex-actions.serial.test.ts test/ai/codex-jobs.serial.test.ts test/child-readiness.test.ts
