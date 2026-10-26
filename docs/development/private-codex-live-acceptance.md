@@ -288,8 +288,19 @@ two earlier responses cannot be recovered from their retained metadata.
 commits. This does not qualify full workflows or production. The 73 focused
 evaluation/cache tests passed with diagnostic reporting. The broader corrected
 caller contract run had 423 passes and 43 bootstrap filesystem-guard failures;
-the same 43 cases also failed at the pre-schema diagnostic checkpoint. These
-are retained failures, not a full green suite, and require separate investigation.
+the same 43 cases also failed at the pre-schema diagnostic checkpoint. Subsequent
+diagnosis identified an ancestor ownership marker at `/tmp/.git/gbrain-managed.json`:
+the scratch directory was inside a managed worktree. The guard correctly refused
+those legacy writes before inference.
+
+The unchanged committed contract file then passed **466 tests, zero failures**
+under an unmanaged `/var/tmp` scratch root with isolated home and configuration.
+No runtime, test, guard, ownership marker or allowance was changed to obtain that
+green run, and it consumed no real model calls. Keep the earlier red receipts as
+environment-failure evidence; the new result is one complete green contract-file
+run, not a full repository or live-model campaign. The
+[scratch preflight recipe](../TESTING.md#unmanaged-scratch-directories-for-legacy-filesystem-tests)
+checks ancestor markers before a repeat run.
 
 For review, export only source, sanitized result metadata and checksums. Never
 archive the whole fixture directory: it contains a synthetic database, local
