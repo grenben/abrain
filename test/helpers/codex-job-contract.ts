@@ -16,7 +16,7 @@ import { runJobInChild } from '../../src/core/minions/child-job-runner.ts';
 import { noteChildSubscriptionEnforcement } from '../../src/core/minions/subscription-child.ts';
 import { runJobsSubmit } from '../../src/commands/jobs/submit.ts';
 import { SOURCE_FRESHNESS_PHASES } from '../../src/core/cycle/phase-scope.ts';
-import { dispatchGlobalMaintenance } from '../../src/commands/autopilot-fanout.ts';
+import { dispatchGlobalMaintenance, dispatchPerSource } from '../../src/commands/autopilot-fanout.ts';
 import { scheduledCodexSubmit } from '../../src/core/minions/subscription-schedules.ts';
 import { readPrivateCodexConfig } from '../../src/core/ai/private-policy.ts';
 import { codexSubscriptionContext, withCodexSubscription } from '../../src/core/ai/subscription-context.ts';
@@ -754,6 +754,30 @@ test('the real global scheduler requires explicit file consent and reuses the oc
   const later = new Date(Date.parse(slot) + 1).toISOString();
   await expect(dispatchGlobalMaintenance(engine, queue, { ...opts, slot: later })).rejects.toMatchObject({ code: 'subscription_identity_conflict' });
   expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(1);
+});
+test('legacy scheduler fallback refuses without consent and dispatches with its durable allowance', async () => {
+  const sources = spyOn(engine, 'listAllSources').mockResolvedValue([]);
+  try {
+    const slot = new Date().toISOString();
+    const opts = { repoPath: '/synthetic', slot, timeoutMs: 300000, fanoutMax: 1, jsonMode: false, log: () => {} };
+    await expect(dispatchPerSource(engine, queue, opts)).rejects.toMatchObject({ code: 'subscription_required' });
+    expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+    expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+    expect(count()).toBe(0);
+
+    writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({ private_codex: {
+      mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'autopilot-cycle': { maxAttempts: 2, maxTurns: 2, windowMs: 600000 } },
+    } }));
+    expect((await dispatchPerSource(engine, queue, opts)).legacy_fallback).toBe(true);
+    const [run] = await engine.executeRaw<{ deadline: Date | string; max_attempts: number; max_turns: number }>(
+      'SELECT deadline,max_attempts,max_turns FROM codex_subscription_runs');
+    expect(new Date(run!.deadline).getTime()).toBe(Date.parse(slot) + 600000);
+    expect(run).toMatchObject({ max_attempts: 2, max_turns: 2 });
+    const job = (await queue.claim('legacy-scheduled', 60000, 'default', ['autopilot-cycle']))!;
+    expect((await runWithJobSpend(engine, job, ctxFor(job), call)).text).toBe('fixture');
+    expect(count()).toBe(1);
+  } finally { sources.mockRestore(); }
 });
 test('schedule limits reject malformed opt-ins, expired slots and inferred authorization', async () => {
   const write = (scheduled_jobs: unknown) => writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({

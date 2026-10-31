@@ -14,6 +14,10 @@ afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
 const env = { PATH: '/usr/bin:/bin', HOME: root, CODEX_HOME: root, OPENAI_API_KEY: 'synthetic-tripwire', ANTHROPIC_API_KEY: 'synthetic-tripwire' };
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPgUbL4DwACCgFmeGgpMwAAAABJRU5ErkJggg==', 'base64');
+// Probe namespace capability independently from the production launcher under test.
+const pidNamespaceAvailable = process.platform === 'linux' && spawnSync('/usr/bin/unshare',
+  ['--user', '--map-root-user', '--pid', '--fork', '--kill-child', '--mount-proc', '/bin/true'],
+  { stdio: 'ignore', timeout: 2_000 }).status === 0;
 let sequence = 0;
 async function fake(mode: string): Promise<{ bin: string; capture: string }> {
   const bin = join(root, `codex-${mode}-${sequence++}.mjs`);
@@ -101,11 +105,7 @@ describe('Codex proposal production transport with fake executable', () => {
     try { await expect(runCodexProposal({ ...input(bin), signal: controller.signal })).rejects.toMatchObject({ reason: 'aborted', settled: true }); }
     finally { clearTimeout(timer); }
   });
-  test('PID namespace teardown settles a detached descendant', async () => {
-    if (process.platform !== 'linux') return;
-    const probe = spawnSync('/usr/bin/unshare', ['--user', '--map-root-user', '--pid', '--fork',
-      '--kill-child', '--mount-proc', '/bin/true'], { stdio: 'ignore', timeout: 2_000 });
-    if (probe.status !== 0) return; // Unsupported hosts cannot admit the production runtime.
+  test.skipIf(!pidNamespaceAvailable)('PID namespace teardown settles a detached descendant (requires Linux user/PID namespaces)', async () => {
     const bin = join(root, `codex-pidns-${sequence++}.sh`);
     const beat = `${bin}.heartbeat`;
     const script = `#!/bin/sh
@@ -145,7 +145,7 @@ sleep 3
   // Native crash acceptance: ordinary abort tests cannot detect an orphaned
   // namespace supervisor after SIGKILL. Reverting the parent-death launch leaves
   // this bounded heartbeat running; no production-only test seam is needed.
-  test.skipIf(process.platform !== 'linux')('GBrain parent death tears down the namespace and detached descendants', async () => {
+  test.skipIf(!pidNamespaceAvailable)('GBrain parent death tears down the namespace and detached descendants (requires Linux user/PID namespaces)', async () => {
     assertCodexNamespaceAvailable();
     const bin = join(root, `codex-orphan-${sequence++}.sh`), beat = `${bin}.beat`;
     const parentFile = `${bin}.parent.ts`;
@@ -178,7 +178,7 @@ env:{PATH:'/usr/bin:/bin',HOME:${JSON.stringify(root)}},prompt:'synthetic',timeo
       expect(after).toBe(before);
     } finally { parent.kill('SIGKILL'); await closed; }
   }, 12_000);
-  test.skipIf(process.platform !== 'linux')('namespace startup refuses a mismatched parent before running the executable', async () => {
+  test.skipIf(!pidNamespaceAvailable)('namespace startup refuses a mismatched parent before running the executable (requires Linux user/PID namespaces)', async () => {
     const launch = codexNamespaceLaunch('/usr/bin/true', []);
     const correct = spawnSync(launch.command, launch.args, { timeout: 2_000, env: { PATH: '/usr/bin:/bin' } });
     expect(correct.status).toBe(0);
@@ -186,7 +186,7 @@ env:{PATH:'/usr/bin:/bin',HOME:${JSON.stringify(root)}},prompt:'synthetic',timeo
     const refused = spawnSync(launch.command, wrong, { timeout: 2_000, env: { PATH: '/usr/bin:/bin' } });
     expect(refused.status).toBe(125);
   });
-  test.skipIf(process.platform !== 'linux')('namespace availability refuses a failed support launcher', async () => {
+  test.skipIf(process.platform !== 'linux')('namespace availability refuses a failed support launcher (requires Linux)', async () => {
     const launcher = join(root, `codex-launcher-${sequence++}.sh`);
     await writeFile(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     expect(() => assertCodexNamespaceAvailable(launcher, '/usr/bin/true')).not.toThrow();
@@ -249,10 +249,9 @@ env:{PATH:'/usr/bin:/bin',HOME:${JSON.stringify(root)}},prompt:'synthetic',timeo
     await symlink(etc, join(symlinkRoot, 'etc'));
     await expect(__assertCodexHostBoundaryForTests(symlinkRoot, trustedUid, callerUid)).rejects.toThrow();
   });
-  test('a path replacement after qualification cannot change the spawned executable', async () => {
-    if (process.platform !== 'linux') return;
+  test.skipIf(process.platform !== 'linux')('a path replacement after qualification cannot change the spawned executable (requires Linux /proc fd)', async () => {
     const bin = join(root, `codex-pin-${sequence++}`);
-    const original = '#!/bin/sh\nprintf "pinned-original\\n"\n';
+    const original = '#!/bin/sh\ncat >/dev/null\nprintf "pinned-original\\n"\n';
     await writeFile(bin, original, { mode: 0o700 });
     const unregister = __registerCodexFixtureForTests(bin, createHash('sha256').update(original).digest('hex'));
     const runtime = await openQualifiedCodexRuntime(bin);
