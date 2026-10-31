@@ -5,8 +5,8 @@
  * attempt-counted daily cap, the structural-refusal exclusion, the writer
  * pre-check and the opt-in for connector email/meeting pages.
  */
-import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BrainEngine } from '../src/core/engine.ts';
@@ -17,6 +17,7 @@ import { MinionQueue } from '../src/core/minions/queue.ts';
 import { submitAutoDrains, AUTO_DRAIN_NEXT_KIND_KEY } from '../src/commands/autopilot-dispatch.ts';
 import { resolveAutopilotAutoDrainBounds } from '../src/commands/autopilot-timeout.ts';
 import { withEnv } from './helpers/with-env.ts';
+import { countExtractAtomsBacklog } from '../src/core/cycle/extract-atoms.ts';
 
 let engine: BrainEngine;
 let queue: MinionQueue;
@@ -59,6 +60,22 @@ async function gitSource(id: string, pages = 2): Promise<void> {
     await engine.putPage(`notes/${id}-${i}`, { type: 'note', title: `${id} ${i}`, compiled_truth: prose(`${id} ${i}`) } as never, { sourceId: id });
   }
 }
+
+function privatePolicy(policy: Record<string, unknown>): void {
+  const dir = join(home, '.gbrain');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ private_codex: policy }));
+}
+
+// Dispatch slot is the fixed UTC day boundary; noon still has twelve hours
+// remaining, enough for the drain's bounded timeout without extending expiry.
+const atomSchedule = { maxAttempts: 4, maxTurns: 2, windowMs: 86_400_000 };
+const tieredPrivatePolicy = (enabledRoles: string[], scheduled = false) => ({
+  mode: 'strict', bin: '/fixture/codex',
+  models: { utility: 'codex-cli:utility-test', reasoning: 'codex-cli:reasoning-test', deep: 'codex-cli:deep-test', subagent: 'codex-cli:subagent-test' },
+  enabled_roles: enabledRoles,
+  ...(scheduled ? { scheduled_jobs: { 'extract-atoms-drain': atomSchedule } } : {}),
+});
 
 async function connectorSource(id: string, type: 'email' | 'meeting' = 'email', pages = 2): Promise<void> {
   const state = join(home, `${id}-state`);
@@ -183,6 +200,125 @@ test('automatic drain window and job deadline are bounded together', () => {
   expect(resolveAutopilotAutoDrainBounds(600_000, 900, 300_000.5)).toEqual({ windowSeconds: 900, timeoutMs: 1_560_001 });
   // A chat timeout that leaves no room under the anchor still gets a deadline covering its one-second window.
   expect(resolveAutopilotAutoDrainBounds(600_000, 900, 869_600)).toEqual({ windowSeconds: 1, timeoutMs: 1_800_200 });
+});
+
+const slotNow = Date.now();
+const slotBounds = resolveAutopilotAutoDrainBounds(60_000, 120, 300_000);
+const slotDayStart = Date.UTC(new Date(slotNow).getUTCFullYear(), new Date(slotNow).getUTCMonth(), new Date(slotNow).getUTCDate());
+const slotDayEnd = slotDayStart + 86_400_000;
+
+test('same-day dispatch coalesces per source without consuming another daily slot', async () => {
+  // Leave room for the second tick to reach queue coalescing rather than
+  // returning early at the daily attempt cap.
+  await engine.setConfig('autopilot.auto_drain.max_usd_per_day', '0.6');
+  await gitSource('coalesce-a');
+  await tick(DAY1);
+  await tick(DAY1);
+  expect((await submitted()).map(job => job.source)).toEqual(['coalesce-a']);
+});
+
+test.skipIf(slotDayEnd - slotNow < slotBounds.timeoutMs + 60_000)('private tiered atoms disabled by enabled_roles plus schedule submits no job or grant', async () => {
+  const now = Date.now();
+  await gitSource('atoms-disabled');
+  const backlog = await countExtractAtomsBacklog(engine, 'atoms-disabled');
+  await engine.setConfig(AUTO_DRAIN_NEXT_KIND_KEY, 'connector');
+  privatePolicy(tieredPrivatePolicy(['chat'], true));
+  await tick(now);
+  expect(await submitted()).toEqual([]);
+  const grants = await engine.executeRaw<{ count: number }>('SELECT count(*)::int AS count FROM codex_subscription_runs');
+  expect(Number(grants[0].count)).toBe(0);
+  const attempts = await engine.executeRaw<{ count: number }>('SELECT count(*)::int AS count FROM codex_subscription_attempts');
+  expect(Number(attempts[0].count)).toBe(0);
+  expect(await countExtractAtomsBacklog(engine, 'atoms-disabled')).toBe(backlog);
+  expect(await engine.getConfig(AUTO_DRAIN_NEXT_KIND_KEY)).toBe('connector');
+});
+
+test.skipIf(slotDayEnd - slotNow < slotBounds.timeoutMs + 60_000)('private tiered atoms enabled without a schedule refuses; enabled with schedule may dispatch', async () => {
+  const now = Date.now();
+  await gitSource('atoms-no-schedule');
+  privatePolicy(tieredPrivatePolicy(['atoms']));
+  await tick(now);
+  expect(await submitted()).toEqual([]);
+  const grants = await engine.executeRaw<{ count: number }>('SELECT count(*)::int AS count FROM codex_subscription_runs');
+  expect(Number(grants[0].count)).toBe(0);
+
+  await reset();
+  await engine.setConfig('autopilot.auto_drain.threshold', '1');
+  await engine.setConfig('autopilot.auto_drain.max_usd_per_day', '0.3');
+  await gitSource('atoms-scheduled');
+  privatePolicy(tieredPrivatePolicy(['atoms'], true));
+  await tick(now);
+  expect((await submitted()).map(job => job.source)).toEqual(['atoms-scheduled']);
+});
+
+test('strict private Codex backlog without recurring authorization is deferred without job or grant', async () => {
+  await gitSource('git-private');
+  privatePolicy({ mode: 'strict', model: 'codex-cli:fixture', bin: join(home, 'fixture-codex') });
+  await engine.setConfig(AUTO_DRAIN_NEXT_KIND_KEY, 'connector');
+  const backlog = await countExtractAtomsBacklog(engine, 'git-private');
+  const before = await engine.executeRaw<{ count: number }>('SELECT count(*)::int AS count FROM codex_subscription_runs');
+  const add = spyOn(queue, 'add');
+  let stderr = '';
+  const write = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => { stderr += String(chunk); return true; }) as typeof process.stderr.write;
+  try {
+    await withEnv({ GBRAIN_HOME: home }, () => submitAutoDrains(engine, queue, { timeoutMs: 60_000, jsonMode: true, now: () => DAY1 }));
+    expect(add).not.toHaveBeenCalled();
+  }
+  finally { process.stderr.write = write; add.mockRestore(); }
+  const deferred = stderr.split('\n').filter(Boolean).map(line => JSON.parse(line)).find(event => event.event === 'auto_drain_deferred');
+  expect(deferred).toMatchObject({ source_id: 'git-private', code: 'subscription_required' });
+  expect(await submitted()).toEqual([]);
+  expect(await countExtractAtomsBacklog(engine, 'git-private')).toBe(backlog);
+  expect(await engine.getConfig(AUTO_DRAIN_NEXT_KIND_KEY)).toBe('connector');
+  expect(await engine.executeRaw('SELECT count(*)::int AS count FROM codex_subscription_runs')).toEqual(before);
+});
+
+test.skipIf(slotDayEnd - slotNow < slotBounds.timeoutMs + 60_000)('private drain grant is source/day keyed and expires at the fixed UTC day deadline', async () => {
+  const now = Date.now();
+  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const dayEnd = dayStart + 86_400_000;
+  await gitSource('git-grant');
+  privatePolicy({ mode: 'strict', model: 'codex-cli:fixture', bin: join(home, 'fixture-codex'),
+    scheduled_jobs: { 'extract-atoms-drain': { maxAttempts: 3, maxTurns: 2, windowMs: 86_400_000 } } });
+  await tick(now, 60_000);
+  const [job] = await engine.executeRaw<{ id: number; source: string; idempotency_key: string }>(
+    "SELECT id, data->>'sourceId' AS source, idempotency_key FROM minion_jobs WHERE name='extract-atoms-drain'");
+  expect(job).toMatchObject({ source: 'git-grant', idempotency_key: `autopilot-extract-atoms-drain:git-grant:${new Date(now).toISOString().slice(0, 10)}` });
+  const grants = await engine.executeRaw<{ run_id: string; max_attempts: number; max_turns: number; deadline: Date | string }>(
+    'SELECT run_id, max_attempts, max_turns, deadline FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-job:${job.id}:%`]);
+  expect(grants).toHaveLength(1);
+  expect(grants[0]).toMatchObject({ max_attempts: 3, max_turns: 2 });
+  expect(new Date(grants[0].deadline).toISOString()).toBe(new Date(dayEnd).toISOString());
+});
+
+test.skipIf(slotDayEnd - slotNow < slotBounds.timeoutMs + 60_000)('a prior-day waiting drain blocks a new grant until terminal', async () => {
+  const now = Date.now();
+  const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const yesterday = dayStart - 86_400_000;
+  await gitSource('git-stale');
+  const backlog = await countExtractAtomsBacklog(engine, 'git-stale');
+  await priorJob('git-stale', yesterday, { status: 'waiting', attempts: 0 });
+  const oldJob = await engine.executeRaw<{ id: number; status: string }>(
+    "SELECT id, status FROM minion_jobs WHERE status='waiting' AND data->>'sourceId'='git-stale'");
+  privatePolicy({ mode: 'strict', model: 'codex-cli:fixture', bin: join(home, 'fixture-codex'),
+    scheduled_jobs: { 'extract-atoms-drain': { maxAttempts: 3, maxTurns: 2, windowMs: 86_400_000 } } });
+  const before = await engine.executeRaw<{ count: number }>('SELECT count(*)::int AS count FROM codex_subscription_runs');
+  let stderr = '';
+  const write = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => { stderr += String(chunk); return true; }) as typeof process.stderr.write;
+  const add = spyOn(queue, 'add');
+  try {
+    await withEnv({ GBRAIN_HOME: home }, () => submitAutoDrains(engine, queue, { timeoutMs: 60_000, jsonMode: true, now: () => now }));
+    expect(add).not.toHaveBeenCalled();
+  }
+  finally { process.stderr.write = write; add.mockRestore(); }
+  const deferred = stderr.split('\n').filter(Boolean).map(line => JSON.parse(line)).find(event => event.event === 'auto_drain_deferred');
+  expect(deferred).toMatchObject({ source_id: 'git-stale' });
+  expect(await engine.executeRaw<{ id: number; status: string }>("SELECT id, status FROM minion_jobs WHERE name='extract-atoms-drain'"))
+    .toEqual([oldJob[0]]);
+  expect(await engine.executeRaw('SELECT count(*)::int AS count FROM codex_subscription_runs')).toEqual(before);
+  expect(await countExtractAtomsBacklog(engine, 'git-stale')).toBe(backlog);
 });
 
 for (const row of [

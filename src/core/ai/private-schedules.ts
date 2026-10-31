@@ -2,7 +2,7 @@
 export interface PrivateScheduleAllowance {
   maxAttempts: number; maxTurns: number; windowMs: number; auxiliaryMaxUsd?: number;
 }
-export type PrivateSchedules = Partial<Record<'autopilot-cycle' | 'autopilot-global-maintenance' | 'nightly-quality-probe', PrivateScheduleAllowance>>;
+export type PrivateSchedules = Partial<Record<'autopilot-cycle' | 'autopilot-global-maintenance' | 'nightly-quality-probe' | 'extract-atoms-drain', PrivateScheduleAllowance>>;
 
 export function validatePrivateSchedules(value: unknown): PrivateSchedules | undefined {
   if (value === undefined) return undefined;
@@ -11,7 +11,7 @@ export function validatePrivateSchedules(value: unknown): PrivateSchedules | und
   if (!record(value)) return invalid();
   const result: PrivateSchedules = {};
   for (const [name, limits] of Object.entries(value)) {
-    if (!['autopilot-cycle', 'autopilot-global-maintenance', 'nightly-quality-probe'].includes(name) || !record(limits) ||
+    if (!['autopilot-cycle', 'autopilot-global-maintenance', 'nightly-quality-probe', 'extract-atoms-drain'].includes(name) || !record(limits) ||
         Object.keys(limits).some(k => !['maxAttempts', 'maxTurns', 'windowMs', 'auxiliaryMaxUsd'].includes(k))) return invalid();
     const { maxAttempts, maxTurns, windowMs, auxiliaryMaxUsd } = limits;
     if (![maxAttempts, maxTurns].every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 1 && n <= 1000) ||

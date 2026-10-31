@@ -31,8 +31,8 @@ publication and the host action loop remain unfinished.
 
 The trusted file plane optionally accepts `private_codex.scheduled_jobs`, with
 entries for `autopilot-cycle` (legacy full cycle),
-`autopilot-global-maintenance`, and `nightly-quality-probe`. Each entry has
-this shape:
+`autopilot-global-maintenance`, `nightly-quality-probe`, and
+`extract-atoms-drain`. Each entry has this shape:
 
 ```json
 {
@@ -44,18 +44,31 @@ this shape:
 ```
 
 This is recurring authorization: limits apply to each scheduled occurrence.
-There are no automatic defaults. Attempts/turns have the same bounds as the CLI;
-`windowMs` is a positive integer at most 24 hours. The optional positive
-`auxiliaryMaxUsd` separately authorizes API work for that job. Configuring these
-fields is a later activation decision, not a development or audit side effect.
+There are no automatic defaults. In private mode, a missing atom-drain schedule
+defers the backlog with `auto_drain_deferred`; it cannot fall through to an
+ordinary queue submission. A tiered private policy must **also** enable the
+`atoms` role (utility tier): schedule consent does not grant role permission.
+Attempts/turns have the same bounds as the CLI; `windowMs` is a positive integer
+at most 24 hours. The optional positive `auxiliaryMaxUsd` separately authorizes
+paid auxiliary API work, not a subscription attempt or aggregate spend limit.
+Configuring any of these fields is a later activation decision, not a development
+or audit side effect.
 
-The scheduler uses `slot start + windowMs` as the absolute deadline. Polling or
-restarting within the same slot reuses it. An expired slot refuses; a newer slot
-coalescing onto an active earlier job cannot extend that job's allowance and
-currently reports `subscription_identity_conflict`. This is an explicit deferral
-limitation; no new allowance is created. Existing scheduler cadence/single-flight
-checks and the durable one-call account lane still apply. Other automatic producers
-are not yet wired to recurring subscription grants.
+Cycle schedules use `slot start + windowMs` as the absolute deadline. Polling or
+restarting in the same slot reuses it. A newer cycle slot coalescing onto an
+active earlier job cannot extend its allowance and reports
+`subscription_identity_conflict`. Atom auto-drain instead uses a UTC-midnight
+occurrence per source and day: its grant expires at that midnight plus
+`windowMs`. An expired grant, or one without enough time left for the drain's
+bounded timeout, defers; a late poll never slides the deadline. A prior-day
+same-source in-flight drain also defers rather than receiving another grant.
+That precheck assumes one dispatcher; it is not a distributed transactional
+exclusion guarantee. The trusted schedule grant is bound to the file policy
+that supplied its limits; removing or changing that consent before queue
+binding refuses rather than adopting the old limits under a new policy. The
+queue still enforces its idempotency and admission fences.
+`autopilot.auto_drain.max_usd_per_day` is an approximate attempt-unit
+throttle, not measured provider spend or an aggregate paid-spend cap.
 
 `nightly-quality-probe` uses one UTC-day occurrence with an immutable deadline,
 attempt and turn counters, owner brain, fixture hash, route/search snapshot and

@@ -2,7 +2,7 @@ import type { BrainEngine } from '../engine.ts';
 import { createSubscriptionRun, SubscriptionAdmissionError, type SubscriptionEnvelope } from '../ai/subscription-admission.ts';
 import { withCodexSubscription, hasAdmittedCodexAttempt, codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { withAIInvocationGuard } from '../ai/invocation-guard.ts';
-import { privatePolicyBinding, readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, PrivateRoutingError } from '../ai/private-policy.ts';
+import { privatePolicyBinding, privatePolicyFingerprint, readPrivateCodexConfig, assertPrivateRoute, resolvePrivateModel, PrivateRoutingError } from '../ai/private-policy.ts';
 import { authorityDigest, authorizeJobExecution } from './submission-authority.ts';
 import { rowToMinionJob, type MinionJob, type MinionJobContext } from './types.ts';
 import { jobMayGenerate } from './subscription-job-kinds.ts';
@@ -58,9 +58,12 @@ export async function preflightSubscriptionSubmit(engine: BrainEngine, name: str
 }
 
 /** Versioned identity includes the durable payload, authority, route and source incarnation. */
-async function runIdentity(engine: BrainEngine, job: MinionJob): Promise<string> {
+async function runIdentity(engine: BrainEngine, job: MinionJob, expectedPolicyFingerprint?: string): Promise<string> {
   const policy = readPrivateCodexConfig();
   if (!policy) throw new SubscriptionAdmissionError('subscription_required');
+  if (expectedPolicyFingerprint !== undefined && privatePolicyFingerprint(policy) !== expectedPolicyFingerprint) {
+    throw new SubscriptionAdmissionError('subscription_identity_conflict');
+  }
   const data = job.data ?? {};
   const contextual = job.name === 'contextual_reindex_per_chunk';
   const sourceId = contextual ? data.expected_source_id : data.source_id ?? data.sourceId;
@@ -82,7 +85,7 @@ async function runIdentity(engine: BrainEngine, job: MinionJob): Promise<string>
 }
 
 /** Must run inside the queue insertion transaction, including every coalescing path. */
-export async function bindJobSubscription(engine: BrainEngine, job: MinionJob, grant?: JobSubscriptionAuthorization): Promise<void> {
+export async function bindJobSubscription(engine: BrainEngine, job: MinionJob, grant?: JobSubscriptionAuthorization, expectedPolicyFingerprint?: string): Promise<void> {
   if (!grant) return;
   if (!readPrivateCodexConfig() || job.submission_authority?.kind !== 'application') {
     throw new SubscriptionAdmissionError('subscription_required');
@@ -90,7 +93,7 @@ export async function bindJobSubscription(engine: BrainEngine, job: MinionJob, g
   if (Object.keys(grant).some(k => !['maxAttempts', 'maxTurns', 'deadline', 'parentRunId'].includes(k))) {
     throw new SubscriptionAdmissionError('subscription_invalid');
   }
-  const runId = await runIdentity(engine, job);
+  const runId = await runIdentity(engine, job, expectedPolicyFingerprint);
   const rows = await engine.executeRaw<{ run_id: string }>('SELECT run_id FROM codex_subscription_runs WHERE run_id LIKE $1', [`codex-job:${job.id}:%`]);
   // Legacy rows need an explicit new submission, never adoption during coalescing.
   if (!rows.length && job.coalesced) throw new SubscriptionAdmissionError('subscription_required');

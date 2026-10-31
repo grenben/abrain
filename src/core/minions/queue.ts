@@ -58,6 +58,8 @@ export interface TrustedSubmitOpts {
   spendAuthorization?: SpendAuthorization;
   /** Explicit bounded Codex subscription consent, never read from job data. */
   codexSubscription?: JobSubscriptionAuthorization;
+  /** Scheduler snapshot checked against the policy used for durable binding. */
+  scheduledPolicyFingerprint?: string;
 }
 
 const MIGRATION_VERSION = 7;
@@ -317,7 +319,7 @@ export class MinionQueue {
         if (trusted?.codexSubscription && (submitted.name !== jobName || authorityDigest(submitted.data) !== authorityDigest(data ?? {}))) {
           throw new Error('subscription_identity_conflict');
         }
-        await bindJobSubscription(tx, submitted, trusted?.codexSubscription);
+        await bindJobSubscription(tx, submitted, trusted?.codexSubscription, trusted?.scheduledPolicyFingerprint);
         return submitted;
       };
       // Client lock spans grant validation, capacity check and insertion.

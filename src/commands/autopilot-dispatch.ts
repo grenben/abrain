@@ -25,6 +25,9 @@ import { logError } from './autopilot.ts';
 import { readCheckoutHead } from '../core/checkout-head.ts';
 import { SYNC_ON_COMMIT_KEY } from '../core/sync-config-keys.ts';
 import { autopilotPaused } from '../core/autopilot-paths.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
+import { scheduledCodexSubmit } from '../core/minions/subscription-schedules.ts';
 
 /** Returns cycleOk: false only when the dispatch itself threw. */
 export async function dispatchAutopilotTick(
@@ -601,7 +604,8 @@ export async function submitAutoDrains(
   // count instead of a real-time spend ledger.
   const PER_RUN_USD = 0.3;
   const maxJobsToday = Math.max(0, Math.floor(maxUsdPerDay / PER_RUN_USD));
-  const utcDay = new Date(now()).toISOString().slice(0, 10);
+  const nowMs = now();
+  const utcDay = new Date(nowMs).toISOString().slice(0, 10);
 
   let submittedToday = 0;
   try {
@@ -671,9 +675,54 @@ export async function submitAutoDrains(
         process.stderr.write((jsonMode ? JSON.stringify({ event: 'auto_drain_source_skipped', source_id: src.id, reason }) : reason) + '\n');
         continue;
       }
+      let privatePolicy: ReturnType<typeof readPrivateCodexConfig>;
+      try {
+        privatePolicy = readPrivateCodexConfig();
+      } catch (e) {
+        logError('dispatch.auto-drain', e);
+        continue;
+      }
+      if (privatePolicy) {
+        const inFlight = await engine.executeRaw<{ one: number }>(
+          `SELECT 1 AS one FROM minion_jobs
+           WHERE name = 'extract-atoms-drain'
+             AND data->>'sourceId' = $1
+             AND status IN ('waiting','active','delayed','waiting-children','paused')
+             AND idempotency_key IS DISTINCT FROM $2
+           LIMIT 1`,
+          [src.id, idemKey],
+        );
+        if (inFlight.length > 0) {
+          const reason = 'a prior same-source extract-atoms-drain job is still in flight';
+          process.stderr.write((jsonMode
+            ? JSON.stringify({ event: 'auto_drain_deferred', source_id: src.id, reason, backlog })
+            : `[autopilot] deferring atom auto-drain for '${src.id}': ${reason} (backlog=${backlog})`) + '\n');
+          continue;
+        }
+      }
+      const data = { sourceId: src.id, window: bounds.windowSeconds, ...(kind === 'checkout' ? { repoPath: src.local_path } : {}) };
+      let scheduledSubmit: ReturnType<typeof scheduledCodexSubmit>;
+      try {
+        scheduledSubmit = scheduledCodexSubmit('extract-atoms-drain', data, `${utcDay}T00:00:00.000Z`, {
+          nowMs, minRemainingMs: bounds.timeoutMs,
+        });
+        if (!scheduledSubmit && privatePolicy) throw new Error('private auto-drain schedule did not authorize this job');
+      } catch (e) {
+        if (e instanceof SubscriptionAdmissionError && (e.code === 'subscription_required' || e.code === 'subscription_exhausted')) {
+          const reason = e.code === 'subscription_required'
+            ? 'recurring subscription authorization not configured for extract-atoms-drain'
+            : 'scheduled recurring subscription authorization is exhausted or cannot cover the job timeout';
+          process.stderr.write((jsonMode
+            ? JSON.stringify({ event: 'auto_drain_deferred', source_id: src.id, code: e.code, reason, backlog })
+            : `[autopilot] deferring atom auto-drain for '${src.id}': ${reason} (backlog=${backlog})`) + '\n');
+        } else {
+          logError('dispatch.auto-drain', e);
+        }
+        continue;
+      }
       const job = await queue.add(
         'extract-atoms-drain',
-        { sourceId: src.id, window: bounds.windowSeconds, ...(kind === 'checkout' ? { repoPath: src.local_path } : {}) },
+        data,
         {
           queue: 'default',
           idempotency_key: idemKey,
@@ -683,8 +732,9 @@ export async function submitAutoDrains(
           max_attempts: 3,
           timeout_ms: bounds.timeoutMs,
         },
-        { allowProtectedSubmit: true },
+        { allowProtectedSubmit: true, ...(scheduledSubmit ?? {}) },
       );
+      if (job.coalesced) continue;
       submittedToday++;
       next = kind === 'checkout' ? 'connector' : 'checkout';
       if (jsonMode) {

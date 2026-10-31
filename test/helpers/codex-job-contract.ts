@@ -793,6 +793,54 @@ test('schedule limits reject malformed opt-ins, expired slots and inferred autho
   expect(() => scheduledCodexSubmit('autopilot-cycle', {}, new Date(Date.now() - 700000).toISOString())).toThrow('subscription_exhausted');
   expect(scheduledCodexSubmit('autopilot-cycle', { phases: SOURCE_FRESHNESS_PHASES }, 'unused')).toBeUndefined();
 });
+test('scheduled scalar admission cannot outlive its file policy, while unchanged replay keeps its identity', async () => {
+  const slot = new Date().toISOString();
+  const policy = (windowMs: number) => writeFileSync(join(root, '.gbrain', 'config.json'), JSON.stringify({
+    private_codex: { mode: 'strict', model: 'codex-cli:gpt-test', bin,
+      scheduled_jobs: { 'autopilot-global-maintenance': { maxAttempts: 2, maxTurns: 2, windowMs } } },
+  }));
+  policy(600_000);
+  const admission = scheduledCodexSubmit('autopilot-global-maintenance', {}, slot)!;
+  const opts = { idempotency_key: 'scheduled-policy-scalar' };
+  const first = await queue.add('autopilot-global-maintenance', {}, opts, admission);
+  const replay = scheduledCodexSubmit('autopilot-global-maintenance', {}, slot)!;
+  expect((await queue.add('autopilot-global-maintenance', {}, opts, replay)).id).toBe(first.id);
+  policy(300_000);
+  const stale = scheduledCodexSubmit('autopilot-global-maintenance', {}, slot)!;
+  await expect(queue.add('autopilot-global-maintenance', {}, { idempotency_key: 'stale-policy-scalar' }, admission))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  await expect(queue.add('autopilot-global-maintenance', {}, opts, stale))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(1);
+  expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(1);
+  expect(count()).toBe(0);
+});
+test('scheduled tiered worker binding refuses after its file schedule is removed', async () => {
+  const path = join(root, '.gbrain', 'config.json');
+  const policy = (scheduled: boolean) => writeFileSync(path, JSON.stringify({ private_codex: {
+    mode: 'strict', bin,
+    models: { utility: 'codex-cli:utility-test', reasoning: 'codex-cli:gpt-test', deep: 'codex-cli:deep-test', subagent: 'codex-cli:action-test' },
+    enabled_roles: ['chat', 'enrichment'],
+    ...(scheduled ? { scheduled_jobs: { 'autopilot-global-maintenance': { maxAttempts: 2, maxTurns: 2, windowMs: 600_000 } } } : {}),
+  } }));
+  policy(true);
+  const admission = scheduledCodexSubmit('autopilot-global-maintenance', {}, new Date().toISOString())!;
+  policy(false);
+  await expect(queue.add('autopilot-global-maintenance', {}, {}, admission))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(await engine.executeRaw('SELECT id FROM minion_jobs')).toHaveLength(0);
+  expect(await engine.executeRaw('SELECT run_id FROM codex_subscription_runs')).toHaveLength(0);
+  policy(true);
+  const job = await queue.add('autopilot-global-maintenance', {}, {}, admission);
+  const claimedJob = await queue.claim('scheduled-policy-worker', 60_000, 'default', ['autopilot-global-maintenance']);
+  expect(claimedJob?.id).toBe(job.id);
+  policy(false);
+  let entered = false;
+  await expect(runWithJobSpend(engine, claimedJob!, ctxFor(claimedJob!), async () => { entered = true; }))
+    .rejects.toMatchObject({ code: 'subscription_identity_conflict' });
+  expect(entered).toBe(false);
+  expect(count()).toBe(0);
+});
 test('cycle budgets require subscription authority and never fabricate prices, even with overrides', async () => {
   const estimate = { modelId: 'codex-cli:gpt-test', estimatedInputTokens: 100, maxOutputTokens: 100 };
   const meter = new BudgetMeter({ budgetUsd: 0.01, phase: 'fixture', auditPath: join(root, 'cycle-budget.jsonl'),
