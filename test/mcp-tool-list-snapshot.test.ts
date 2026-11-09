@@ -85,10 +85,12 @@ async function handshake(mode: Mode, eager: boolean): Promise<{ initialize: stri
 type Pair = { manifest: { initialize: string; tools: string }; eager: { initialize: string; tools: string } };
 let results: Pair[] = [];
 beforeAll(async () => {
-  results = await Promise.all(MODES.map(async mode => {
-    const [manifest, eager] = await Promise.all([handshake(mode, false), handshake(mode, true)]);
-    return { manifest, eager };
-  }));
+  results = [];
+  for (const mode of MODES) {
+    const manifest = await handshake(mode, false);
+    const eager = await handshake(mode, true);
+    results.push({ manifest, eager });
+  }
 }, 180_000);
 
 describe('stdio initialize + tools/list: manifest path == eager registry path', () => {
