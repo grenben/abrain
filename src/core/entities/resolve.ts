@@ -489,7 +489,7 @@ export async function resolveStrictEntityReference(
   engine: BrainEngine,
   source_id: string,
   raw: string,
-  opts: { sameName?: boolean; excludePrivate?: boolean; forCaller?: boolean } = {},
+  opts: { sameName?: boolean; excludePrivate?: boolean; forCaller?: boolean; strictErrors?: boolean } = {},
 ): Promise<StrictResolution> {
   const trimmed = raw.trim();
   if (!trimmed) return { slug: null, miss: 'no_page' };
@@ -533,7 +533,7 @@ export async function resolveStrictEntityReference(
     const aliased = await pick(await live(await aliasHitSlugs(engine, source_id, trimmed)), 'alias_exact');
     if (aliased) return aliased;
   } catch (err) {
-    if (!isMissingSchemaObject(err, 'table', 'page_aliases')) throw err;
+    if (opts.strictErrors || !isMissingSchemaObject(err, 'table', 'page_aliases')) throw err;
   }
   if (opts.sameName && !isBareName(trimmed)) {
     try {
@@ -548,11 +548,11 @@ export async function resolveStrictEntityReference(
       const named = await pick(rows.filter(row => isFactEntityPage(row.slug, row.type) && sameEntityName(trimmed, row.title, row.slug)), 'same_name');
       if (named) return named;
     } catch (err) {
-      if (!isMissingTrigramError(err)) throw err;
+      if (opts.strictErrors || !isMissingTrigramError(err)) throw err;
     }
   }
   if (isBareName(trimmed) && token) {
-    const prefixed = (await findPrefixCandidates(engine, source_id, token)).map(c => c.slug);
+    const prefixed = (await findPrefixCandidates(engine, source_id, token, opts.strictErrors)).map(c => c.slug);
     // Readable scope applies here too, so a private namesake never changes a remote outcome.
     if ((opts.excludePrivate ? await live(prefixed) : prefixed).length > 0) return { slug: null, miss: 'unverified' };
   }
@@ -688,6 +688,7 @@ export async function findPrefixCandidates(
   engine: BrainEngine,
   source_id: string,
   token: string,
+  strictErrors = false,
 ): Promise<Array<{ slug: string; connection_count: number }>> {
   if (!token) return [];
   // Build LIKE pattern set for each configured directory:
@@ -721,7 +722,8 @@ export async function findPrefixCandidates(
       [source_id, patterns],
     );
     return rows;
-  } catch {
+  } catch (err) {
+    if (strictErrors) throw err;
     // Defensive: any SQL hiccup returns "no candidates" so the caller's
     // ambiguity gate doesn't crash the cycle. The downstream
     // `resolvePhantomCanonical` runs the per-dir tryPrefixExpansion path

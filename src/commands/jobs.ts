@@ -108,6 +108,7 @@ export const GATEWAY_REFRESH_JOB_NAMES = new Set([
   'facts-absorb',
   'contextual_reindex_per_chunk',
   'autopilot-cycle',
+  'autopilot-global-maintenance',
   'synthesize',
   'patterns',
   'consolidate',
@@ -569,7 +570,7 @@ export async function registerBuiltinHandlers(
   }
 
   registerBuiltinJob(worker, engine, 'autopilot-cycle', makeAutopilotCycleHandler(engine));
-  worker.register('autopilot-global-maintenance', makeAutopilotGlobalMaintenanceHandler(engine));
+  registerBuiltinJob(worker, engine, 'autopilot-global-maintenance', makeAutopilotGlobalMaintenanceHandler(engine));
 
   // Shell handler is always registered. Runtime guard lives inside the handler
   // so claimed jobs emit a clear rejection log on workers started without
@@ -667,7 +668,7 @@ export async function registerBuiltinHandlers(
   // submit). Body in skillopt/job.ts: re-resolves the role models and re-runs
   // the strict check at execution time.
   worker.register('skillopt', async (job) =>
-    (await import('../core/skillopt/job.ts')).runSkillOptJob(engine, job.data));
+    (await import('../core/skillopt/job.ts')).runSkillOptJob(engine, job.data, job));
 
   process.stderr.write('[minion worker] brain-health-100 handlers registered (12 ops, 4 protected) + embed-backfill (v0.40) + embed-catch-up (v0.42) + unify-types (v0.42) + skillopt (v0.42.0.0, protected)\n');
 

@@ -35,7 +35,7 @@ import { resolveExcludePrivatePages, isPrivatePage, findPrivateOnlySlugs, isPriv
 import { unquoteAnyTranscriptText } from '../search/transcript-quote.ts';
 import { withIgnoredPrivacyLabelNotice } from '../search/ignored-privacy-labels.ts';
 import { LIST_PAGES_DESCRIPTION, CAPTURE_DESCRIPTION } from '../operations-descriptions.ts';
-import { listPagesPagination, listingTruncatedNotice, unusedTypeNotice } from './list-pages-pagination.ts';
+import { listPagesPagination, listingTruncatedNotice, unusedTypeNotice, listPageOrder, LIST_PAGES_SORT_VALUES } from './list-pages-pagination.ts';
 import { OperationError, opError, type Operation, type OperationContext } from './contract.ts';
 import { invalidParam, readFix } from './op-fix.ts';
 import { WHERE_PARAM, whereOpParam } from './where-param.ts';
@@ -147,7 +147,8 @@ const get_page: Operation = {
     // already apply (trusted local + the operator opt-outs resolve to false).
     // A gated private page behaves exactly like a missing one (no existence
     // oracle), composing with — not replacing — the source-grant scope above.
-    const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
+    const excludePrivate = !!ctx.nativeDiscovery || ctx.nativeDiscoveryRequired === true ||
+      await resolveExcludePrivatePages(ctx.engine, ctx.remote);
 
     let snapshot = await ctx.engine.readPageSnapshot(slug, { includeDeleted, excludePrivate, ...sourceOpts, resolveAlias: true });
     let page = snapshot?.page ?? null;
@@ -508,9 +509,6 @@ const purge_deleted_pages: Operation = {
   cliHints: { name: 'purge-deleted', hidden: true },
 };
 
-const LIST_PAGES_SORT_VALUES = ['updated_desc', 'updated_asc', 'created_desc', 'slug'] as const;
-type ListPagesSort = typeof LIST_PAGES_SORT_VALUES[number];
-
 const list_pages: Operation = {
   name: 'list_pages',
   idempotent: true,
@@ -552,23 +550,8 @@ const list_pages: Operation = {
     source_ids: { ...SOURCE_IDS_PARAM, fullSurfaceOnly: true },
   },
   handler: async (ctx, p) => {
-    // Whitelist the sort enum at the handler before passing to the engine.
-    // Engines also whitelist via PAGE_SORT_SQL but defending here keeps
-    // unsupported strings from reaching the SQL layer.
-    const rawSort = p.sort as string | undefined;
-    let sort = rawSort && (LIST_PAGES_SORT_VALUES as readonly string[]).includes(rawSort)
-      ? (rawSort as ListPagesSort)
-      : undefined;
-    // The keyset is only coherent under updated_asc's (updated_at, slug) total order.
-    const updatedAfter = typeof p.updated_after === 'string' ? p.updated_after : undefined;
-    const updatedAfterSlug = typeof p.updated_after_slug === 'string' ? p.updated_after_slug : undefined;
-    if (updatedAfterSlug !== undefined && updatedAfter === undefined) {
-      throw invalidParam(ctx, 'list_pages', 'updated_after', "list_pages: updated_after_slug requires updated_after (the cursor row's updated_at_iso).", { def: list_pages.params.updated_after, example: '2026-08-11T00:00:00.000000Z' });
-    }
-    const updatedAfterKeyset = updatedAfter !== undefined && updatedAfterSlug !== undefined
-      ? { updatedAt: updatedAfter, slug: updatedAfterSlug }
-      : undefined;
-    if (updatedAfterKeyset) sort = 'updated_asc';
+    if (ctx.nativeDiscoveryRequired || ctx.nativeDiscovery) return (await import('./native-discovery.ts')).nativeDiscovery(ctx, p, 'list_pages');
+    const { sort, updatedAfter, updatedAfterKeyset } = listPageOrder(ctx, p);
     // v0.34.1 (#861 — P0 leak seal): thread the auth'd client's source scope
     // into the listPages filter so an OAuth client scoped to src-A cannot
     // enumerate src-B pages. Pre-fix, ctx.sourceId / ctx.auth?.allowedSources

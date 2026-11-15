@@ -8,6 +8,7 @@
 import type { SearchOpts } from '../types.ts';
 import { clampSearchLimit } from '../engine.ts';
 import { searchLimitCap } from './eval-pool-depth.ts';
+import { utcSearchDateBound } from './date-bounds.ts';
 import { getFtsLanguage } from '../fts-language.ts';
 import { chunkGenerationFilter, requiresSafeChunks } from './safe-chunks.ts';
 import { normalizeAlias } from './alias-normalize.ts';
@@ -64,7 +65,16 @@ export function buildSearchTitlesStatement(query: string, opts: SearchOpts | und
     .map(p => `websearch_to_tsquery('${ftsLang}', gbrain_fts_input(${p}))`);
   const tsq = tsqueries.length === 1 ? tsqueries[0] : `(${tsqueries.join(' || ')})`;
   const titleOnly = safeChunks || dialect.relaxed === true;
-  const matchSql = titleOnly ? `ts_filter(p.search_vector, '{a}') @@ ${tsq}` : `p.search_vector @@ ${tsq}`;
+  // PostgreSQL's parser can index a title with a trailing NBSP ("Acme ") as
+  // a distinct lexeme from "Acme". Keep this recovery probe in the indexed
+  // search_vector predicate; exact-title normalization already treats them
+  // as equivalent. It is limited to plain single-token ASCII queries.
+  const nbspQuery = /^[A-Za-z0-9]+$/.test(query)
+    ? `websearch_to_tsquery('${ftsLang}', gbrain_fts_input($1 || chr(160)))`
+    : null;
+  const matchQueries = nbspQuery ? [...tsqueries, nbspQuery] : tsqueries;
+  const matchTsq = matchQueries.length === 1 ? matchQueries[0] : `(${matchQueries.join(' || ')})`;
+  const matchSql = titleOnly ? `ts_filter(p.search_vector, '{a}') @@ ${matchTsq}` : `p.search_vector @@ ${matchTsq}`;
   const rankSql = titleOnly ? `ts_rank_cd(ts_filter(p.search_vector, '{a}'), ${tsq})` : `ts_rank_cd(p.search_vector, ${tsq})`;
 
   let filters = '';
@@ -84,11 +94,11 @@ export function buildSearchTitlesStatement(query: string, opts: SearchOpts | und
   // Date filters read COALESCE(effective_date, …), the keyword arm's
   // effective-date-first convention.
   if (opts?.afterDate) {
-    params.push(opts.afterDate);
+    params.push(utcSearchDateBound(opts.afterDate));
     filters += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.afterDateInclusive ? '>=' : '>'} $${params.length}::text::timestamptz`;
   }
   if (opts?.beforeDate) {
-    params.push(opts.beforeDate);
+    params.push(utcSearchDateBound(opts.beforeDate));
     filters += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.beforeDateInclusive ? '<=' : '<'} $${params.length}::text::timestamptz`;
   }
   if (opts?.sourceIds && opts.sourceIds.length > 0) {
@@ -147,4 +157,3 @@ export function buildSearchTitlesStatement(query: string, opts: SearchOpts | und
   `;
   return { sql, params, safeChunks };
 }
-

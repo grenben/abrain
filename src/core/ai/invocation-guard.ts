@@ -1,3 +1,4 @@
+import { assertPrivateRoute } from './private-policy.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface AIInvocation {
@@ -137,6 +138,7 @@ export async function invokeAI<T>(call: AIInvocation, run: () => Promise<T>, usa
 
 async function admitAndRun<T>(call: AIInvocation, run: () => Promise<T>, usage: (result: T) => AIInvocationUsage | null | Promise<AIInvocationUsage | null>,
   rejected?: (error: unknown) => AIInvocationUsage | null): Promise<T> {
+  if (call.kind === 'chat' || call.kind === 'decide') assertPrivateRoute(call.model, call.operation);
   const guard = guards.getStore();
   if (!guard) return run();
   let permit: AIInvocationPermit;

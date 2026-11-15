@@ -1,4 +1,7 @@
 import { realpathSync } from 'node:fs';
+import { readPrivateCodexConfig, privatePolicyFingerprint, requirePrivateRole, PrivateRoutingError } from '../ai/private-policy.ts';
+import type { PrivateRole } from '../ai/private-roles.ts';
+import { isQuarantined } from '../quarantine.ts';
 import { enterClaimStep, type ClaimPhaseClock } from './claim-phase.ts';
 import { boundedReads } from './bounded-reads.ts';
 import { join } from 'node:path';
@@ -48,6 +51,14 @@ export interface MaintenanceAuthority {
   binding: WorktreeBinding | null;
   /** #5854: the job's publish wait (one wait per job, bounded by its deadline); a fresh 30 s budget when absent. */
   wait?: MaintenanceWriteWait;
+}
+
+let privateConceptPreparedTestHook: ((row: WriteRequest, mutation: PreparedMutation) => Promise<void>) | null = null;
+export function __setPrivateConceptPreparedHookForTests(hook: ((row: WriteRequest, mutation: PreparedMutation) => Promise<void>) | null):
+  () => void {
+  const previous = privateConceptPreparedTestHook;
+  privateConceptPreparedTestHook = hook;
+  return () => { privateConceptPreparedTestHook = previous; };
 }
 
 function ownerStatusFix(sourceId: string): Action {
@@ -140,7 +151,7 @@ export async function maintenancePreflight(engine: BrainEngine, sourceId: string
   return { writer, binding: writeThrough ? binding : null, wait: new MaintenanceWriteWait(opts.deadlineAtMs) };
 }
 
-async function validateMaintenance(engine: BrainEngine, authority: MaintenanceAuthority, slug: string): Promise<void> {
+export async function validateMaintenance(engine: BrainEngine, authority: MaintenanceAuthority, slug: string): Promise<void> {
   const [source] = await engine.executeRaw<{ incarnation: string; archived: boolean }>(
     'SELECT incarnation,archived FROM sources WHERE id=$1', [authority.writer.sourceId]);
   if (!source || source.archived || source.incarnation !== authority.writer.sourceIncarnation) {
@@ -156,10 +167,43 @@ async function validateMaintenance(engine: BrainEngine, authority: MaintenanceAu
   await authorizePageVisibility(engine, authority.writer, slug);
 }
 
+type PrivateConceptIntent = {
+  private_concept_evidence?: unknown;
+  private_concept_authority?: { role?: unknown; policy_fingerprint?: unknown } | unknown;
+};
+
+async function validatePrivateConceptPublication(engine: BrainEngine, sourceId: string, intent: PrivateConceptIntent): Promise<void> {
+  const rawEvidence = intent.private_concept_evidence;
+  const binding = intent.private_concept_authority;
+  if (rawEvidence === undefined && binding === undefined) return;
+  if (!Array.isArray(rawEvidence) || !rawEvidence.length || !binding || typeof binding !== 'object'
+    || (binding as { role?: unknown }).role !== 'concepts'
+    || typeof (binding as { policy_fingerprint?: unknown }).policy_fingerprint !== 'string') {
+    throw opError('invalid_params', 'The private concept publication fence is malformed.', 'No concept publication was admitted.');
+  }
+  const policy = readPrivateCodexConfig();
+  if (!policy) throw new PrivateRoutingError('maintenance:private_concept_policy_missing');
+  const role = (binding as { role: PrivateRole }).role;
+  requirePrivateRole(policy, role);
+  if (privatePolicyFingerprint(policy) !== (binding as { policy_fingerprint: string }).policy_fingerprint) {
+    throw new PrivateRoutingError('maintenance:private_concept_policy_changed');
+  }
+  const pages = rawEvidence as Array<{ slug?: unknown; revision?: unknown }>;
+  for (const page of pages) {
+    if (typeof page?.slug !== 'string' || typeof page.revision !== 'string') {
+      throw opError('invalid_params', 'The private concept evidence fence is malformed.', 'No concept publication was admitted.');
+    }
+    const current = await engine.readPageSnapshot(page.slug, { sourceId, excludePrivate: true });
+    if (!current || current.revision !== page.revision || isQuarantined(current.page.frontmatter)) throw opError('revision_conflict', 'Private concept evidence changed before publication.',
+      `Evidence page ${page.slug} in '${sourceId}' changed or became private, so this concept was not published.`);
+  }
+}
+
 async function submitMaintenance(engine: BrainEngine, authority: MaintenanceAuthority, slug: string,
-  intent: Record<string, unknown>, requestId: string, file = true): Promise<Record<string, unknown>> {
+  intent: Record<string, unknown>, requestId: string, file = true, beforeAdmission?: (tx: BrainEngine) => Promise<void>): Promise<Record<string, unknown>> {
   const prepared = await prepareMaintenanceAdmission(engine, authority, slug, intent, requestId, file);
-  return awaitMaintenance(engine, authority, 'prior' in prepared ? prepared.prior : await admitWrite(engine, prepared.admission));
+  return awaitMaintenance(engine, authority, 'prior' in prepared ? prepared.prior : await admitWrite(engine, prepared.admission,
+    undefined, undefined, beforeAdmission));
 }
 
 function awaitMaintenance(engine: BrainEngine, authority: MaintenanceAuthority, row: WriteRequest): Promise<Record<string, unknown>> {
@@ -171,6 +215,7 @@ function awaitMaintenance(engine: BrainEngine, authority: MaintenanceAuthority, 
 async function prepareMaintenanceAdmission(engine: BrainEngine, authority: MaintenanceAuthority, slug: string,
   intent: Record<string, unknown>, requestId: string, file: boolean): Promise<{ prior: WriteRequest } | { admission: WriteAdmission }> {
   await validateMaintenance(engine, authority, slug);
+  await validatePrivateConceptPublication(engine, authority.writer.sourceId, intent);
   const prior = await getWriteRequest(engine, authority.writer.principal, requestId);
   if (prior) {
     await authorizeStoredRequest(engine, prior);
@@ -254,6 +299,8 @@ export interface MaintenanceEventProjection { depth_slug: string; date: string; 
  * `labelEdit` (GST-2468): the label keys the write sets or removes; the canonical file keeps its bytes except those lines (page-prepare.ts labelEditFile).
  */
 type MaintenancePageOptions = { requestId?: string; expectedRevision: string | null; file?: boolean;
+  evidence?: readonly { slug: string; revision: string }[]; beforeAdmission?: (tx: BrainEngine) => Promise<void>;
+  privateAuthority?: { role: 'concepts'; policyFingerprint: string };
   eventProjection?: MaintenanceEventProjection; derivation?: DerivationDeclaration; keepTrust?: true; labelEdit?: LabelEdit };
 
 /** A maintenance page publication's intent and request id; `batch` (G6) is the run's batch id, part of both. */
@@ -262,16 +309,20 @@ function maintenancePageRequest(authority: MaintenanceAuthority, slug: string, c
   const derivation = options.derivation ? { derivation: options.derivation } : {};
   const grouped = batch ? { maintenance_batch: batch } : {};
   const keep = { ...(options.keepTrust ? { keep_trust: true } : {}), ...(options.labelEdit ? { label_edit: options.labelEdit } : {}) };
-  return { intent: { kind: 'managed_maintenance_page', content, expected_revision: options.expectedRevision, ...projection, ...derivation, ...grouped, ...keep },
+  const evidence = options.evidence ? { private_concept_evidence: options.evidence } : {};
+  const privateAuthority = options.privateAuthority ? { private_concept_authority: {
+    role: options.privateAuthority.role, policy_fingerprint: options.privateAuthority.policyFingerprint,
+  } } : {};
+  return { intent: { kind: 'managed_maintenance_page', content, expected_revision: options.expectedRevision, ...projection, ...derivation, ...grouped, ...keep, ...evidence, ...privateAuthority },
     requestId: options.requestId ?? maintenanceRequestId({ authority: authority.writer, slug, content, revision: options.expectedRevision, file: options.file ?? true,
-      ...projection, ...derivation, ...grouped, ...keep }) };
+      ...projection, ...derivation, ...grouped, ...keep, ...evidence, ...privateAuthority }) };
 }
 
 /** `derivation` (#5575 I2): the deriver's taint declaration; the page and its edges are stamped from it at publication. */
 export async function publishMaintenancePage(engine: BrainEngine, authority: MaintenanceAuthority, slug: string,
   content: string, options: MaintenancePageOptions): Promise<Record<string, unknown>> {
   const { intent, requestId } = maintenancePageRequest(authority, slug, content, options);
-  return submitMaintenance(engine, authority, slug, intent, requestId, options.file);
+  return submitMaintenance(engine, authority, slug, intent, requestId, options.file, options.beforeAdmission);
 }
 
 /**
@@ -299,7 +350,13 @@ export async function publishMaintenancePages(engine: BrainEngine, authority: Ma
     () => retryWriteAdmission(`maintenance batch ${batch}`, remaining => engine.transaction(async tx => {
       await declareDurablePersistence(tx, `${Math.min(1000, remaining)}ms`, `${remaining}ms`);
       const rows: WriteRequest[] = [];
-      for (const admission of fresh) rows.push(await admitWriteInTransaction(tx, admission));
+      let nextAdmission = 0;
+      for (const entry of prepared) {
+        if (!('admission' in entry)) continue;
+        const page = pages[prepared.indexOf(entry)]!;
+        await page.beforeAdmission?.(tx);
+        rows.push(await admitWriteInTransaction(tx, fresh[nextAdmission++]!));
+      }
       return rows;
     }), 30_000, error => engine.reconnect({ error }))).catch(error => ({ error }));
   const out: Array<{ receipt: Record<string, unknown> } | { error: unknown }> = [];
@@ -684,15 +741,32 @@ async function prepareMaintenanceKind(engine: BrainEngine, row: WriteRequest, co
   if (row.intent?.kind === 'managed_maintenance_take_reproject') return (await import('../repair/take-supersession.ts')).prepareTakeReprojection(engine, row);
   if (row.intent?.kind === 'managed_maintenance_timeline_extract') return (await import('../../commands/extract-timeline-db.ts')).prepareTimelineExtract(engine, row);
   if (row.intent?.kind === 'managed_maintenance_meeting_timeline') return (await import('../extract-timeline-from-meetings.ts')).prepareMeetingTimeline(engine, row);
+  if (row.intent?.kind === 'managed_maintenance_codex_page' || row.intent?.kind === 'managed_maintenance_codex_synthesis_page') {
+    return (await import('../cycle/codex-publication-prepare.ts')).prepareCodexPublication(engine, row, config, clock);
+  }
   if (row.intent?.kind === 'managed_maintenance_page') {
+    await validatePrivateConceptPublication(engine, row.source_id, row.intent);
     const page = await preparePageMutation(engine, row.intent.expected_revision === null
       ? { ...row, intent: { ...row.intent, expected_revision: undefined } } : row, config, undefined, undefined, { clock });
     // GST-2521: keep_trust is the owner's label door, which also raises the page's label guard.
-    const prepared: PreparedMutation = row.intent.keep_trust === true ? { ...page, apply: (tx, preimage) => withTrustKeep(tx, ['pages'], async () => {
+    const trustPrepared: PreparedMutation = row.intent.keep_trust === true ? { ...page, apply: (tx, preimage) => withTrustKeep(tx, ['pages'], async () => {
       const outcome = await page.apply(tx, preimage);
       await raisePageLabelGuard(tx, row.source_id, row.slug);
       return outcome;
     }) } : page;
+    const privateFence = row.intent.private_concept_authority !== undefined || row.intent.private_concept_evidence !== undefined;
+    const evidencePages = Array.isArray(row.intent.private_concept_evidence)
+      ? row.intent.private_concept_evidence as Array<{ slug: string; revision: string }> : [];
+    const prepared: PreparedMutation = privateFence ? {
+      ...trustPrepared,
+      additionalPageKeys: [...trustPrepared.additionalPageKeys ?? [],
+        ...evidencePages.map(item => ({ sourceId: row.source_id, slug: item.slug }))],
+      validate: async tx => {
+        await trustPrepared.validate?.(tx);
+        await validatePrivateConceptPublication(tx, row.source_id, row.intent!);
+      },
+    } : trustPrepared;
+    if (privateFence) await privateConceptPreparedTestHook?.(row, prepared);
     const projection = row.intent.event_projection as MaintenanceEventProjection | undefined;
     if (!projection) return prepared;
     // #5523: the event page and its depth-page timeline row commit together in

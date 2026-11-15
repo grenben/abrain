@@ -310,6 +310,20 @@ const MATRIX: Record<CyclePhase, Entry> = {
     reply: () => JSON.stringify(['You were right about widget launches in 5 of 5 calls.']),
     assert: async ({ result }) => { expect(result.details.total_resolved).toBe(5); },
   },
+  auto_think: {
+    // The unset setting is the supported default: the cycle dispatches the
+    // phase, but it must not infer or publish until the operator opts in.
+    seed: async ({ engine }) => {
+      await engine.executeRaw("DELETE FROM config WHERE key='dream.auto_think.enabled'");
+    },
+    assert: async ({ engine, result, calls }) => {
+      expect(await engine.getConfig('dream.auto_think.enabled')).toBeFalsy();
+      expect(result.status).toBe('skipped');
+      expect(result.summary).toContain('dream.auto_think.enabled is false');
+      expect(calls).toHaveLength(0);
+      expect(await engine.executeRaw('SELECT operation FROM persistence_requests WHERE sequence>$1', [since])).toEqual([]);
+    },
+  },
   drift: {
     config: { 'dream.drift.enabled': 'true' },
     seed: async ({ engine, sourceId }) => put(engine, sourceId, 'notes/drift-example', page('note', 'Drift',

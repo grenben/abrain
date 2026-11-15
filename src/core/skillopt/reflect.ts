@@ -31,6 +31,8 @@ import { resolveChatContextTokens } from '../ai/model-resolver.ts';
 import { isSkilloptMustAbort } from './must-abort.ts';
 import { SKILLOPT_PURPOSE, type EditOp, type ScoredRollout, type Judge, type RuleCheck } from './types.ts';
 import type { RejectedEntry } from './rejected-buffer.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexReflect, runCodexRewrite } from './codex-reflect.ts';
 
 /**
  * Render ONE rule check as a plain-English requirement the optimizer can target.
@@ -165,6 +167,8 @@ export interface SkillBodyTruncation {
 }
 
 export interface ReflectResult {
+  cacheHits?: number;
+  billing?: { kind: 'subscription'; costUsd: null; remainingQuota: null };
   /** Edits proposed from FAILURE analysis. */
   failureEdits: EditOp[];
   /** Edits proposed from SUCCESS analysis. */
@@ -205,6 +209,7 @@ function addUsage(into: ReflectResult['usage'], from: ChatResult['usage']): void
  * their reflect call (no point asking for edits without data).
  */
 export async function runReflect(opts: ReflectOpts): Promise<ReflectResult> {
+  if (readPrivateCodexConfig()) return runCodexReflect(opts);
   const acc: ReflectAccumulator = { usage: emptyUsage(), errors: [], calls: 0, usableReplies: 0, invalidEditsDropped: 0 };
 
   const failureEdits = opts.failures.length > 0
@@ -223,6 +228,8 @@ const ONE_SHOT_REWRITE_SYSTEM = `You are SkillOpt's optimizer in ONE-SHOT REWRIT
 Output ONLY the rewritten skill body as markdown — no JSON, no code fence, no preamble, no commentary. Do NOT include or modify the YAML frontmatter (it is not shown to you and is out of scope). Keep the same general structure and headings unless a change clearly helps; be surgical, not verbose.`;
 
 export interface OneShotRewriteResult {
+  cacheHit?: boolean;
+  billing?: ReflectResult['billing'];
   /** The rewritten skill body (frontmatter NOT included — caller re-attaches). */
   newBody: string;
   usage: ReflectResult['usage'];
@@ -245,6 +252,7 @@ const ONE_SHOT_OUTPUT_SLACK_TOKENS = 1024;
  * returned as a body — it would be promoted as a shorter skill.
  */
 export async function runOneShotRewrite(opts: ReflectOpts): Promise<OneShotRewriteResult> {
+  if (readPrivateCodexConfig()) return runCodexRewrite(opts);
   const usage = emptyUsage();
   const chat = opts.chatFn ?? gatewayChat;
   const maxTokens = opts.maxTokens ?? defaultMaxOutputTokens(opts.optimizerModel);

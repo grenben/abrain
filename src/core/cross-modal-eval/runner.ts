@@ -17,6 +17,13 @@ import { join } from 'path';
 
 import { chat as gwChat, thinkingOffOutputCap } from '../ai/gateway.ts';
 import type { ChatMessage } from '../ai/gateway.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, PrivateRoutingError } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { cachedCodexProposal, withCodexProposalCache } from '../ai/codex-proposal-cache.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { digest } from '../persistence/digest.ts';
+import { resolveModel } from '../model-config.ts';
 import { aggregate } from './aggregate.ts';
 import type { AggregateResult, SlotResult } from './aggregate.ts';
 import { parseModelJSON } from './json-repair.ts';
@@ -129,6 +136,34 @@ export async function runEval(opts: RunEvalOpts): Promise<RunEvalResult> {
   const slots = opts.slots ?? DEFAULT_SLOTS;
   const cycles = clampCycles(opts.cycles);
   const slug = opts.slug ?? `eval-${sha8(opts.output).slice(0, 6)}`;
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) {
+    const context = codexSubscriptionContext();
+    if (!context) throw new SubscriptionAdmissionError('subscription_required');
+    await context.checkAuthority?.();
+    const keys = dimensions.map(dimensionScoreKey);
+    const maxTokens = opts.maxTokens ?? 4000;
+    if (typeof opts.task !== 'string' || !opts.task.trim() ||
+        typeof opts.output !== 'string' || !opts.output.trim() ||
+        dimensions.length === 0 || keys.some(key => !key) || new Set(keys).size !== keys.length ||
+        slots.length === 0 || slots.some(slot => typeof slot.id !== 'string' || !slot.id.trim() ||
+          typeof slot.model !== 'string' || !slot.model.trim()) ||
+        !Number.isSafeInteger(maxTokens) || maxTokens < 16 ||
+        maxTokens > 8192 ||
+        Buffer.byteLength(JSON.stringify([EVALUATOR_SYSTEM_PROMPT, buildPrompt(opts.task, dimensions, opts.output)])) > 180000) {
+      throw new CodexProposalError('invalid_input');
+    }
+    for (const slot of slots) {
+      assertPrivateRoute(slot.model, 'cross-modal-eval:slot', privatePolicy, 'nightly-probes');
+      await resolveModel(context.engine, {
+        privateRole: 'nightly-probes',
+        cliFlag: slot.model,
+        configKey: 'models.eval.longmemeval',
+        tier: 'reasoning',
+        fallback: 'unused',
+      });
+    }
+  }
 
   const cycleReceipts: CycleReceipt[] = [];
   let finalAggregate: AggregateResult | null = null;
@@ -207,13 +242,20 @@ interface OneCycleOpts {
 
 async function runOneCycle(opts: OneCycleOpts): Promise<SlotResult[]> {
   const prompt = buildPrompt(opts.task, opts.dimensions, opts.output);
-
-  const tasks = opts.slots.map(slot => callSlot(slot, prompt, opts));
-  const settled = await Promise.allSettled(tasks);
+  // A private account lane permits only one unresolved Codex call at a time.
+  const settled = readPrivateCodexConfig()
+    ? await (async () => {
+      const results: Array<PromiseSettledResult<SlotResult>> = [];
+      for (const slot of opts.slots) results.push(...await Promise.allSettled([callSlot(slot, prompt, opts)]));
+      return results;
+    })()
+    : await Promise.allSettled(opts.slots.map(slot => callSlot(slot, prompt, opts)));
 
   const slotResults: SlotResult[] = settled.map((s, idx) => {
     const slot = opts.slots[idx]!;
     if (s.status === 'fulfilled') return s.value;
+    if (readPrivateCodexConfig() && (s.reason instanceof SubscriptionAdmissionError ||
+        s.reason instanceof PrivateRoutingError)) throw s.reason;
     return { ok: false, modelId: slot.model, error: errorMessage(s.reason) };
   });
 
@@ -230,17 +272,86 @@ async function callSlot(
     const messages: ChatMessage[] = [
       { role: 'user', content: prompt },
     ];
-    const result = await gwChat({
+    const base = {
       model: slot.model,
       system: EVALUATOR_SYSTEM_PROMPT,
       messages,
       maxTokens: opts.maxTokens,
       abortSignal: opts.abortSignal,
       allowFallback: false,
-      thinking: 'off',
-    });
-
-    const parsed = parseModelJSON(result.text ?? '');
+      thinking: 'off' as const,
+    };
+    let responseText: string;
+    if (readPrivateCodexConfig()) {
+      const context = codexSubscriptionContext();
+      if (!context) throw new SubscriptionAdmissionError('subscription_required');
+      const keys = opts.dimensions.map(dimensionScoreKey);
+      if (keys.some(key => !key) || new Set(keys).size !== keys.length) {
+        throw new CodexProposalError('invalid_input');
+      }
+      const score = {
+        type: 'object',
+        properties: {
+          score: { type: 'integer', minimum: 1, maximum: 10 },
+          feedback: { type: 'string' },
+        },
+        required: ['score', 'feedback'],
+        additionalProperties: false,
+      };
+      const schema = {
+        type: 'object',
+        properties: {
+          scores: {
+            type: 'object',
+            properties: Object.fromEntries(keys.map(key => [key, score])),
+            required: keys,
+            additionalProperties: false,
+          },
+          overall: { type: 'integer', minimum: 1, maximum: 10 },
+          improvements: {
+            type: 'array',
+            items: { type: 'string', minLength: 1 },
+            minItems: 10,
+            maxItems: 10,
+          },
+        },
+        required: ['scores', 'overall', 'improvements'],
+        additionalProperties: false,
+      };
+      const bindingHash = digest({
+        protocol: 'cross-modal-judge-v1',
+        runId: context.runId,
+        task: opts.task,
+        output: opts.output,
+        dimensions: opts.dimensions,
+        slot: slot.id,
+        cycle: opts.cycle,
+      });
+      const proposal = await withCodexProposalCache(
+        { namespace: 'cross-modal-judge-v1', bindingHash },
+        () => cachedCodexProposal({
+          ...base,
+          privateRole: 'nightly-probes',
+          responseSchema: {
+            name: 'cross-modal-judge-v1',
+            schema,
+            validateCodexProposal: raw => {
+              const parsed = parseModelJSON(raw);
+              if (parsed._repaired ||
+                  keys.some(key => !Number.isInteger(parsed.scores[key]?.score) ||
+                    parsed.scores[key]!.score < 1 || parsed.scores[key]!.score > 10) ||
+                  parsed.improvements.length !== 10) {
+                throw new CodexProposalError('invalid_output');
+              }
+            },
+          },
+        }),
+      );
+      responseText = proposal.text;
+    } else {
+      responseText = (await gwChat(base)).text ?? '';
+    }
+    const parsed = parseModelJSON(responseText);
     const ms = Date.now() - start;
     opts.onProgress?.({
       kind: 'slot_done',
@@ -252,6 +363,8 @@ async function callSlot(
     });
     return { ok: true, modelId: slot.model, parsed };
   } catch (err) {
+    if (readPrivateCodexConfig() &&
+        (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError)) throw err;
     const ms = Date.now() - start;
     const msg = errorMessage(err);
     opts.onProgress?.({

@@ -1,3 +1,4 @@
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { readFileSync } from 'node:fs';
 import type { BrainEngine, LinkBatchInput } from '../engine.ts';
 import type { GBrainConfig } from '../config.ts';
@@ -330,7 +331,8 @@ export type ManagedAtomPublication =
  * members, retire delete members and the completion; every member id is digest(activation id, slug, action).
  */
 export async function publishManagedAtomGeneration(engine: BrainEngine, session: ManagedAtomSession, origin: AtomOrigin,
-  atoms: Array<{ slug: string; content: string; links: LinkBatchInput[] }>, generation: ManagedAtomGeneration): Promise<ManagedAtomPublication> {
+  atoms: Array<{ slug: string; content: string; links: LinkBatchInput[] }>, generation: ManagedAtomGeneration,
+  checkAuthorityInTransaction?: (tx: BrainEngine) => Promise<void>): Promise<ManagedAtomPublication> {
   const context: AtomGenerationContext = { ...generation.context, ...(origin.kind === 'transcript' ? { locator: origin.locator, verifyFile: true } : {}) };
   const claim = atomClaim(session, origin);
   const plan = await planManagedGeneration(engine, atomGenerationAdapter, { key: generation.key, items: atoms.map(atom => markdownItem(atom.slug, atom.content)),
@@ -374,6 +376,7 @@ export async function publishManagedAtomGeneration(engine: BrainEngine, session:
   inputs.push({ slug: GENERATION_ACTIVATE_SLUG, pageId: null, requestId: activationId, child: false, intent: activation });
   inputs.push(...later);
   const rows = await engine.transaction(async tx => {
+    await checkAuthorityInTransaction?.(tx);
     await recordActivation(tx, plan.intent);
     const children: string[] = [];
     const accepted: WriteRequest[] = [];
@@ -387,6 +390,7 @@ export async function publishManagedAtomGeneration(engine: BrainEngine, session:
       accepted.push(row);
       if (input.child) children.push(row.id);
     }
+    await checkAuthorityInTransaction?.(tx);
     return accepted;
   });
   return { state: 'admitted', activationId, receipts: await waitAtomReceipts(engine, session, rows) };
@@ -639,6 +643,8 @@ export async function publishManagedAtoms(engine: BrainEngine, session: ManagedA
     } as AtomIntent });
   }
   const rows = await engine.transaction(async tx => {
+    const subscription = codexSubscriptionContext();
+    if (subscription?.engine === engine) await subscription.checkAuthorityInTransaction?.(tx);
     const children: string[] = [];
     const accepted: WriteRequest[] = [];
     for (const input of [...inputs, { slug: '__managed_atom_complete__', pageId: null,
@@ -651,6 +657,7 @@ export async function publishManagedAtoms(engine: BrainEngine, session: ManagedA
       accepted.push(row);
       if (input.intent.kind !== 'managed_atom_complete') children.push(row.id);
     }
+    if (subscription?.engine === engine) await subscription.checkAuthorityInTransaction?.(tx);
     return accepted;
   });
   const receipts: WriteReceipt[] = [];

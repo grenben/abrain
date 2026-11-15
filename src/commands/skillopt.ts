@@ -9,10 +9,12 @@ import * as path from 'node:path';
 import { autoDetectSkillsDirReadOnly } from '../core/repo-root.ts';
 import { runGuardedBootstrap } from '../core/skillopt/bootstrap-run.ts';
 import { buildSkillOptJobData } from '../core/skillopt/job.ts';
+import type { SkillOptJobInput } from '../core/skillopt/job.ts';
 import {
   buildModelsPlan,
   describeStrictVerdict,
   formatModelsBanner,
+  resolveSkillOptModelRole,
   resolveSkillOptModels,
   skillOptModelOpts,
   type ModelsPlanEntry,
@@ -28,9 +30,23 @@ import { serializeError, StructuredAgentError } from '../core/errors.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import type { OptimizerMode, RunReceipt, SkillOptOpts } from '../core/skillopt/types.ts';
 import { capNotice, mergeCapFlag, parseCapFlag, type CapFlag } from '../core/budget/cap-flag.ts';
+import { withSkillOptAllowance, type LocalOptimizerScope } from '../core/skillopt/codex-local-grant.ts';
+import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
+import { CodexProposalError } from '../core/ai/providers/codex-contract.ts';
+import { readPrivateCodexConfig, PrivateRoutingError } from '../core/ai/private-policy.ts';
 
 /** Per-run cost cap when no cap flag is passed (a `default` cap: unpriced models warn and run). */
 const DEFAULT_SKILLOPT_MAX_COST_USD = 5.0;
+
+const PRIVATE_SKILLOPT_HELP = `
+PRIVATE CODEX OPTIONS
+  --source ID --read-prefix PREFIX [--read-prefix PREFIX ...]
+  --read-tool get_page|search|find_pages|list_pages|entity|facts|backlinks
+  --codex-request-id UUID --codex-max-attempts N --codex-max-turns N
+  --codex-deadline ISO [--aux-max-usd USD]
+  --background [--follow]
+  Shared-skill runs may also use --shared-skill NAME --shared-revision REVISION.
+`;
 
 interface ParsedFlags {
   skillName: string;
@@ -53,7 +69,8 @@ interface ParsedFlags {
   /** Abort before spend unless every active model was chosen by explicit configuration. */
   modelsStrict: boolean;
   mode: 'patch' | 'rewrite';
-  /** E1: `--loop` opts into the iterative reflect loop; one-shot rewrite is the default. */
+  /** Explicit product optimizer strategy; `--loop` remains a reflect alias. */
+  optimizerMode?: OptimizerMode;
   loop: boolean;
   dryRun: boolean;
   noMutate: boolean;
@@ -81,8 +98,21 @@ interface ParsedFlags {
 }
 
 export async function runSkillOptCommand(engine: BrainEngine | null, args: string[]): Promise<void> {
+  if (engine && args.length && !args.includes('--help') && !args.includes('-h')) {
+    try {
+      return await withSkillOptAllowance(engine, args, (remaining, scope) =>
+        runSkillOptCommandBody(engine, remaining, scope));
+    } catch (error) {
+      handleErrorAndExit(error, args.includes('--json'), 2);
+      return;
+    }
+  }
+  return runSkillOptCommandBody(engine, args, {});
+}
+
+async function runSkillOptCommandBody(engine: BrainEngine | null, args: string[], scope: LocalOptimizerScope): Promise<void> {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
-    process.stdout.write(SKILLOPT_HELP_TEXT);
+    process.stdout.write(SKILLOPT_HELP_TEXT + PRIVATE_SKILLOPT_HELP);
     process.exit(0);
   }
 
@@ -96,14 +126,19 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
   }
 
   if (parsed.help) {
-    process.stdout.write(SKILLOPT_HELP_TEXT);
+    process.stdout.write(SKILLOPT_HELP_TEXT + PRIVATE_SKILLOPT_HELP);
     process.exit(0);
   }
 
   if (parsed.maxCostFlag === '--max-cost-usd' && parsed.maxCostUsd === 0) {
     process.stderr.write('gbrain skillopt: --max-cost-usd 0 is deprecated; it still means uncapped, but write --max-usd off.\n');
   }
-  process.stderr.write(`[skillopt] ${capNotice({ usd: parsed.maxCostUsd > 0 ? parsed.maxCostUsd : null, source: parsed.maxCostSource, flag: parsed.maxCostFlag })}\n`);
+  const privatePolicy = readPrivateCodexConfig();
+  if (!privatePolicy) process.stderr.write(`[skillopt] ${capNotice({ usd: parsed.maxCostUsd > 0 ? parsed.maxCostUsd : null, source: parsed.maxCostSource, flag: parsed.maxCostFlag })}\n`);
+  if (privatePolicy && parsed.optimizerMode === 'one-shot-rewrite') {
+    handleErrorAndExit(new Error('Private Codex skillopt supports reflect mode only; choose --optimizer-mode reflect.'), parsed.json, 2);
+    return;
+  }
 
   if (!engine) {
     process.stderr.write('gbrain skillopt: requires a configured brain (engine connection failed)\n');
@@ -112,31 +147,44 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
 
   // Resolve skills dir.
   const detected = autoDetectSkillsDirReadOnly(process.cwd());
-  const skillsDir = parsed.skillsDir ?? detected.dir;
+  const skillsDir = parsed.skillsDir ?? (scope.sharedSkill
+    ? await (await import('../core/shared-skills/optimizer.ts')).sharedOptimizerSkillsDir(scope.operationContext!, scope.sharedSkill.source_id, scope.sharedSkill.source_incarnation)
+    : detected.dir);
   if (!skillsDir) {
     process.stderr.write(`gbrain skillopt: cannot find skills directory. Pass --skills-dir <path> or run from a workspace with a skills/ directory.\n`);
     process.exit(2);
   }
 
-  // Resolve the three roles once (flag > role config chain), with provenance.
   const modelFlags = { optimizerModel: parsed.optimizerModel, targetModel: parsed.targetModel, judgeModel: parsed.judgeModel };
-  const models = await resolveSkillOptModels(engine, modelFlags);
-  const { optimizerModel, targetModel, judgeModel } = skillOptModelOpts(models);
 
-  // ── Bootstrap modes (short-circuit before the optimization loop) ────────
-  // --bootstrap-from-skill reads SKILL.md directly (no routing-eval needed)
-  // and emits a full starter benchmark; --bootstrap-from-routing makes one
-  // call per routing intent. Both write the D15 sentinel, run under the
-  // --max-cost-usd tracker and honor --models-strict / --dry-run. Provider
-  // errors propagate so the user sees the real failure instead of "0 tasks".
+  // Bootstrap only invokes the optimizer. Resolve that role alone so private
+  // policy need not enable target/judge roles for an operation that never uses
+  // them; normal optimization resolves all roles below.
   if (parsed.bootstrapFromRouting || parsed.bootstrapFromSkill) {
+    const optimizer = await resolveSkillOptModelRole(engine, modelFlags, 'optimizer', 'skillopt-bootstrap');
     try {
+      if (args.includes('--follow') && !args.includes('--background')) throw new Error('--follow requires --background.');
+      if (args.includes('--background') && !readPrivateCodexConfig()) throw new Error('Background benchmark bootstrap requires private Codex subscription mode.');
+      if (args.includes('--background') && !parsed.dryRun && engine.kind === 'pglite') throw new Error('Background benchmark bootstrap requires PostgreSQL; PGLite runs inline.');
+      if (args.includes('--background') && !parsed.dryRun && engine.kind !== 'pglite' && scope.backgroundAllowance) {
+        const plan = [{ touchpoint: 'optimizer' as const, ...optimizer, active: true }];
+        const { strictVerdict, resolveModelsStrict } = await import('../core/skillopt/models-plan.ts');
+        const job = await (await import('../core/skillopt/codex-bootstrap-job.ts')).submitCodexBootstrapJob(engine, {
+          operationContext: scope.operationContext, engine, mode: parsed.bootstrapFromRouting ? 'routing' : 'skill', skillsDir,
+          skillName: parsed.skillName, optimizer, taskCount: parsed.bootstrapTasks ?? 15, force: parsed.force,
+          dryRun: false, modelsStrict: parsed.modelsStrict, maxCostUsd: parsed.maxCostUsd, maxCostSource: parsed.maxCostSource,
+        }, { plan, strict: await strictVerdict(plan, await resolveModelsStrict(engine, parsed.modelsStrict)) },
+        batchSubmissionScope(scope), scope.backgroundAllowance);
+        process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; bootstrap job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
+        process.stdout.write(`job_id=${job.id}\n`);
+        process.exit(0); return;
+      }
       const run = await runGuardedBootstrap({
-        engine,
+        operationContext: scope.operationContext, engine,
         mode: parsed.bootstrapFromRouting ? 'routing' : 'skill',
         skillsDir,
         skillName: parsed.skillName,
-        optimizer: models.optimizer,
+        optimizer,
         taskCount: parsed.bootstrapTasks ?? 15,
         force: parsed.force,
         dryRun: parsed.dryRun,
@@ -144,29 +192,64 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
         maxCostUsd: parsed.maxCostUsd,
         maxCostSource: parsed.maxCostSource,
       });
-      if (run.dry_run) exitDryRun(run.models_plan, run.strict, parsed.json, {});
+      if (run.dry_run) {
+        exitDryRun(run.models_plan, run.strict, parsed.json, {});
+        return;
+      }
       if (parsed.json) {
         process.stdout.write(JSON.stringify({ ok: true, ...run.result, cost_usd: run.cost_usd, models_plan: run.models_plan }) + '\n');
       }
       process.exit(0);
+      return;
     } catch (err) {
       handleErrorAndExit(err, parsed.json, 2);
+      return;
     }
   }
 
-  // E1: one-shot rewrite unless --loop. A resume continues in the mode its
-  // checkpoint ran (a checkpoint from before this default ran the loop).
+  // Resolve all roles once (flag > role config chain), with provenance, only
+  // after the bootstrap-only operation has short-circuited.
+  const models = await resolveSkillOptModels(engine, modelFlags);
+  const { optimizerModel, targetModel, judgeModel } = skillOptModelOpts(models);
+
+  // Private native optimization currently implements reflect only. Preserve
+  // the product one-shot default outside private mode.
   const resumed = parsed.resumeRunId && parsed.skillName ? loadCheckpoint(skillsDir, parsed.skillName, parsed.resumeRunId) : null;
-  const optimizerMode: OptimizerMode = parsed.loop ? 'reflect' : resumed ? checkpointOptimizerMode(resumed) : 'one-shot-rewrite';
+  const explicitOptimizerMode = parsed.optimizerMode ?? (parsed.loop ? 'reflect' : undefined);
+  if (privatePolicy && resumed && checkpointOptimizerMode(resumed) !== 'reflect') {
+    handleErrorAndExit(new Error('Private Codex skillopt cannot resume a one-shot-rewrite checkpoint; start a reflect-mode run.'), parsed.json, 2);
+    return;
+  }
+  const optimizerMode: OptimizerMode = explicitOptimizerMode ?? (privatePolicy ? 'reflect'
+    : resumed ? checkpointOptimizerMode(resumed) : 'one-shot-rewrite');
   noteSkillOptLoopDeprecated(optimizerMode);
 
   // ── F4: --all batch mode ────────────────────────────────────────────────
   if (parsed.all) {
+    if (args.includes('--background') && !parsed.dryRun && scope.backgroundAllowance && engine.kind !== 'pglite') {
+      try {
+        const job = await (await import('../core/skillopt/codex-batch-job.ts')).submitCodexSkillOptBatch(engine, {
+          skillsDir, models, modelFlags, modelsStrict: parsed.modelsStrict,
+          ...(parsed.reflectMaxTokens !== undefined ? { reflectMaxTokens: parsed.reflectMaxTokens } : {}),
+          epochs: parsed.epochs, batchSize: parsed.batchSize, lr: parsed.lr, lrSchedule: parsed.lrSchedule, split: parsed.split, optimizerMode,
+          mode: parsed.mode, dryRun: false, noMutate: parsed.noMutate, allowMutateBundled: parsed.allowMutateBundled,
+          ...(parsed.heldOutPath ? { heldOutPath: parsed.heldOutPath } : {}), bootstrapReviewed: parsed.bootstrapReviewed,
+          maxCostUsd: parsed.maxCostUsd, maxCostSource: parsed.maxCostSource, maxRuntimeMin: parsed.maxRuntimeMin, force: parsed.force,
+        }, batchSubmissionScope(scope), scope.backgroundAllowance);
+        process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; batch job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
+        process.stdout.write(`job_id=${job.id}\n`);
+        process.exit(0); return;
+      } catch (err) {
+        handleErrorAndExit(err, parsed.json, 2);
+        return;
+      }
+    }
     try {
       const { runBatchAll } = await import('../core/skillopt/batch.ts');
       const basePlan = await buildModelsPlan(engine, models);
       process.stderr.write(formatModelsBanner(basePlan));
       const result = await runBatchAll({
+        ...scope,
         engine,
         skillsDir,
         perSkillMaxCostUsd: parsed.maxCostUsd,
@@ -191,20 +274,28 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
         force: parsed.force,
       });
       if (parsed.json) {
-        process.stdout.write(JSON.stringify({ schema_version: 1, ...result }) + '\n');
+        process.stdout.write(JSON.stringify({ schema_version: 1, dry_run: parsed.dryRun, ...result }) + '\n');
       } else {
-        process.stderr.write(`[skillopt --all] Scanned ${result.skills_scanned} skills, ran ${result.skills_run}\n`);
-        process.stderr.write(`[skillopt --all] Accepted: ${result.accepted}, no_improvement: ${result.no_improvement}, errored: ${result.errored}\n`);
-        process.stderr.write(`[skillopt --all] Total cost: $${result.cumulative_cost_usd.toFixed(2)} (cap $${(parsed.brainWideMaxCostUsd ?? 10).toFixed(2)})\n`);
+        if (parsed.dryRun) {
+          process.stderr.write(`[skillopt --all] Dry run: scanned ${result.skills_scanned} skills; no optimizer calls or writes performed.\n`);
+        } else {
+          process.stderr.write(`[skillopt --all] Scanned ${result.skills_scanned} skills, ran ${result.skills_run}\n`);
+          process.stderr.write(`[skillopt --all] Accepted: ${result.accepted}, no_improvement: ${result.no_improvement}, errored: ${result.errored}\n`);
+          if (result.cumulative_cost_usd === null) process.stderr.write('[skillopt --all] Subscription monetary cost and remaining quota are unknown.\n');
+          else process.stderr.write(`[skillopt --all] Total cost: $${result.cumulative_cost_usd.toFixed(2)} (cap $${(parsed.brainWideMaxCostUsd ?? 10).toFixed(2)})\n`);
+        }
       }
       // Exit code: 0 if at least one accepted, 1 if scanned but none accepted, 2 if errored.
-      const exitCode = result.errored > 0 && result.accepted === 0 ? 2
+      const exitCode = parsed.dryRun ? 0 : result.errored > 0 && result.accepted === 0 ? 2
         : result.accepted === 0 ? 1
         : 0;
       process.exit(exitCode);
+      return;
     } catch (err) {
       handleErrorAndExit(err, parsed.json, 2);
+      return;
     }
+    return;
   }
 
   // ── F5: --target-models fleet mode ──────────────────────────────────────
@@ -241,7 +332,7 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
         force: parsed.force,
       });
       if (parsed.json) {
-        process.stdout.write(JSON.stringify({ schema_version: 1, ...result }) + '\n');
+        process.stdout.write(JSON.stringify({ schema_version: 1, dry_run: parsed.dryRun, ...result }) + '\n');
       } else {
         process.stderr.write(`[skillopt fleet] Per-model scores for '${parsed.skillName}':\n`);
         for (const p of result.per_model) {
@@ -251,10 +342,13 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
           process.stderr.write(`[skillopt fleet] Best model: ${result.best_model} (score ${result.best_score?.toFixed(3) ?? '0'})\n`);
         }
       }
-      process.exit(result.best_model ? 0 : 1);
+      process.exit(parsed.dryRun ? 0 : result.best_model ? 0 : 1);
+      return;
     } catch (err) {
       handleErrorAndExit(err, parsed.json, 2);
+      return;
     }
+    return;
   }
 
   // Build benchmark path.
@@ -266,14 +360,15 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
   // maybeBackground helper (which doesn't pass allowProtectedSubmit). Inline
   // a small submit that does. Behavior mirrors maybeBackground: writes
   // `job_id=N` to stdout, exits 0; `--follow` execs `gbrain jobs follow`.
-  if (args.includes('--background')) {
+  if (args.includes('--background') && !parsed.dryRun) {
     if (engine.kind === 'pglite') {
       process.stderr.write('[--background] PGLite has no worker daemon; running inline.\n');
     } else {
       try {
         const { MinionQueue } = await import('../core/minions/queue.ts');
         const queue = new MinionQueue(engine);
-        const jobData = buildSkillOptJobData({
+        const jobInput: SkillOptJobInput = {
+          ...(scope.sharedSkill ? { sharedSkill: scope.sharedSkill } : {}),
           skillsDir,
           skillName: parsed.skillName,
           benchmarkPath,
@@ -297,12 +392,15 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
           maxCostSource: parsed.maxCostSource,
           maxRuntimeMin: parsed.maxRuntimeMin,
           force: parsed.force,
-        });
-        const job = await queue.add('skillopt', jobData, {
+        };
+        const job = scope.backgroundAllowance
+          ? await (await import('../core/skillopt/codex-job.ts')).submitCodexSkillOpt(engine, jobInput, scope, scope.backgroundAllowance)
+          : await queue.add('skillopt', buildSkillOptJobData(jobInput), {
           queue: 'default',
           idempotency_key: `cli:skillopt:${parsed.skillName}`,
           max_attempts: 1,
         }, { allowProtectedSubmit: true });
+        if (scope.backgroundAllowance) process.stderr.write(`[skillopt] subscription request ${scope.backgroundAllowance.requestId}; job ${job.id}; status ${job.status}; monetary cost unknown.\n`);
         process.stdout.write(`job_id=${job.id}\n`);
         if (args.includes('--follow')) {
           const { spawn } = await import('../core/spawn.ts');
@@ -312,14 +410,17 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
           await new Promise<void>((resolve) => child.on('exit', () => resolve()));
         }
         process.exit(0);
+        return;
       } catch (err) {
         handleErrorAndExit(err, parsed.json, 2);
+        return;
       }
     }
   }
 
   // Build SkillOptOpts.
   const opts: SkillOptOpts = {
+    ...scope,
     engine,
     skillName: parsed.skillName,
     skillsDir,
@@ -351,6 +452,15 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
     const result = await runSkillOpt(opts);
     if (parsed.dryRun) {
       exitDryRun(result.receipt.models_plan ?? [], result.receipt.models_strict!, parsed.json, { receipt: result.receipt });
+      return;
+    }
+    if (scope.sharedSkill && (!result.sharedOptimization ||
+      result.sharedOptimization.proposal_id !== scope.sharedSkill.request_id ||
+      result.mutatedSkillFile && result.sharedOptimization.publication?.state !== 'committed')) {
+      // A shared request must never fall through as an ordinary workspace
+      // proposal receipt. The shared optimizer owns canonical publication and
+      // is responsible for validating the source, owner and request claim.
+      throw new SubscriptionAdmissionError('subscription_identity_conflict');
     }
     if (parsed.json) {
       process.stdout.write(JSON.stringify({
@@ -358,6 +468,7 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
         outcome: result.outcome,
         receipt: result.receipt,
         mutated_skill_file: result.mutatedSkillFile,
+        ...(result.sharedOptimization ? { shared_optimization: result.sharedOptimization } : {}),
         ...(result.proposedPath ? { proposed_path: result.proposedPath } : {}),
       }) + '\n');
     } else {
@@ -376,6 +487,16 @@ export async function runSkillOptCommand(engine: BrainEngine | null, args: strin
   } catch (err) {
     handleErrorAndExit(err, parsed.json, 2);
   }
+}
+
+function batchSubmissionScope(scope: LocalOptimizerScope) {
+  if (!scope.operationContext || !scope.codex) throw new SubscriptionAdmissionError('subscription_required');
+  return {
+    sourceId: scope.operationContext.sourceId,
+    allowedTools: scope.codex.allowedTools,
+    allowedSlugPrefixes: scope.codex.allowedSlugPrefixes,
+    ...(scope.codex.readRegistry ? { readRegistry: scope.codex.readRegistry } : {}),
+  };
 }
 
 type RunSkillOptOutcome = NonNullable<RunReceipt['outcome']>;
@@ -460,6 +581,7 @@ export function parseFlags(args: string[]): ParsedFlags {
   let judgeModel: string | undefined;
   let reflectMaxTokens: number | undefined;
   let mode: 'patch' | 'rewrite' = 'patch';
+  let optimizerMode: OptimizerMode | undefined;
   let loop = false;
   let dryRun = false;
   let noMutate = false;
@@ -480,6 +602,7 @@ export function parseFlags(args: string[]): ParsedFlags {
   while (i < args.length) {
     const a = args[i]!;
     if (a === '--help' || a === '-h') { help = true; i += 1; continue; }
+    if (a === '--background' || a === '--follow') { i += 1; continue; }
     if (a === '--benchmark') { benchmarkPath = args[++i]; i += 1; continue; }
     if (a === '--bootstrap-from-routing') { bootstrapFromRouting = true; i += 1; continue; }
     if (a === '--bootstrap-from-skill') { bootstrapFromSkill = true; i += 1; continue; }
@@ -514,7 +637,18 @@ export function parseFlags(args: string[]): ParsedFlags {
     }
     if (a === '--patch') { mode = 'patch'; i += 1; continue; }
     if (a === '--rewrite') { mode = 'rewrite'; i += 1; continue; }
-    if (a === '--loop') { loop = true; i += 1; continue; }
+    if (a === '--optimizer-mode') {
+      const value = args[++i];
+      if (value !== 'reflect' && value !== 'one-shot-rewrite') throw new Error(`--optimizer-mode must be reflect|one-shot-rewrite (got '${value}')`);
+      if (optimizerMode && optimizerMode !== value) throw new Error('--optimizer-mode cannot be specified with conflicting values');
+      if (loop && value !== 'reflect') throw new Error('--loop conflicts with --optimizer-mode one-shot-rewrite');
+      optimizerMode = value;
+      i += 1; continue;
+    }
+    if (a === '--loop') {
+      if (optimizerMode === 'one-shot-rewrite') throw new Error('--loop conflicts with --optimizer-mode one-shot-rewrite');
+      loop = true; optimizerMode = 'reflect'; i += 1; continue;
+    }
     if (a === '--dry-run') { dryRun = true; i += 1; continue; }
     if (a === '--no-mutate') { noMutate = true; i += 1; continue; }
     if (a === '--allow-mutate-bundled') { allowMutateBundled = true; i += 1; continue; }
@@ -558,8 +692,7 @@ export function parseFlags(args: string[]): ParsedFlags {
     throw new Error(`--all and --bootstrap-from-routing are mutually exclusive (run bootstrap per skill)`);
   }
   // --bootstrap-from-skill is a standalone short-circuit: it cannot combine with
-  // the other-source / multi-run flags. (--background / --follow are already
-  // rejected by the unknown-flag guard since parseFlags doesn't parse them.)
+  // the other-source / multi-run flags.
   if (bootstrapFromSkill) {
     if (bootstrapFromRouting) throw new Error(`--bootstrap-from-skill and --bootstrap-from-routing are mutually exclusive`);
     if (benchmarkPath) throw new Error(`--bootstrap-from-skill and --benchmark are mutually exclusive`);
@@ -599,6 +732,7 @@ export function parseFlags(args: string[]): ParsedFlags {
     ...(reflectMaxTokens !== undefined ? { reflectMaxTokens } : {}),
     modelsStrict,
     mode,
+    optimizerMode,
     loop,
     dryRun,
     noMutate,
@@ -639,6 +773,8 @@ function mustFloat(v: string | undefined, flag: string): number {
 function handleErrorAndExit(err: unknown, json: boolean, exitCode: number): never {
   if (json) {
     const envelope = err instanceof StructuredAgentError ? err.envelope : serializeError(err);
+    if (err instanceof SubscriptionAdmissionError || err instanceof PrivateRoutingError) envelope.code = err.code;
+    else if (err instanceof CodexProposalError) envelope.code = `codex_${err.reason}`;
     process.stderr.write(JSON.stringify({ ok: false, error: envelope }) + '\n');
   } else {
     process.stderr.write(`gbrain skillopt: ${err instanceof Error ? err.message : String(err)}\n`);

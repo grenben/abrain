@@ -23,7 +23,8 @@ export type Implementation =
   | 'native-google'
   | 'native-anthropic'
   | 'openai-compatible'
-  | 'claude-cli';
+  | 'claude-cli'
+  | 'codex-cli';
 
 export interface EmbeddingTouchpoint {
   models: string[];
@@ -287,6 +288,8 @@ export interface DecideTouchpoint {
 }
 
 export interface ChatTouchpoint {
+  /** Can return one schema-constrained action for host execution, not native tools. */
+  supports_host_structured_actions?: boolean;
   models: string[];
   /** Provider returns native function/tool calling. */
   supports_tools: boolean;

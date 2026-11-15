@@ -10,7 +10,11 @@
  * (a new takes/oauth/dream table) doesn't silently leak across questions.
  */
 
-import { PGLiteEngine } from '../../core/pglite-engine.ts';
+import type { PGLiteEngine } from '../../core/pglite-engine.ts';
+import { createEphemeralBrain, assertEphemeralBrain, withEphemeralBrainUse } from '../../core/ephemeral-brain.ts';
+import { withSubscriptionScratch } from '../../core/ai/subscription-target.ts';
+import { SubscriptionAdmissionError } from '../../core/ai/subscription-admission.ts';
+export { assertEphemeralBrain as assertBenchmarkBrain } from '../../core/ephemeral-brain.ts';
 
 interface PgTablesRow {
   tablename: string;
@@ -27,6 +31,8 @@ const PRESERVE_TABLES: ReadonlySet<string> = new Set([
   'sources',
   // Key-value config; empty in a benchmark run, but config is infrastructure.
   'config',
+  // Identity survives corpus reset; subscription state must live elsewhere.
+  'persistence_brain',
   // Coordination locks; not content.
   'gbrain_cycle_locks',
   'subagent_rate_leases',
@@ -36,24 +42,28 @@ const PRESERVE_TABLES: ReadonlySet<string> = new Set([
   'persistence_brain',
 ]);
 
-export async function createBenchmarkBrain(): Promise<PGLiteEngine> {
-  const engine = new PGLiteEngine();
-  await engine.connect({}); // in-memory; no database_path, no file lock acquired
-  await engine.initSchema();
-  return engine;
-}
+export const createBenchmarkBrain = createEphemeralBrain;
 
 export async function resetTables(engine: PGLiteEngine): Promise<void> {
-  const rows = await engine.executeRaw<PgTablesRow>(
-    `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`,
-  );
-  const targets = rows.map(r => r.tablename).filter(t => !PRESERVE_TABLES.has(t));
-  if (targets.length === 0) return;
-  // Quote each tablename as an identifier so reserved words and mixed-case
-  // names work. RESTART IDENTITY resets serial sequences; CASCADE handles
-  // FK dependencies so we don't have to topologically sort.
-  const list = targets.map(t => `"${t.replace(/"/g, '""')}"`).join(', ');
-  await engine.executeRaw(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+  await withEphemeralBrainUse(engine, () => engine.transaction(async tx => {
+    // A disposable target must never own allowances. Refuse instead of wiping
+    // admission, attempts, proposal cache, or an unresolved account-lane hold.
+    const grants = await tx.executeRaw('SELECT run_id FROM codex_subscription_runs LIMIT 1');
+    if (grants.length) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    const rows = await tx.executeRaw<PgTablesRow>(
+      `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`,
+    );
+    const targets = rows.map(r => r.tablename).filter(t => !PRESERVE_TABLES.has(t));
+    if (!targets.length) return;
+    const list = targets.map(t => `"${t.replace(/"/g, '""')}"`).join(', ');
+    await tx.executeRaw(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+  }));
+  await assertEphemeralBrain(engine);
+}
+
+export async function runBenchmarkQuestion<T>(engine: PGLiteEngine, run: () => Promise<T>): Promise<T> {
+  await resetTables(engine);
+  return withSubscriptionScratch(engine, run);
 }
 
 export async function withBenchmarkBrain<T>(

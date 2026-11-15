@@ -182,6 +182,8 @@ export interface BuildBrainToolsOpts {
    * Unset → legacy 'default'.
    */
   sourceId?: string;
+  nativeDiscovery?: import('../../types.ts').NativeDiscoveryScope;
+  nativeDiscoveryRequired?: boolean;
   /** Current remote owner grant; never populated from caller tool arguments. */
   delegatedAuth?: Pick<AuthInfo, 'clientId' | 'scopes' | 'sourceId' | 'allowedSources' | 'allowedOperations'>;
   /** #6297: byte budget on this job's get_page results (SubagentHandlerData.read_budget_bytes); unset = none. */
@@ -199,6 +201,8 @@ interface OpContextDeps {
   brainId?: string;
   allowedSlugPrefixes?: readonly string[];
   sourceId?: string;
+  nativeDiscovery?: import('../../types.ts').NativeDiscoveryScope;
+  nativeDiscoveryRequired?: boolean;
   deferEmbeds?: boolean;
   delegatedAuth?: BuildBrainToolsOpts['delegatedAuth'];
 }
@@ -215,6 +219,8 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
     dryRun: false,
     remote: true,                // match MCP trust boundary for auto-link skip
     // #1586: cycle-resolved source when provided; legacy host default else.
+    nativeDiscovery: deps.nativeDiscovery,
+    nativeDiscoveryRequired: deps.nativeDiscoveryRequired,
     sourceId: deps.sourceId ?? 'default',
     // Preserve explicit per-call source checks without importing direct-write
     // fences or requiring direct read/write scopes for agent-only grants.
@@ -296,6 +302,8 @@ function brainTool(op: Operation, opts: BuildBrainToolsOpts): ToolDef {
         brainId: opts.brainId,
         allowedSlugPrefixes: opts.allowedSlugPrefixes,
         sourceId: opts.sourceId,
+        nativeDiscovery: opts.nativeDiscovery,
+        nativeDiscoveryRequired: opts.nativeDiscoveryRequired,
         deferEmbeds: opts.deferEmbeds,
         delegatedAuth: opts.delegatedAuth,
       });

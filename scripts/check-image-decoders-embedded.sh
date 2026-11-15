@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI guard: verify that bun --compile binaries can decode HEIC + AVIF.
+# CI guard: verify that bun --compile binaries can decode supported images.
 #
 # heic-decode bundles its libheif WASM as base64 inside libheif-bundle.js, which
 # bun --compile preserves correctly out of the box. @jsquash/avif loads
@@ -23,8 +23,8 @@ trap 'rm -f "$OUT_BIN"' EXIT
 if ! BUILD_LOG="$(bun build --compile --no-compile-autoload-bunfig --outfile "$OUT_BIN" scripts/image-decoders-smoketest.ts 2>&1)"; then
   echo "[check-image-decoders-embedded] FAIL: bun build --compile of scripts/image-decoders-smoketest.ts failed:" >&2
   echo "$BUILD_LOG" | tail -20 >&2
-  echo "Why: the HEIC/AVIF decoder imports (heic-decode, @jsquash/avif's avif_dec.wasm via type: 'file') must resolve inside a compiled binary, or image import breaks in the shipped gbrain binary." >&2
-  echo "Fix: correct the import path above in scripts/image-decoders-smoketest.ts and mirror it in src/core/import-file.ts, then re-run: bun run check:image-decoders" >&2
+  echo "Why: HEIC/AVIF and Codex PNG/JPEG/WebP decoder imports and WASM assets must resolve inside a compiled binary, or image import breaks in the shipped gbrain binary." >&2
+  echo "Fix: correct the decoder/WASM imports in scripts/image-decoders-smoketest.ts and the corresponding production decoder module, then re-run: bun run check:image-decoders" >&2
   exit 1
 fi
 
@@ -54,6 +54,13 @@ if ! echo "$OUTPUT" | grep -q '"avif":{"ok":true'; then
   exit 1
 fi
 
+# Check production Codex image preparation, including all embedded pixel decoders.
+if ! echo "$OUTPUT" | grep -q '"codex_images":{"ok":true'; then
+  echo "[check-image-decoders-embedded] FAIL: Codex PNG/JPEG/WebP preparation failed in compiled binary." >&2
+  echo "$OUTPUT" >&2
+  exit 1
+fi
+
 # Final guard: top-level "ok":true.
 if ! echo "$OUTPUT" | grep -q '"ok":true}$'; then
   echo "[check-image-decoders-embedded] FAIL: probe returned ok:false." >&2
@@ -61,4 +68,4 @@ if ! echo "$OUTPUT" | grep -q '"ok":true}$'; then
   exit 1
 fi
 
-echo "[check-image-decoders-embedded] HEIC + AVIF decoders embed and decode correctly in compiled binary."
+echo "[check-image-decoders-embedded] HEIC + AVIF + Codex PNG/JPEG/WebP decoders embed and decode correctly in compiled binary."

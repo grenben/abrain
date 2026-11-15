@@ -48,6 +48,7 @@ import { parseSourceConfig, sourceLocalPathSkipWarning } from '../core/sources-l
 import { automaticSyncPull } from '../core/persistence/automatic-sync-policy.ts';
 import { automaticSyncSkip, loadActivationPendingSourceIds, reportAutomaticSyncSkip } from '../core/sync-policy.ts';
 import { AUTOPILOT_FULL_CYCLE_FLOOR_MINUTES } from './autopilot-remediation-policy.ts';
+import { scheduledCodexSubmit } from '../core/minions/subscription-schedules.ts';
 
 // #2194 fix #2: failure cooldown. A source whose autopilot-cycle keeps
 // failing/timing-out re-dispatches every tick today (only SUCCESS gates
@@ -494,9 +495,13 @@ export async function dispatchPerSource(
   if (sources.length === 0) {
     // Legacy path — preserves today's behavior for single-source brains
     // (default source) and pre-v0.18 brains without the sources table.
+    const data = { repoPath: opts.repoPath };
+    const scheduledSubmit = scheduledCodexSubmit('autopilot-cycle', data, opts.slot, {
+      minRemainingMs: opts.timeoutMs,
+    });
     const job = await queue.add(
       'autopilot-cycle',
-      { repoPath: opts.repoPath },
+      data,
       {
         queue: 'default',
         // Slot key dedups repeats within one slot; maxPending: 1 is the
@@ -510,6 +515,7 @@ export async function dispatchPerSource(
         timeout_ms: opts.timeoutMs,
         maxPending: 1,
       },
+      scheduledSubmit,
     );
     if (job.coalesced) {
       if (opts.jsonMode) {
@@ -594,17 +600,21 @@ export async function dispatchPerSource(
       const syncDisabled = !!skip;
       const connector = connectorIds.has(src.id);
       const shouldPull = !syncDisabled && !connector && await automaticSyncPull(engine, src);
+      const data = {
+        repoPath: connector ? null : opts.repoPath,
+        source_id: src.id,
+        pull: shouldPull,
+        // Freshness is stamped by bounded deterministic work only. LLM-backed
+        // source enrichment (atoms, takes, thin-page development, etc.) is
+        // explicit/background work and cannot hold source freshness hostage.
+        phases: connector ? CONNECTOR_SOURCE_PHASES : syncDisabled ? SOURCE_FRESHNESS_PHASES.filter((p) => p !== 'sync') : SOURCE_FRESHNESS_PHASES,
+      };
+      const scheduledSubmit = scheduledCodexSubmit('autopilot-cycle', data, opts.slot, {
+        minRemainingMs: opts.timeoutMs,
+      });
       const job = await queue.add(
         'autopilot-cycle',
-        {
-          repoPath: connector ? null : opts.repoPath,
-          source_id: src.id,
-          pull: shouldPull,
-          // Freshness is stamped by bounded deterministic work only. LLM-backed
-          // source enrichment (atoms, takes, thin-page development, etc.) is
-          // explicit/background work and cannot hold source freshness hostage.
-          phases: connector ? CONNECTOR_SOURCE_PHASES : syncDisabled ? SOURCE_FRESHNESS_PHASES.filter((p) => p !== 'sync') : SOURCE_FRESHNESS_PHASES,
-        },
+        data,
         {
           queue: 'default',
           // Per-source idempotency key — two ticks for the same source
@@ -621,6 +631,7 @@ export async function dispatchPerSource(
           // still in flight (waiting or live-lock active).
           maxPending: 1,
         },
+        scheduledSubmit,
       );
       if (job.coalesced) {
         coalesced.push(src.id);
@@ -743,9 +754,13 @@ export async function dispatchGlobalMaintenance(
   }
 
   const timeoutMs = await resolveGlobalMaintenanceTimeoutMs(engine, opts.timeoutMs);
+  const data = { repoPath: opts.repoPath, phases: MAINTENANCE_PHASES };
+  const scheduledSubmit = scheduledCodexSubmit('autopilot-global-maintenance', data, opts.slot, {
+    minRemainingMs: timeoutMs,
+  });
   const job = await queue.add(
     'autopilot-global-maintenance',
-    { repoPath: opts.repoPath, phases: MAINTENANCE_PHASES },
+    data,
     {
       queue: 'default',
       // Structural single-flight: one global job per slot; maxPending:1
@@ -756,6 +771,7 @@ export async function dispatchGlobalMaintenance(
       timeout_ms: timeoutMs,
       maxPending: 1,
     },
+    scheduledSubmit,
   );
   if (job.coalesced) {
     if (opts.jsonMode) {

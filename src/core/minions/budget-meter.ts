@@ -216,7 +216,11 @@ export async function readGroupSpend(engine: BrainEngine, budgetKey: string): Pr
 }
 
 /** A reservation against a command group's shared budget (`group:<group_id>`) instead of an OAuth client. */
-export type GroupReserveOpts = Omit<ReserveOpts, 'clientId' | 'validateAdmission'> & { budgetKey: string };
+export type GroupReserveOpts = Omit<ReserveOpts, 'clientId' | 'validateAdmission'> & {
+  budgetKey: string;
+  /** Refuse rather than silently shrink a reservation needed as a hard pre-dispatch ceiling. */
+  requireFullReservation?: boolean;
+};
 
 /**
  * Group reservation: one approved total shared by every job of a command
@@ -263,6 +267,9 @@ export async function reserveGroup(engine: BrainEngine, opts: GroupReserveOpts):
       const remaining = opts.capCents - spend.committedCents - spend.overdueCents;
       const knownFree = estimated === 0 && opts.estimateKnown !== false;
       if (remaining < 0 || remaining === 0 && !knownFree) throw new GroupBudgetRefusal('exhausted', key, spend, opts.capCents);
+      if (opts.requireFullReservation && estimated > remaining) {
+        throw new GroupBudgetRefusal('exhausted', key, spend, opts.capCents);
+      }
       estimated = Math.min(estimated, remaining);
       if (spend.liveCents > 0 && spend.liveCents + estimated > remaining) {
         throw new GroupBudgetRefusal('pressure', key, spend, opts.capCents);

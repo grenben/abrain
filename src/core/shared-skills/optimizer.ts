@@ -18,6 +18,7 @@ import { loadHeldOut } from '../skillopt/held-out.ts';
 import type { SkillOptOpts } from '../skillopt/types.ts';
 import type { RunSkillOptResult } from '../skillopt/orchestrator.ts';
 import { assertLegacySkillFilesystemWrite } from '../skillpack/writer-guard.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { getSharedSkill, getSharedSkillAsset } from './catalog.ts';
 import { normalizeSkillFiles, skillName, skillPath } from './manifest.ts';
 import { SHARED_SKILL_LIMITS, type StoredSkillRevision } from './model.ts';
@@ -46,7 +47,7 @@ export async function sharedOptimizerSkillsDir(ctx: OperationContext, sourceId: 
   return join(root, 'skills');
 }
 
-async function authorize(ctx: OperationContext, opts: SkillOptOpts): Promise<void> {
+export async function authorizeSharedOptimizer(ctx: OperationContext, opts: SkillOptOpts): Promise<void> {
   const target = opts.sharedSkill!;
   let active = ctx;
   if (ctx.remote !== false) {
@@ -88,7 +89,76 @@ function lintCandidate(before: string, after: string): void {
   }
 }
 
+/** Validate and snapshot the canonical approved revision before native work is admitted. */
+export async function prepareSharedOptimizer(opts: SkillOptOpts) {
+  const target = opts.sharedSkill;
+  const ctx = opts.operationContext && target ? { ...opts.operationContext, sourceId: target.source_id } : undefined;
+  if (!ctx || ctx.engine !== opts.engine || !target) throw opError('permission_denied', 'Shared optimization requires the original operation context.',
+    'Start shared-skill optimization through the run_skillopt operation (or gbrain skillopt) so its grant and target travel with it; nothing ran and nothing was spent.');
+  skillName(opts.skillName); skillName(target.pack_id, 'pack_id');
+  requireUuid(target.source_incarnation); requireUuid(target.expected_revision); requireUuid(target.request_id);
+  if (opts.resumeRunId || opts.writeCapture || opts.disableValidationGate || opts.reflectMode || opts.tasks || opts.rolloutHook || opts.criteriaText !== undefined || !opts.benchmarkPath) {
+    throw opError('invalid_params', 'Shared optimization does not permit legacy resume, write capture, evaluation ablations or harness inputs.',
+      'Drop the resume run id, write capture, validation-gate and reflect mode overrides, explicit tasks, criteria and rollout hook, and pass a benchmark file; then start the optimization again.');
+  }
+  await authorizeSharedOptimizer(ctx, opts);
+  if (await getWriteRequest(ctx.engine, await requestPrincipalForContext(ctx), target.request_id)) {
+    throw new OperationError('request_already_submitted', 'This optimizer publication request has already been submitted.',
+      `Read get_write_request with request_id=${target.request_id}; do not rerun paid optimization to poll a publication.`);
+  }
+  const skillsDir = await sharedOptimizerSkillsDir(ctx, target.source_id, target.source_incarnation);
+  if (realpathSync(opts.skillsDir) !== realpathSync(skillsDir)) throw opError('source_changed', 'The optimizer directory does not match the selected canonical source.',
+    `Point the optimizer at source ${target.source_id}'s canonical skills directory (${skillsDir}), or omit the directory override; nothing ran and nothing was spent.`);
+  const selector = { source_id: target.source_id, source_incarnation: target.source_incarnation, pack_id: target.pack_id, name: opts.skillName };
+  const skill = await getSharedSkill(ctx, selector);
+  if (skill.revision !== target.expected_revision) throw opError('revision_conflict', 'The selected skill changed before optimization.',
+    `${target.pack_id}/${opts.skillName} moved to a new revision before optimization started; nothing ran and nothing was spent.`);
+  if (skill.delivery !== 'complete') throw opError('approval_required', 'Optimization requires the complete owner-approved dependency closure.',
+    `Part of ${target.pack_id}/${opts.skillName}'s files is not approved for this connection, so the optimizer cannot see the whole skill. Nothing ran.`);
+  const [stored] = await ctx.engine.executeRaw<StoredSkillRevision>(`SELECT * FROM shared_skill_revisions
+    WHERE source_id=$1 AND source_incarnation=$2::uuid AND pack_id=$3 AND name=$4 AND revision=$5::uuid AND NOT deleted`,
+  [target.source_id, target.source_incarnation, target.pack_id, opts.skillName, target.expected_revision]);
+  const policy = await readSharedSkillPolicy(ctx.engine, target.source_id, target.source_incarnation, await publicationEnabled(ctx));
+  if (!stored || approvedFiles(stored.files, policy.policy, skillPrincipal(ctx)).length !== stored.files.length) {
+    throw opError('approval_required', 'The original complete skill closure is no longer approved.',
+      `Revision ${target.expected_revision} of ${target.pack_id}/${opts.skillName} is gone or no longer fully approved; nothing ran.`);
+  }
+  const files = normalizeSkillFiles(opts.skillName, stored.files.map(file => ({ ...file, encoding: 'base64' })));
+  const evaluationInputs: Buffer[] = [];
+  for (const input of [opts.benchmarkPath, ...(opts.heldOutPath ? [opts.heldOutPath] : [])]) {
+    let bytes: Buffer;
+    if (ctx.remote !== false) {
+      const path = skillPath(relative(dirname(skillsDir), resolve(input)).split(sep).join('/'));
+      const asset = await getSharedSkillAsset(ctx, { ...selector, revision: target.expected_revision, path });
+      bytes = Buffer.from(asset.content, 'base64');
+      const sealed = files.find(file => file.path === path);
+      if (!sealed || asset.sha256 !== sealed.sha256 || sha256(bytes) !== sealed.sha256 || bytes.length !== asset.size) throw opError('revision_unavailable',
+        'The evaluation input does not match the selected approved skill revision.', `Use an evaluation file from revision ${target.expected_revision}; nothing ran.`);
+    } else if (readPrivateCodexConfig()) {
+      bytes = (await import('./codex-optimizer-files.ts')).readNativeOptimizerFile(input);
+    } else {
+      if (lstatSync(realpathSync(input)).size > SHARED_SKILL_LIMITS.bundleBytes) throw opError('invalid_params', 'The evaluation input exceeds the bounded staging size.', EVAL_INPUT_HINT);
+      bytes = readFileSync(input);
+    }
+    if (bytes.length > SHARED_SKILL_LIMITS.bundleBytes) throw opError('invalid_params', 'The evaluation input exceeds the bounded staging size.', EVAL_INPUT_HINT);
+    evaluationInputs.push(bytes);
+  }
+  const canonicalFile = join(skillsDir, opts.skillName, 'SKILL.md');
+  for (const file of files) {
+    const path = join(dirname(skillsDir), file.path), stat = lstatSync(path);
+    const content = readPrivateCodexConfig() ? (await import('./codex-optimizer-files.ts')).readNativeOptimizerFile(path) : readFileSync(path);
+    if (!stat.isFile() || stat.nlink !== 1 || realpathSync(path) !== path || sha256(content) !== file.sha256) throw opError('local_conflict',
+      'Canonical skill bytes differ from the selected approved revision.', `${file.path} differs from revision ${target.expected_revision}; nothing ran.`);
+  }
+  if (!opts.force && getWorkingTreeStatusForFile(canonicalFile) === 'dirty') throw opError('dirty_tree', 'Commit or stash canonical skill edits before optimization.',
+    `${canonicalFile} has uncommitted Git changes. Nothing ran.`);
+  const bundled = getBundledSkillContext(skillsDir, opts.skillName);
+  const mutate = shouldMutateSkillFile(bundled, opts).mutate;
+  return { target, ctx, skillsDir, skill, stored, files, evaluationInputs, bundled, mutate };
+}
+
 export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillOptOpts) => Promise<RunSkillOptResult>): Promise<RunSkillOptResult> {
+  if (readPrivateCodexConfig()) return (await import('./codex-optimizer.ts')).optimizeCodexSharedSkill(opts, run);
   const target = opts.sharedSkill;
   const ctx = opts.operationContext && target ? { ...opts.operationContext, sourceId: target.source_id } : undefined;
   if (!ctx || ctx.engine !== opts.engine || !target) {
@@ -102,7 +172,7 @@ export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillO
       'Drop the resume run id, write capture, validation-gate and reflect mode overrides, explicit tasks, criteria and rollout hook, and pass a benchmark file; then start the optimization again. Shared skills always run the full gated evaluation.');
   }
   const benchmarkInput = opts.benchmarkPath;
-  await authorize(ctx, opts);
+  await authorizeSharedOptimizer(ctx, opts);
   if (await getWriteRequest(ctx.engine, await requestPrincipalForContext(ctx), target.request_id)) {
     throw new OperationError('request_already_submitted', 'This optimizer publication request has already been submitted.',
       `Read get_write_request with request_id=${target.request_id}; do not rerun paid optimization to poll a publication.`);
@@ -187,7 +257,7 @@ export async function optimizeSharedSkill(opts: SkillOptOpts, run: (opts: SkillO
       ...(ctx.remote !== false ? { proposedPath: undefined } : {}) };
     if (opts.dryRun || !mutate || result.outcome !== 'accepted' || result.finalText === skill.body) return response;
     lintCandidate(skill.body, result.finalText);
-    await authorize(ctx, opts);
+    await authorizeSharedOptimizer(ctx, opts);
     const input = files.map(file => ({ ...file, encoding: 'base64' as const,
       content: file.path === `skills/${opts.skillName}/SKILL.md` ? Buffer.from(result.finalText).toString('base64') : file.content }));
     const publication = await submitSharedSkillMutation(ctx, 'put_skill', { ...target, name: opts.skillName, files: input,

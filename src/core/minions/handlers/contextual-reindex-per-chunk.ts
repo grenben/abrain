@@ -50,6 +50,9 @@ import {
 import { resolveSearchMode, loadSearchModeConfig } from '../../search/mode.ts';
 import { resolveModel } from '../../model-config.ts';
 import { DEFAULT_SYNOPSIS_MODEL } from '../../page-summary.ts';
+import { readPrivateCodexConfig } from '../../ai/private-policy.ts';
+import { SubscriptionAdmissionError } from '../../ai/subscription-admission.ts';
+import { CodexProposalError } from '../../ai/providers/codex-contract.ts';
 
 /**
  * Default global concurrency cap for contextual synopsis calls. The public
@@ -109,7 +112,9 @@ export async function resolveContextualSynopsisModel(
   engine: BrainEngine | null,
   explicitModel?: string,
 ): Promise<string> {
+  const privateMode = readPrivateCodexConfig() !== null;
   return resolveModel(engine, {
+    ...(privateMode ? { privateRole: 'contextual-synopsis' as const } : {}),
     cliFlag: explicitModel,
     configKey: 'models.contextual_synopsis',
     deprecatedConfigKey: 'contextual_retrieval.haiku_model',
@@ -130,7 +135,11 @@ export function makeContextualReindexHandler(opts: MakeContextualReindexHandlerO
   return async function contextualReindexHandler(
     ctx: MinionJobContext,
   ): Promise<{ ok: boolean; mode_applied: string; chunks_embedded: number; skip_reason?: string; next?: string }> {
+    const privateMode = readPrivateCodexConfig() !== null;
+    if (privateMode && opts.reembedPage) throw new CodexProposalError('invalid_input');
     const data = parseJobData(ctx.data);
+    if (privateMode && !data.expected_source_id)
+      throw new SubscriptionAdmissionError('subscription_identity_conflict');
 
     // Load page row to derive the authoritative source_id (D27 P2-1).
     // With expected_source_id the lookup is scoped to that source and a
@@ -172,6 +181,7 @@ export function makeContextualReindexHandler(opts: MakeContextualReindexHandlerO
       sourceId: foundPage.source_id,
       globalMode,
       killSwitchDisabled,
+      ...(privateMode ? { privateRole: 'contextual-synopsis' as const } : {}),
       synopsisModel,
       abortSignal: ctx.signal,
       chunkConcurrency,

@@ -42,6 +42,8 @@ const RETENTION_ROWS = `WITH pending AS MATERIALIZED (
 ), publication_revisions AS MATERIALIZED (
   SELECT revision FROM pending WHERE revision IS NOT NULL
   UNION SELECT a->>'revision' FROM pending CROSS JOIN LATERAL jsonb_array_elements(affected) a WHERE a->>'revision' IS NOT NULL
+  UNION SELECT input->'target'->>'expected_revision' FROM codex_shared_skill_optimizations
+    WHERE input->'target'->>'source_id'=$1 AND input->'target'->>'source_incarnation'=$2::text
 ), ranked AS (
   SELECT r.source_id,r.source_incarnation,r.pack_id,r.name,r.revision,r.created_at,r.deleted,r.stored_bytes,
     row_number() OVER(PARTITION BY r.pack_id,r.name ORDER BY r.created_at DESC,r.revision DESC) AS position

@@ -22,8 +22,16 @@
  */
 
 import type { BrainEngine } from '../engine.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { OperationError } from '../ops/contract.ts';
+import { resolveOwnerHolder } from '../owner-holder.ts';
 
 export interface ABRunInput {
+  /** Host-generated identity for a resumable private trial. */
+  trialId?: string;
+  /** Private trials must originate from a trusted local caller. */
+  remote?: boolean;
+  model?: string;
   question: string;
   /** Holder context for calibration. Resolves via resolveOwnerHolder (config emotional_weight.user_holder, else 'self'). */
   holder?: string;
@@ -32,7 +40,7 @@ export interface ABRunInput {
   /** Source for the row. */
   sourceId: string;
   /** Inject for tests; production runs the real `runThink` twice. */
-  thinkRunner?: (opts: { question: string; withCalibration: boolean }) => Promise<{ answer: string; modelUsed?: string }>;
+  thinkRunner?: (opts: { question: string; withCalibration: boolean }) => Promise<{ answer: string; modelUsed?: string; synthesisOk?: boolean }>;
   /** Inject for tests; production prompts the user via stdin. */
   preferenceResolver?: (opts: { baseline: string; withCalibration: string }) => Promise<'baseline' | 'with_calibration' | 'neither' | 'tie'>;
   /** Optional notes from the user. */
@@ -44,7 +52,7 @@ export interface ABRunResult {
   withCalibrationAnswer: string;
   preferred: 'baseline' | 'with_calibration' | 'neither' | 'tie';
   modelUsed?: string | undefined;
-  rowId?: number;
+  rowId?: number | string;
 }
 
 /**
@@ -52,8 +60,47 @@ export interface ABRunResult {
  * preference, writes the row.
  */
 export async function runAbTrial(input: ABRunInput): Promise<ABRunResult> {
+  if (readPrivateCodexConfig()) {
+    if (input.thinkRunner || !input.trialId || !input.preferenceResolver || input.remote !== false) {
+      throw new OperationError(
+        'invalid_params',
+        'Private A/B trials need a host identity, local authority and explicit preference input.',
+        'Use the native trial command; injected model runners are not supported in strict mode.',
+      );
+    }
+    const { preparePrivateAbTrial, recordPrivateAbPreference } = await import('./think-ab-codex.ts');
+    const holder = resolveOwnerHolder({
+      override: input.holder,
+      configValue: await input.engine.getConfig('emotional_weight.user_holder'),
+    });
+    const trial = await preparePrivateAbTrial({
+      ...input,
+      trialId: input.trialId,
+      remote: false,
+      holder,
+    });
+    const preferred = await input.preferenceResolver({
+      baseline: trial.baseline!.answer,
+      withCalibration: trial.calibrated!.answer,
+    });
+    const rowId = await recordPrivateAbPreference(
+      input.engine,
+      input.sourceId,
+      input.trialId,
+      false,
+      preferred,
+      input.notes,
+    );
+    return {
+      baselineAnswer: trial.baseline!.answer,
+      withCalibrationAnswer: trial.calibrated!.answer,
+      preferred,
+      modelUsed: trial.binding.model,
+      rowId,
+    };
+  }
   if (!input.thinkRunner) {
-    throw new Error('runAbTrial: thinkRunner not provided (production wiring lives in src/commands/think.ts)');
+    throw new Error('runAbTrial: thinkRunner not provided for the legacy harness');
   }
   if (!input.preferenceResolver) {
     throw new Error('runAbTrial: preferenceResolver not provided');
@@ -61,10 +108,16 @@ export async function runAbTrial(input: ABRunInput): Promise<ABRunResult> {
 
   const baseline = await input.thinkRunner({ question: input.question, withCalibration: false });
   const withCal = await input.thinkRunner({ question: input.question, withCalibration: true });
+  if (!baseline.answer.trim() || !withCal.answer.trim() || baseline.synthesisOk === false || withCal.synthesisOk === false) {
+    throw new OperationError('invalid_params', 'A/B generation failed or returned an empty answer.', 'Only complete answers can be compared.');
+  }
   const preferred = await input.preferenceResolver({
     baseline: baseline.answer,
     withCalibration: withCal.answer,
   });
+  if (!['baseline', 'with_calibration', 'neither', 'tie'].includes(preferred)) {
+    throw new OperationError('invalid_params', 'Invalid A/B preference.', 'Choose a supported preference explicitly.');
+  }
   const rows = await input.engine.executeRaw<{ id: number }>(
     `INSERT INTO think_ab_results
        (source_id, question, baseline_answer, with_calibration_answer, preferred, model_id, notes)
@@ -109,14 +162,18 @@ export interface AbReportResult {
  */
 export async function buildAbReport(
   engine: BrainEngine,
-  opts: { days?: number } = {},
+  opts: { days?: number; sourceId?: string } = {},
 ): Promise<AbReportResult> {
   const days = opts.days ?? 30;
+  if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
+    throw new OperationError('invalid_params', 'Invalid A/B report window.', 'Use an integer from 1 to 3650 days.');
+  }
   const rows = await engine.executeRaw<{ preferred: string; count: number }>(
     `SELECT preferred, COUNT(*)::int AS count
        FROM think_ab_results
-       WHERE ran_at >= now() - INTERVAL '${days} days'
+       WHERE ran_at >= now() - ($1::integer * INTERVAL '1 day')${opts.sourceId ? ' AND source_id=$2' : ''}
        GROUP BY preferred`,
+    [days, ...(opts.sourceId ? [opts.sourceId] : [])],
   );
   const counts = { baseline: 0, with_calibration: 0, tie: 0, neither: 0 };
   for (const r of rows) {
@@ -152,7 +209,7 @@ export function formatAbReport(report: AbReportResult, days: number): string {
     // #3697: this used to suggest `gbrain think --ab`, a flag `think` never
     // parses (the CLI trial-runner wiring never shipped; runAbTrial is
     // API-only). Don't send the user to a silently-misparsed command.
-    lines.push('  No data yet. (A/B trials are recorded via the runAbTrial harness; a CLI trial-runner has not shipped.)');
+    lines.push('  No data yet. Private trials: gbrain calibration ab-run --help.');
     return lines.join('\n');
   }
   lines.push(`  Baseline wins:           ${report.baseline_wins}`);

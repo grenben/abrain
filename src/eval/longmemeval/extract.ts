@@ -1,5 +1,8 @@
 /**
- * v0.40.2.0 — LongMemEval inline Haiku claim extractor.
+ * LongMemEval inline claim extractor. Strict private mode uses codex-extract.ts,
+ * revalidates retained raw proposals and propagates failures. Complete private
+ * fact batches require semantic validation and fenced atomic insertion.
+ * The legacy free-form parsing/cache behavior below remains non-private only.
  *
  * Populates the benchmark brain's `facts` table so trajectory routing
  * (Commit 4) has data to retrieve. The benchmark contract change is
@@ -30,13 +33,23 @@
  * the optimistic claim).
  */
 
+import { assertSubscriptionTarget, subscriptionTargetTransaction } from '../../core/ai/subscription-target.ts';
+
 import { createHash } from 'crypto';
 import type { ThinkLLMClient } from '../../core/think/index.ts';
 import {
   resolveEntitySlugWithSource,
+  resolveStrictEntityReference,
+  slugify,
   type ResolutionSource,
 } from '../../core/entities/resolve.ts';
 import type { BrainEngine, NewFact } from '../../core/engine.ts';
+import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { codexExtract } from './codex-extract.ts';
+import { CODEX_EXTRACTOR_PROTOCOL } from './codex-protocols.ts';
+import { codexSubscriptionContext } from '../../core/ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../../core/ai/subscription-admission.ts';
+import { CodexProposalError } from '../../core/ai/providers/codex-contract.ts';
 
 /**
  * Parse a JSON array from LLM output. The cross-modal `parseModelJSON`
@@ -135,6 +148,7 @@ export function getCacheStats(): CacheStats {
  * model is named by its resolved id.
  */
 export function trajectoryMethodologyNote(extractorModel: string): string {
+  if (extractorModel.startsWith('codex-cli:')) return `extractor=${extractorModel}-preprocess-full-haystack; protocol=${CODEX_EXTRACTOR_PROTOCOL}; verbatim claims with date and entity evidence`;
   const modelId = extractorModel.slice(extractorModel.indexOf(':') + 1);
   const name = /haiku/i.test(modelId) ? 'haiku' : extractorModel;
   return `extractor=${name}-preprocess-full-haystack-v1`;
@@ -190,14 +204,30 @@ function hashSessionBody(body: string): string {
  * a one-token alias under the first token ("Marco Smith" → first-mention
  * "marco" aliases to the same slug as later "Marco" mentions).
  */
-async function canonicalizeEntity(
+export async function canonicalizeEvalEntity(
   engine: BrainEngine,
   sourceId: string,
   rawEntity: string,
   aliasMap: AliasMap,
+  strict = false,
 ): Promise<{ slug: string; source: ResolutionSource } | null> {
   const normalized = rawEntity.trim().toLowerCase();
   if (!normalized) return null;
+  if (strict) {
+    try {
+      const resolved = await resolveStrictEntityReference(engine, sourceId, rawEntity, { sameName: true, strictErrors: true });
+      if (resolved.slug !== null) return { slug: resolved.slug, source: 'exact_page' };
+      // The private extractor separately proves that the entity's name occurs
+      // in the quoted transcript. If the source has no page for that grounded
+      // name, retain LongMemEval's deterministic fallback identity; never use
+      // it to resolve ambiguity, an unverified prefix, or a non-entity page.
+      if (resolved.miss === 'no_page') {
+        const slug = slugify(rawEntity.trim());
+        if (slug) return { slug, source: 'fallback_slugify' };
+      }
+      throw new Error(`strict entity miss: ${resolved.miss}`);
+    } catch { throw new Error('private_eval_entity_resolution_failed'); }
+  }
 
   // Direct alias hit (full normalized form).
   if (aliasMap.has(normalized)) {
@@ -298,9 +328,8 @@ async function callExtractor(
  * entities via the per-question alias map + engine resolver, and bulk
  * insert into the facts table.
  *
- * Returns counts for telemetry. Never throws — internal errors degrade
- * to "0 facts inserted" with the caller still moving on to the next
- * session.
+ * Returns counts for telemetry. The legacy lane degrades internal failures;
+ * private inference, identity, storage and publication failures propagate.
  */
 export interface ExtractResult {
   /** Number of facts inserted into the database. */
@@ -318,14 +347,41 @@ export async function extractAndInsertClaims(opts: {
   sessionSlug: string;
   sessionId: string;
   sessionBody: string;
+  sessionDate?: string;
   sourceId: string;
   aliasMap: AliasMap;
 }): Promise<ExtractResult> {
+  const privateMode = !!readPrivateCodexConfig(), context = codexSubscriptionContext();
+  let sourceIncarnation: string | undefined;
+  const fence = async (tx: BrainEngine) => {
+    if (context!.signal?.aborted) throw new CodexProposalError('aborted');
+    const [source] = await tx.executeRaw<{ incarnation: string; archived: boolean }>('SELECT incarnation,archived FROM sources WHERE id=$1 FOR SHARE', [opts.sourceId]);
+    if (!source || source.archived || source.incarnation !== sourceIncarnation) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    if (context!.signal?.aborted) throw new CodexProposalError('aborted');
+  };
+  if (privateMode) {
+    if (!context) throw new SubscriptionAdmissionError('subscription_required');
+    await assertSubscriptionTarget(opts.engine);
+    const expectedSessionId = opts.sessionSlug.slice(opts.sessionSlug.lastIndexOf('/') + 1);
+    const expectedBody = opts.sessionBody.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
+    const snapshot = await opts.engine.readPageSnapshot(opts.sessionSlug, { sourceId: opts.sourceId, requireLiveSource: true });
+    if (!snapshot || snapshot.page.slug !== opts.sessionSlug || opts.sessionId !== expectedSessionId ||
+        snapshot.page.frontmatter.session_id !== undefined && snapshot.page.frontmatter.session_id !== opts.sessionId ||
+        snapshot.page.compiled_truth.trim() !== expectedBody) {
+      throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    }
+    const [source] = await opts.engine.executeRaw<{ incarnation: string }>('SELECT incarnation FROM sources WHERE id=$1 AND NOT archived', [opts.sourceId]);
+    if (!source) throw new SubscriptionAdmissionError('subscription_identity_conflict');
+    sourceIncarnation = source.incarnation;
+  }
   const hash = hashSessionBody(opts.sessionBody);
   let claims: ExtractedClaim[] | null;
   let cacheHit = false;
   const cached = cache.get(hash);
-  if (cached) {
+  if (privateMode) {
+    ({ claims, cacheHit } = await codexExtract({ client: opts.client, model: opts.model, body: opts.sessionBody, sessionDate: opts.sessionDate }));
+    if (cacheHit) cacheHits++; else cacheMisses++;
+  } else if (cached) {
     cacheHit = true;
     cacheHits++;
     cached.hits++;
@@ -339,6 +395,7 @@ export async function extractAndInsertClaims(opts: {
   }
 
   if (!claims || claims.length === 0) {
+    if (privateMode) { await context!.checkAuthority?.(); await subscriptionTargetTransaction(opts.engine, fence); }
     return { inserted: 0, parsed: 0, cacheHit };
   }
 
@@ -347,8 +404,8 @@ export async function extractAndInsertClaims(opts: {
   const rows: Array<NewFact & { row_num: number; source_markdown_slug: string }> = [];
   let rowNum = 1;
   for (const c of claims) {
-    const canonical = await canonicalizeEntity(opts.engine, opts.sourceId, c.entity, opts.aliasMap);
-    if (!canonical) continue;
+    const canonical = await canonicalizeEvalEntity(opts.engine, opts.sourceId, c.entity, opts.aliasMap, privateMode);
+    if (!canonical) { if (privateMode) throw new CodexProposalError('invalid_output'); continue; }
     rows.push({
       fact: c.text,
       kind: c.event_type ? 'event' : 'fact',
@@ -370,6 +427,16 @@ export async function extractAndInsertClaims(opts: {
   }
 
   if (rows.length === 0) return { inserted: 0, parsed: claims.length, cacheHit };
+  if (privateMode) {
+    await context!.checkAuthority?.();
+    return subscriptionTargetTransaction(opts.engine, async tx => {
+      await fence(tx);
+      const ins = await tx.insertFacts(rows, { source_id: opts.sourceId }); // gbrain-allow-direct-insert: benchmark native extraction; bounded validated rows, source/worker fence, atomic batch.
+      if (context!.signal?.aborted) throw new CodexProposalError('aborted');
+      if (ins.inserted !== rows.length) throw new CodexProposalError('invalid_output');
+      return { inserted: ins.inserted, parsed: claims.length, cacheHit };
+    });
+  }
   try {
     const ins = await opts.engine.insertFacts(rows, { source_id: opts.sourceId }); // gbrain-allow-direct-insert: benchmark harness only — populates ephemeral in-memory PGLite per LongMemEval run; no markdown source-of-truth contract applies (chat sessions are the corpus, NOT a brain repo).
     return { inserted: ins.inserted, parsed: claims.length, cacheHit };

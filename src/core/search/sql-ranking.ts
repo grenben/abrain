@@ -20,6 +20,7 @@
 import { quarantineFilterFragment } from '../quarantine.ts';
 import { unverifiedExtractionFragment } from '../extraction-review.ts';
 import { privatePagesFilterForCaller } from './private-visibility.ts';
+import { nativeDiscoveryClause } from './native-discovery.ts';
 import { chunkVisibleFilter, currentTextProjectionFilter, requiresSafeChunks, safeChunksFilter } from './safe-chunks.ts';
 import { pageEligibleSql } from '../eligibility/sql.ts';
 import type { TrustTier } from '../trust/tier.ts';
@@ -191,6 +192,8 @@ export function buildVisibilityClause(
     /** #5575: the read floor and proactive activation control (eligibility/sql.ts), applied before LIMIT. */
     minTrust?: TrustTier;
     suppressFlagged?: boolean;
+    /** Host-owned deterministic discovery constraint, applied before ranking and limits. */
+    nativeDiscovery?: import('../types.ts').NativeDiscoveryScope;
     /**
      * Wave B: the chunk table alias when the statement reads `content_chunks`
      * rows joined to the page; adds the live body generation predicate
@@ -214,7 +217,7 @@ export function buildVisibilityClause(
   const trustClause = opts?.minTrust || opts?.suppressFlagged
     ? ` AND ${pageEligibleSql(pageAlias, { floor: opts.minTrust, suppressFlagged: opts.suppressFlagged })}` : '';
   const projection = opts?.chunkAlias ? chunkVisibleFilter(pageAlias, opts.chunkAlias) : currentTextProjectionFilter(pageAlias);
-  return `AND ${pageAlias}.deleted_at IS NULL AND ${projection} AND NOT ${sourceAlias}.archived AND ${quarantine}${pinnedQuestion}${privateClause}${chunksClause}${trustClause}`;
+  return `AND ${pageAlias}.deleted_at IS NULL AND ${projection} AND NOT ${sourceAlias}.archived AND ${quarantine}${pinnedQuestion}${privateClause}${chunksClause}${trustClause}${nativeDiscoveryClause(pageAlias, opts?.nativeDiscovery)}`;
 }
 
 // ============================================================

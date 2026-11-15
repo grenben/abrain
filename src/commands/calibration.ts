@@ -19,7 +19,8 @@
  */
 
 import type { BrainEngine } from '../core/engine.ts';
-import { runPhaseCalibrationProfile } from '../core/cycle/calibration-profile.ts';
+import { runCalibrationAb } from './calibration-ab.ts';
+import { regenerateCalibration } from './calibration-subscription.ts';
 import { sourceScopeOpts, type OperationContext } from '../core/operations.ts';
 import type { GBrainConfig } from '../core/config.ts';
 import { GBrainError } from '../core/types.ts';
@@ -49,7 +50,7 @@ export interface CalibrationProfileRow {
 /** Source-scoped read of the latest profile row for a holder. */
 export async function getLatestProfile(
   engine: BrainEngine,
-  opts: { holder: string; sourceId?: string; sourceIds?: string[] },
+  opts: { holder: string; sourceId?: string; sourceIds?: string[]; publishedOnly?: boolean },
 ): Promise<CalibrationProfileRow | null> {
   let sql = `SELECT id, source_id, holder, wave_version, generated_at, published,
             total_resolved, brier, accuracy, partial_rate, grade_completion,
@@ -59,15 +60,19 @@ export async function getLatestProfile(
        WHERE holder = $1`;
   const params: unknown[] = [opts.holder];
 
-  if (opts.sourceIds && opts.sourceIds.length > 0) {
-    sql += ` AND source_id = ANY($2::text[])`;
-    params.push(opts.sourceIds);
+  if (opts.publishedOnly) sql += ` AND published = TRUE`;
+  if (opts.sourceIds !== undefined) {
+    if (opts.sourceIds.length === 0) sql += ` AND FALSE`;
+    else {
+      sql += ` AND source_id = ANY($2::text[])`;
+      params.push(opts.sourceIds);
+    }
   } else if (opts.sourceId) {
     sql += ` AND source_id = $2`;
     params.push(opts.sourceId);
   }
 
-  sql += ` ORDER BY generated_at DESC LIMIT 1`;
+  sql += ` ORDER BY generated_at DESC, id DESC LIMIT 1`;
 
   const rows = await engine.executeRaw<CalibrationProfileRow>(sql, params);
   if (!rows[0]) return null;
@@ -167,6 +172,7 @@ export async function runCalibration(
   args: string[],
   config: GBrainConfig,
 ): Promise<void> {
+  if (await runCalibrationAb(engine, args)) return;
   const { opts } = parseArgs(args);
   const holder = resolveOwnerHolder({
     override: opts.holder,
@@ -218,7 +224,7 @@ export async function runCalibration(
     const { buildAbReport, formatAbReport } = await import('../core/calibration/think-ab.ts');
     const daysArg = args[args.indexOf('--days') + 1];
     const days = daysArg ? Math.max(1, parseInt(daysArg, 10) || 30) : 30;
-    const report = await buildAbReport(engine, { days });
+    const report = await buildAbReport(engine, { days, sourceId });
     if (opts.json) {
       process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     } else {
@@ -230,7 +236,7 @@ export async function runCalibration(
   if (opts.regenerate) {
     process.stderr.write(`[calibration] regenerating profile for holder=${holder}...\n`);
     const ctx = ctxFromCli(engine, config, sourceId);
-    const result = await runPhaseCalibrationProfile(ctx, { holder });
+    const result = await regenerateCalibration(ctx, args, holder);
     if (result.status === 'fail') {
       process.stderr.write(`[calibration] regenerate failed: ${result.error?.message ?? 'unknown'}\n`);
       process.exit(1);

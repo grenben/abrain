@@ -22,6 +22,7 @@
  */
 import type { SearchOpts } from '../types.ts';
 import { buildBestPerPagePoolCte } from './sql-ranking.ts';
+import { utcSearchDateBound } from './date-bounds.ts';
 import { frontmatterWhereSql } from './frontmatter-where.ts';
 import { escapeLikePattern, cjkMatchTerms } from '../cjk.ts';
 
@@ -220,11 +221,11 @@ function shapeFilters(opts: SearchOpts | undefined, params: unknown[]): string {
     extraFilter += ` AND cc.symbol_type = $${params.length}`;
   }
   if (opts?.afterDate) {
-    params.push(opts.afterDate);
+    params.push(utcSearchDateBound(opts.afterDate));
     extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.afterDateInclusive ? '>=' : '>'} $${params.length}::text::timestamptz`;
   }
   if (opts?.beforeDate) {
-    params.push(opts.beforeDate);
+    params.push(utcSearchDateBound(opts.beforeDate));
     extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) ${opts?.beforeDateInclusive ? '<=' : '<'} $${params.length}::text::timestamptz`;
   }
   // v0.34.1 (#861 — P0 leak seal): source-isolation on the CJK fallback path.

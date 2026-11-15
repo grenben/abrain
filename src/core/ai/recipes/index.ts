@@ -6,6 +6,7 @@
  */
 
 import type { Recipe } from '../types.ts';
+import { codexCli } from './codex-cli.ts';
 import { openai } from './openai.ts';
 import { google } from './google.ts';
 import { anthropic } from './anthropic.ts';
@@ -34,6 +35,7 @@ import { particle } from './particle.ts';
 import { typesafe } from './typesafe.ts';
 
 const ALL: Recipe[] = [
+  codexCli,
   openai,
   google,
   anthropic,

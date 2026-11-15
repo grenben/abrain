@@ -89,12 +89,20 @@ CREATE TABLE IF NOT EXISTS link_edge_proposals (
   detail             TEXT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  judge_snapshot_hash TEXT,
   UNIQUE (from_page_id, a_to_page_id, b_to_page_id, link_type, evidence_hash)
 );
 CREATE INDEX IF NOT EXISTS link_edge_proposals_status_idx ON link_edge_proposals (source_id, status, created_at);
 ${rls('link_edge_proposals')}
 CREATE SEQUENCE IF NOT EXISTS graph_generation_seq;
 `;
+
+// v204 must retain the SQL applied before v343 added the proposal snapshot.
+// Fresh schema creation uses LINK_TEMPORAL_SCHEMA_SQL above.
+export const LINK_TEMPORAL_SCHEMA_V204_SQL = LINK_TEMPORAL_SCHEMA_SQL.replace(
+  '  judge_snapshot_hash TEXT,\n',
+  '',
+);
 
 /** Assertion tense on links rows; applied by the migration and mirrored in schema.sql. */
 export const LINK_ASSERTION_TENSE_SQL = `

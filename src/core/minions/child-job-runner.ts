@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSpawnInvocation } from './spawn-helpers.ts';
 import { SpendEnforcementUnavailableError, childSpendEnforcementReady } from './spend-authorization.ts';
+import { childSubscriptionEnforcementReady, childCodexActionsReady } from './subscription-child.ts';
 import { CHILD_PARENT_BUILD_ENV, parentBuildEnvValue } from './child-readiness.ts';
 import { LocalConfigurationError, isLocalConfigurationError } from './configuration-error.ts';
 import {
@@ -129,6 +130,8 @@ export interface RunJobInChildOpts {
   jobId: number;
   /** The row carries a spend authorization: only a child with `spend-enforcement-v1` may run it. */
   spendAuthorized?: boolean;
+  codexAuthorized?: boolean;
+  codexDiscovery?: boolean;
   jobName: string;
   lockToken: string;
   /** Per-job abort (timeout / cancel / lock-lost / lock-renewal-failed). */
@@ -167,6 +170,8 @@ interface ChildExit {
  * them verbatim).
  */
 export async function runJobInChild(opts: RunJobInChildOpts): Promise<unknown> {
+  if (opts.codexAuthorized && !childSubscriptionEnforcementReady()) throw childConfigurationError('child_protocol_incompatible');
+  if (opts.codexAuthorized && (opts.jobName === 'subagent' || opts.codexDiscovery) && !childCodexActionsReady(opts.codexDiscovery)) throw childConfigurationError('child_protocol_incompatible');
   if (opts.spendAuthorized && !childSpendEnforcementReady()) throw new SpendEnforcementUnavailableError();
   let executionStopped = false;
   let configurationError: LocalConfigurationError | undefined;
@@ -252,7 +257,7 @@ async function runJobChildProcess(opts: RunJobInChildOpts): Promise<unknown> {
     [CHILD_ENV.resultPath]: resultPath,
     [CHILD_ENV.isChild]: '1',
     [CHILD_ENV.parentPid]: String(process.pid),
-    [CHILD_PARENT_BUILD_ENV]: parentBuildEnvValue(opts.spendAuthorized === true),
+    [CHILD_PARENT_BUILD_ENV]: parentBuildEnvValue(opts.spendAuthorized === true, opts.codexAuthorized === true, opts.codexDiscovery === true),
     GBRAIN_POOL_SIZE: String(childPoolSize),
     GBRAIN_DIRECT_POOL_SIZE: '1',
   };

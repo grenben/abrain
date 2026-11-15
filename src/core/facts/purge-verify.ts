@@ -525,7 +525,11 @@ export async function verifyFactPurge(engine: BrainEngine, input: { target: Purg
   }
   await swept('decide_proposals', 'SELECT 1 FROM decide_proposals WHERE source_id=$1 AND (new_fact_id=ANY($2::bigint[]) OR old_fact_id=ANY($2::bigint[]))',
     [src, plan.factIds], plan.review.decide_proposals, plan.review.decide_proposals);
-  await swept('take_proposals', 'SELECT 1 FROM take_proposals WHERE source_id=$1 AND gbrain_fact_fingerprint(claim_text)=$2', [src, target.fact_hash], 0, removed.take_proposals);
+  await swept('take_proposals', `SELECT 1 FROM take_proposals WHERE source_id=$1
+    AND (gbrain_fact_fingerprint(claim_text)=$2
+      OR strpos(lower(COALESCE(codex_evidence::text,'')),$3)>0
+      OR strpos(lower(COALESCE(codex_evidence::text,'')),$4)>0)`,
+  [src, target.fact_hash, needle, JSON.stringify(claim).slice(1, -1).toLowerCase()], 0, removed.take_proposals);
   await swept('core_edit_notices', 'SELECT 1 FROM core_edit_notices WHERE source_id=$1 AND strpos(lower(base_text),$2)>0', [src, needle], 0, removed.core_edit_notices);
   stores.push({ store: 'derived_artifacts', status: plan.derived.truncated ? 'unverified' : plan.derived.rows.length ? (dryRun ? 'would_remove' : 'retained_inactive') : 'not_present',
     removed: plan.derived.rows.length, ...(plan.derived.truncated ? { reason: 'derivation_walk_bound' } : {}),

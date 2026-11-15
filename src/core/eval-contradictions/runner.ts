@@ -34,6 +34,13 @@ import { CostTracker, estimateUpperBoundCost } from './cost-tracker.ts';
 import { buildSourceTierBreakdown, classifySlugTier } from './cross-source.ts';
 import { shouldSkipForDateMismatch } from './date-filter.ts';
 import { withBudgetTracker } from '../ai/gateway.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, privateModelForRole } from '../ai/private-policy.ts';
+import { assertSubscriptionTarget } from '../ai/subscription-target.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { assertPrivateEvalCorpusPin } from './private-run-scope.ts';
+import { assertSubscriptionAuxiliaryHealthy } from '../ai/subscription-auxiliary.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
 import { resolveTierDefault } from '../model-config.ts';
 import { BudgetTracker, BudgetExhausted } from '../budget/budget-tracker.ts';
 import { judgeContradiction, type JudgeInput, type JudgeOutput } from './judge.ts';
@@ -245,6 +252,22 @@ function sortPairs(
  * strings — CLI flag parsing lives in the command file, not here.
  */
 export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerResult> {
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) {
+    const model = privateModelForRole(privatePolicy, 'contradiction-probe');
+    assertPrivateRoute(opts.judgeModel ?? model, 'eval-contradictions:runner', privatePolicy, 'contradiction-probe');
+    opts = { ...opts, judgeModel: opts.judgeModel ?? model };
+    if (opts.judgeFn || opts.searchFn) throw new CodexProposalError('invalid_input');
+    await assertSubscriptionTarget(opts.engine);
+    const context = codexSubscriptionContext();
+    if (!context) throw new SubscriptionAdmissionError('subscription_required');
+    await context.checkAuthority?.();
+    const [allowance] = await context.engine.executeRaw<{ current: boolean }>(
+      'SELECT deadline > now() AS current FROM codex_subscription_runs WHERE run_id=$1', [context.runId]);
+    if (!allowance) throw new SubscriptionAdmissionError('subscription_required');
+    if (!allowance.current) throw new SubscriptionAdmissionError('subscription_exhausted');
+    assertPrivateEvalCorpusPin(opts.engine);
+  }
   // T6: wrap the entire body in withBudgetTracker so every gateway-layer
   // chat/embed/rerank call (judge, embed-on-query) auto-records via the
   // AsyncLocalStorage scope from src/core/ai/gateway.ts. The existing
@@ -260,7 +283,7 @@ export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerRes
     label: 'eval.suspected-contradictions',
   });
   try {
-    return await withBudgetTracker(_runnerTracker, () => _runContradictionProbeInner(opts));
+    return await withBudgetTracker(_runnerTracker, () => _runContradictionProbeInner(opts, _runnerTracker));
   } catch (err) {
     // BudgetExhausted from the gateway path should bubble cleanly. With no
     // cap set, the tracker only records; it doesn't throw, so this path
@@ -272,7 +295,7 @@ export async function runContradictionProbe(opts: RunnerOpts): Promise<RunnerRes
   }
 }
 
-async function _runContradictionProbeInner(opts: RunnerOpts): Promise<RunnerResult> {
+async function _runContradictionProbeInner(opts: RunnerOpts, gatewayUsage: BudgetTracker): Promise<RunnerResult> {
   const startedAt = Date.now();
   // #3813: key-aware tier default, not a hardcoded Anthropic model — an
   // OPENAI_API_KEY-only install must not route the judge to an unservable
@@ -289,6 +312,14 @@ async function _runContradictionProbeInner(opts: RunnerOpts): Promise<RunnerResu
 
   const errs = new JudgeErrorCollector();
   const tracker = new CostTracker({ capUsd: budgetUsd });
+  let recordedEmbeddingUsd = 0;
+  const recordGatewayEmbeddings = () => {
+    const charged = gatewayUsage.snapshot().models
+      .filter(row => row.touchpoint === 'embedding')
+      .reduce((sum, row) => sum + (row.cost_usd ?? 0), 0);
+    tracker.recordEmbeddingCostUsd(Math.max(0, charged - recordedEmbeddingUsd));
+    recordedEmbeddingUsd = charged;
+  };
   const cache = new JudgeCache({ engine: opts.engine, modelId: judgeModel, disabled: !!opts.noCache });
 
   // Pre-flight: pair count = queries × min(topK*(topK-1)/2 + topK, 50).
@@ -337,6 +368,8 @@ async function _runContradictionProbeInner(opts: RunnerOpts): Promise<RunnerResu
 
     // Search.
     const results = await searchFn(opts.engine, query, { limit: topK });
+    assertSubscriptionAuxiliaryHealthy();
+    recordGatewayEmbeddings();
 
     // Pairs.
     const cross = generateCrossSlugPairs(results);

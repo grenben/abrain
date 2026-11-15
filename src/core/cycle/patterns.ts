@@ -119,6 +119,8 @@ export interface PatternsPhaseOpts {
  */
 import { CYCLE_DEADLINE_RESERVE_MS } from './base-phase.ts';
 import { patternsCadenceKey, patternsCadenceSkip, patternsChildReadBudgetBytes, recordPatternsLastRun, sizePatternsRun } from './patterns-plan.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivatePatterns } from './patterns-codex.ts';
 export { CYCLE_DEADLINE_RESERVE_MS };
 
 /**
@@ -172,6 +174,8 @@ export async function runPhasePatterns(
         '--phase patterns --once forces this run (config untouched)\n',
       );
     }
+
+    if (readPrivateCodexConfig()) return await runPrivatePatterns(engine, opts, config);
 
     const [source] = await managedPersistenceEnabled(engine)
       ? await engine.executeRaw<{ incarnation: string }>('SELECT incarnation FROM sources WHERE id=$1', [opts.sourceId ?? 'default']) : [];
@@ -501,7 +505,7 @@ async function runPatternsPass(engine: BrainEngine, opts: PatternsPhaseOpts, con
 
 // ── Config ────────────────────────────────────────────────────────────
 
-interface PatternsConfig {
+export interface PatternsConfig {
   enabled: boolean;
   lookbackDays: number;
   minEvidence: number;
@@ -560,7 +564,7 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
   // v0.28: unified model resolution
   const { resolveModel } = await import('../model-config.ts');
   const model = await resolveModel(engine, {
-    configKey: 'models.dream.patterns',
+    privateRole: 'patterns', configKey: 'models.dream.patterns',
     deprecatedConfigKey: 'dream.patterns.model',
     tier: 'reasoning',
     fallback: 'sonnet',

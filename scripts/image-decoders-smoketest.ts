@@ -1,11 +1,10 @@
-// Compiled-binary smoke test for HEIC/AVIF decoders.
+// Compiled-binary smoke test for image decoders.
 //
-// Verifies that bun --compile produces a binary where heic-decode and
-// @jsquash/avif both load their WASM and successfully decode a fixture
-// to a non-empty pixel buffer.
+// Verifies that bun --compile embeds the HEIC and AVIF decoders and the
+// production Codex PNG/JPEG/WebP validation pipeline.
 //
 // Output: a single JSON line on stdout.
-//   {"heic":{"ok":true,"width":N,"height":N,"bytes":N},"avif":{"ok":true,...}}
+//   {"heic":{"ok":true,...},"avif":{"ok":true,...},"codex_images":{"ok":true},...}
 //
 // Exit code 0 on full success, 1 on any decode failure.
 //
@@ -25,6 +24,8 @@ import { readFileSync } from 'node:fs';
 
 import heicDecode from 'heic-decode';
 import avifDecode, { init as initAvif } from '@jsquash/avif/decode.js';
+import { prepareCodexInput } from '../src/core/ai/providers/codex-input.ts';
+import { PNG_PIXEL, JPEG_PIXELS, WEBP_PIXELS, WEBP_LOSSLESS_PIXELS, syntheticPng } from '../test/helpers/codex-image-fixtures.ts';
 
 interface DecodeResult {
   ok: boolean;
@@ -75,6 +76,22 @@ async function decodeAvif(): Promise<DecodeResult> {
 
 const heic = await decodeHeic();
 const avif = await decodeAvif();
-const allOk = heic.ok && avif.ok;
-console.log(JSON.stringify({ heic, avif, ok: allOk }));
+
+// Exercise production image preparation, including the embedded WASM, without
+// calling a model or allowing a decoder to fetch a remote asset.
+globalThis.fetch = (() => { throw new Error('decoder network forbidden'); }) as unknown as typeof fetch;
+const pngInput = (bytes: Uint8Array) => ({ bin: '/synthetic/never-executed', model: 'fixture', prompt: 'fixture',
+  schema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+  images: [{ mime: 'image/png' as const, bytes }], env: {} });
+let codexImages = false;
+try {
+  await prepareCodexInput(pngInput(PNG_PIXEL));
+  for (const [mime, bytes] of [['image/jpeg', JPEG_PIXELS], ['image/webp', WEBP_PIXELS], ['image/webp', WEBP_LOSSLESS_PIXELS]] as const) {
+    await prepareCodexInput({ ...pngInput(bytes), images: [{ mime, bytes }] });
+  }
+  try { await prepareCodexInput(pngInput(syntheticPng({ pixels: Uint8Array.of(0) }))); }
+  catch (error) { codexImages = (error as {reason?: string}).reason === 'invalid_input'; }
+} catch { /* Report a sanitized failure, never raw codec diagnostics. */ }
+const allOk = heic.ok && avif.ok && codexImages;
+console.log(JSON.stringify({ heic, avif, codex_images: { ok: codexImages }, ok: allOk }));
 process.exit(allOk ? 0 : 1);

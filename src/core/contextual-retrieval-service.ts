@@ -39,6 +39,8 @@
  * command) pass no hooks and rely on the gateway's own rate-limit retry.
  */
 
+import { privatePolicyCheck } from './ai/private-role-scope.ts';
+import { CODEX_SYNOPSIS_VERSION } from './ai/codex-versions.ts';
 import { createHash } from 'crypto';
 import * as fs from 'node:fs';
 import { embedBatch } from './embedding.ts';
@@ -76,6 +78,7 @@ import { embeddingInputHash, synopsisDocumentHash, type EmbeddingTier } from './
 import { currentEmbeddingSignature } from './embedding.ts';
 import { estimatePageEmbedUsd, meterPaidCall } from './page-embedding-budget.ts';
 import { segmentSynopsisLead } from './page-body/segment-synopsis.ts';
+import { privateContextualModel, withPrivateContextualPreparation, fencePrivateContextualPublication, contextualSignal, contextualPublicationTransaction, assertPrivateEmptyProjection } from './contextual-retrieval-private.ts';
 
 /**
  * v3 = chunks embed with optional contextual retrieval wrapper. The
@@ -165,7 +168,7 @@ export function computeCorpusGeneration(args: ComputeCorpusGenerationArgs): stri
   const h = createHash('sha256')
     .update(args.crMode)
     .update('|')
-    .update(String(SYNOPSIS_PROMPT_VERSION))
+    .update(synopsisModel.startsWith('codex-cli:') ? CODEX_SYNOPSIS_VERSION : String(SYNOPSIS_PROMPT_VERSION))
     .update('|')
     .update(synopsisModel)
     .update('|')
@@ -260,6 +263,8 @@ export type ReembedPageResult =
     };
 
 export interface ReembedPageArgs {
+  /** Host role retained through the shared synopsis transformer. */
+  privateRole?: 'contextual-synopsis' | 'longmemeval-synopsis';
   engine: BrainEngine;
   /** Page slug (within `sourceId`). */
   pageSlug: string;
@@ -303,6 +308,8 @@ export interface ReembedPageArgs {
   chunkConcurrency?: number;
   /** @internal Synopsis generator seam (benchmark caching/metering); production callers omit this. */
   generateSynopsis?: typeof generatePerChunkSynopsis;
+  /** Host telemetry receives immutable accounting metadata, never writable content. */
+  onSynopsisResult?: (event: Readonly<{ cacheHit: boolean; usage?: Readonly<NonNullable<GeneratePerChunkSynopsisResult['usage']>> }>) => void;
 }
 
 /**
@@ -312,6 +319,7 @@ export interface ReembedPageArgs {
 export async function reembedPageWithContextualRetrieval(
   args: ReembedPageArgs,
 ): Promise<ReembedPageResult> {
+  const checkPolicy = privatePolicyCheck();
   // ── Load page + source + chunks ────────────────────────────────────
   const initial = await args.engine.getPage(args.pageSlug, { sourceId: args.sourceId });
   if (!initial) {
@@ -333,9 +341,11 @@ export async function reembedPageWithContextualRetrieval(
   // intentionally unsealed pages; those chunks never reach a provider.
   const publish = async (mode: CRMode, generation: string | null, embedded?: ChunkInput[]): Promise<ReembedPageResult | null> => {
     try {
-      const installed = await args.engine.transaction(async tx => {
+      const installed = await contextualPublicationTransaction(args.engine, async tx => {
+        await fencePrivateContextualPublication(tx, page.source_id, prepared.snapshot.sourceIncarnation, args.abortSignal);
         await tx.lockPageKeys([{ sourceId: page.source_id, slug: page.slug }]);
         if (digest(sourcePolicy(await loadSourceRow(tx, page.source_id))) !== digest(sourcePolicy(source))) return false;
+        checkPolicy();
         if (embedded) {
           if (!(await installPageEmbeddings(tx, prepared, embedded.map(chunk => ({ ...chunk, model: prepared.embeddingModel ?? undefined })),
             undefined, { tier: mode, corpusGeneration: generation })).complete) return false;
@@ -348,6 +358,7 @@ export async function reembedPageWithContextualRetrieval(
           && !Object.hasOwn(page.frontmatter ?? {}, 'embed_skip')) {
           await reconcileContextualEmbeddingInputs(tx, prepared.snapshot, mode, generation);
         }
+        checkPolicy();
         return true;
       });
       return installed ? null : superseded;
@@ -379,6 +390,7 @@ export async function reembedPageWithContextualRetrieval(
 
   const chunks = prepared.chunks;
   if (chunks.length === 0) {
+    assertPrivateEmptyProjection(page);
     // No chunks but page exists (frontmatter-only or empty). Stamp the
     // column anyway so subsequent reindex sweeps don't keep visiting.
     const failure = await publish(resolution.mode,
@@ -399,7 +411,10 @@ export async function reembedPageWithContextualRetrieval(
   // fall-back path is the D14 page-level consistency guarantee: a
   // single bad chunk demotes the whole page to title-only so all
   // chunks on the page share the same wrapper shape.
-  const synopsisModel = args.synopsisModel ?? args.haikuModel ?? DEFAULT_SYNOPSIS_MODEL;
+  const privateRole = args.privateRole ?? 'contextual-synopsis';
+  const synopsisModel = resolution.mode === 'per_chunk_synopsis'
+    ? await privateContextualModel({ ...args, privateRole }, args.synopsisModel ?? args.haikuModel ?? DEFAULT_SYNOPSIS_MODEL)
+    : args.synopsisModel ?? args.haikuModel ?? DEFAULT_SYNOPSIS_MODEL;
   // #3883: explicit arg wins; else the models.synopsis_max_tokens config;
   // else undefined → page-summary's SYNOPSIS_MAX_TOKENS default (200).
   const synopsisMaxTokens =
@@ -415,14 +430,16 @@ export async function reembedPageWithContextualRetrieval(
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const phase1 = await tryBuildPhase1({
+    checkPolicy();
+    const phase1 = await withPrivateContextualPreparation(args, attemptMode === 'per_chunk_synopsis', chunks.length, () => tryBuildPhase1({
       attemptMode,
       page,
       chunks: chunks as ChunkInput[],
-      args,
+      args: { ...args, privateRole,
+        abortSignal: contextualSignal(args.abortSignal) },
       synopsisModel,
       synopsisMaxTokens,
-    });
+    }));
 
     if (phase1.kind === 'success') {
       const corpus_generation = computeCorpusGeneration({
@@ -735,7 +752,7 @@ async function synopsisWrappedTexts(opts: {
   const wrappedTexts: string[] = new Array(chunks.length);
   const poolResult = await runSlidingPool({
     items: [...chunks],
-    workers: clampContextualChunkConcurrency(args.chunkConcurrency ?? resolveContextualChunkConcurrency()),
+    workers: opts.synopsisModel.startsWith('codex-cli:') ? 1 : clampContextualChunkConcurrency(args.chunkConcurrency ?? resolveContextualChunkConcurrency()),
     signal: args.abortSignal,
     onError: 'abort',
     failureLabel: (c) => String(c.chunk_index),
@@ -802,6 +819,7 @@ async function buildWrappedChunkText(opts: {
       leaseAcquired = true;
     }
     synopsisResult = await (args.generateSynopsis ?? generatePerChunkSynopsis)({
+      privateRole: args.privateRole,
       documentText: sourceText,
       chunkText: c.chunk_text,
       pageTitle: title,
@@ -824,6 +842,8 @@ async function buildWrappedChunkText(opts: {
   }
 
   if (synopsisResult.kind === 'success') {
+    args.onSynopsisResult?.(Object.freeze({ cacheHit: synopsisResult.cacheHit === true,
+      usage: synopsisResult.usage ? Object.freeze({ ...synopsisResult.usage }) : undefined }));
     const prefix = buildContextualPrefix(title, synopsisResult.synopsis);
     return wrapChunkForEmbedding(c.chunk_text, prefix, c.chunk_source);
   }

@@ -16,6 +16,7 @@ import { chunkerStamp } from '../../../core/chunkers/code.ts';
 import { smallBrainBacklogNote } from '../../../core/link-extraction-watermark.ts';
 import { extractionLagVerdict, extractionRoutes, heldExtractionReport, readExtractionLag } from '../../../core/extraction-lag.ts';
 import { isMissingSchemaObject } from '../../../core/utils.ts';
+import { ROLLUP_COST_SELECT, rollupCost } from '../../../core/extract/rollup-cost.ts';
 import { ATOM_PROVENANCE_CTE, unchangedBodyAtoms } from './atom-body-recheck.ts';
 import {
   loadStorageConfig,
@@ -967,7 +968,8 @@ export async function computeExtractHealthCheck(
   try {
     type RollupRow = {
       kind: string;
-      cost_7d_usd: number;
+      cost_7d_usd: number | string | null;
+      subscription_run_count: number | string | null;
       eval_pass_count: number;
       eval_fail_count: number;
       halt_count: number;
@@ -985,7 +987,7 @@ export async function computeExtractHealthCheck(
     const rollupQuery = (withExpected: boolean) =>
       `SELECT
          kind,
-         SUM(cost_usd) AS cost_7d_usd,
+         ${ROLLUP_COST_SELECT},
          SUM(eval_pass_count) AS eval_pass_count,
          SUM(eval_fail_count) AS eval_fail_count,
          SUM(halt_count) AS halt_count,
@@ -1022,7 +1024,9 @@ export async function computeExtractHealthCheck(
 
     type KindAggregate = {
       kind: string;
-      cost_7d_usd: number;
+      cost_7d_usd: number | null;
+      api_metered_cost_7d_usd?: number | null;
+      subscription_run_count?: number;
       eval_pass_count: number;
       eval_fail_count: number;
       halt_count: number;
@@ -1046,9 +1050,13 @@ export async function computeExtractHealthCheck(
       // whose every run banks progress and stops at the cap reads 0%.
       const total = halts + completed + expectedLimits;
       const haltReasons = haltReasonsWithUnknown(halts, recordedReasons.get(r.kind) ?? {});
+      const cost = rollupCost(r);
       return {
         kind: r.kind,
-        cost_7d_usd: Number(r.cost_7d_usd) || 0,
+        ...cost,
+        // Keep the historical zero for unmetered rows with no cost data;
+        // subscription runs make the combined total unknown instead.
+        cost_7d_usd: cost.subscription_run_count ? null : cost.cost_7d_usd ?? 0,
         eval_pass_count: Number(r.eval_pass_count) || 0,
         eval_fail_count: Number(r.eval_fail_count) || 0,
         halt_count: halts,

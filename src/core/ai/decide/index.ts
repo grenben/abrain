@@ -26,7 +26,7 @@ import { providerKind, readDecideConfig, type DecideConfig } from './config.ts';
 import { checkEgress } from './egress.ts';
 import { estimateContextTokens, orderQuestions, parseRetryAfterMs, planBatches, RateLimitedError, runBatches } from './pack.ts';
 import {
-  buildLlmPrompt, llmCapability, llmChatModel, llmModelIdentity, LLM_ANSWER_SCHEMA, LLM_SYSTEM_PROMPT, parseLlmReply,
+  buildLlmPrompt, codexDecideSchema, llmCapability, llmChatModel, llmModelIdentity, LLM_ANSWER_SCHEMA, LLM_SYSTEM_PROMPT, parseLlmReply,
 } from './providers/llm-structured.ts';
 import { buildTypeSafeRequest, classifyTypeSafeHttpError, parseTypeSafeResponse, toWireQuestion } from './providers/typesafe.ts';
 import { SLOT_SPECS } from './slots.ts';
@@ -269,15 +269,16 @@ async function runLlm(req: DecideRequest, cfg: DecideConfig, a: RunArgs): Promis
     await runBatches(plan.length, async (i) => {
       const questions = plan[i]!.indices.map((j) => a.ordered[j]!);
       const reply = await chat({
+        privateRole: 'classifiers',
         model, system: LLM_SYSTEM_PROMPT, messages: [{ role: 'user', content: buildLlmPrompt(a.state, questions) }],
-        ...(capability === 'structured' ? { responseSchema: LLM_ANSWER_SCHEMA } : {}),
+        ...(capability === 'structured' ? { responseSchema: model.startsWith('codex-cli:') ? codexDecideSchema(questions) : LLM_ANSWER_SCHEMA } : {}),
         temperature: 0, abortSignal: signal, purpose: `decide:${req.slot}`, maxTokens: 64 + questions.length * 96,
         // The egress gate cleared this provider only; a chain hop would send the pack elsewhere.
         allowFallback: false,
       });
       inputTokens += reply.usage.input_tokens;
       outputTokens += reply.usage.output_tokens;
-      models.add(llmModelIdentity(model, reply.responseModel, baseUrl));
+      models.add(model.startsWith('codex-cli:') ? reply.model : llmModelIdentity(model, reply.responseModel, baseUrl));
       Object.assign(answers, parseLlmReply(reply.text, questions));
     }, { concurrency: a.lane === 'hot' ? cfg.maxConcurrency : cfg.backgroundConcurrency, deadlineAt: a.deadlineAt, signal, lane: a.lane, now: a.now });
   } catch (err) {

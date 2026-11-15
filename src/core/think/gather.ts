@@ -77,6 +77,9 @@ export interface ThinkGatherResult {
    * — the diagnostics counts alone can't. Empty when every stream succeeded.
    */
   warnings: string[];
+  /** Structured, safe diagnostics used by private think to distinguish
+   * intentional retrieval modes from required-stream failures. */
+  warningDetails: ThinkGatherWarning[];
   /** Diagnostics for telemetry / `--explain` path (Lane D follow-up). */
   diagnostics: {
     pagesFromHybrid: number;
@@ -86,6 +89,28 @@ export interface ThinkGatherResult {
     questionSanitizedFor: 'expansion' | 'none';
     window?: { dropped: number; undatedKept: number };
   };
+}
+
+export interface ThinkGatherWarning {
+  code: string;
+  stage: string;
+  reason: string;
+}
+
+/** Retrieval notices that do not represent a failed required read. Other
+ * degraded stages remain fatal to private think; the auxiliary-embedding case
+ * is excused only after its guarded call has completed successfully. */
+export function isNonFatalPrivateThinkWarning(
+  warning: ThinkGatherWarning,
+  opts: { auxiliaryEmbeddingCompleted?: boolean } = {},
+): boolean {
+  return (warning.stage === 'embed_unavailable' && warning.reason === 'embedding_disabled') ||
+    (warning.stage === 'keyword_zero' && warning.reason === 'no_matches') ||
+    // The separately requested auxiliary embedding is guarded and must throw
+    // on refusal/failure. Once that call has completed, hybrid page search may
+    // still report its own optional vector arm unavailable; its keyword results
+    // remain explicitly degraded in the returned warning list.
+    (opts.auxiliaryEmbeddingCompleted === true && warning.stage === 'embed_unavailable' && warning.reason === 'no_provider');
 }
 
 const RRF_K = 60;
@@ -156,6 +181,11 @@ export async function runGather(
   const sanitizedQuestion = sanitizeQueryForPrompt(opts.question);
 
   const warnings: string[] = [];
+  const warningDetails: ThinkGatherWarning[] = [];
+  const warn = (code: string, stage: string, reason: string) => {
+    warnings.push(code);
+    warningDetails.push({ code, stage, reason });
+  };
   const window = opts.window;
 
   const toSearchResult = (page: Page, rank: number, lead: string): SearchResult => ({
@@ -170,8 +200,15 @@ export async function runGather(
   let windowDiagnostic: ThinkGatherResult['diagnostics']['window'];
   let outsideWindowSlugs: string[] = [];
   // GBRA-200: a degraded page search (keyword-only fallback, a cut arm) is reported, never silent.
-  const searchDegraded = new Set<string>();
-  const onMeta = (m: HybridSearchMeta) => { for (const d of m.degraded ?? []) if (affectsRecall(d)) searchDegraded.add(d.stage); };
+  const searchDegraded = new Map<string, Set<string>>();
+  const onMeta = (m: HybridSearchMeta) => {
+    for (const d of m.degraded ?? []) {
+      if (!affectsRecall(d)) continue;
+      const reasons = searchDegraded.get(d.stage) ?? new Set<string>();
+      reasons.add(d.reason ?? (d.stage === 'keyword_zero' ? 'no_matches' : 'degraded'));
+      searchDegraded.set(d.stage, reasons);
+    }
+  };
 
   // Stream 1: hybrid page search (existing primitive).
   // Both legs opt out of the reader-facing trims (autocut #4561, adaptive
@@ -196,7 +233,7 @@ export async function runGather(
       const leads = await visibleLeads(pages);
       return pages.map((page, rank) => toSearchResult(page, rank, leads[rank]!));
     }).catch((e) => {
-      warnings.push('GATHER_WINDOW_FLOOR_FAILED');
+      warn('GATHER_WINDOW_FLOOR_FAILED', 'window_floor', 'retrieval_failed');
       process.stderr.write(`[think.gather] window floor failed: ${(e as Error).message}\n`);
       return [] as SearchResult[];
     }),
@@ -215,7 +252,7 @@ export async function runGather(
     decide,
     onMeta,
   })).catch((e) => {
-    warnings.push('GATHER_HYBRID_FAILED');
+    warn('GATHER_HYBRID_FAILED', 'hybrid', 'retrieval_failed');
     process.stderr.write(`[think.gather] hybrid stream failed: ${(e as Error).message}\n`);
     return [] as SearchResult[];
   });
@@ -226,7 +263,7 @@ export async function runGather(
     ...pageScope,
     eligibility: {},
   }).catch((e) => {
-    warnings.push('GATHER_TAKES_KEYWORD_FAILED');
+    warn('GATHER_TAKES_KEYWORD_FAILED', 'takes_keyword', 'retrieval_failed');
     process.stderr.write(`[think.gather] takes-keyword stream failed: ${(e as Error).message}\n`);
     return [] as TakeHit[];
   });
@@ -238,7 +275,7 @@ export async function runGather(
         ...pageScope,
         eligibility: {},
       }).catch((e) => {
-        warnings.push('GATHER_TAKES_VECTOR_FAILED');
+        warn('GATHER_TAKES_VECTOR_FAILED', 'takes_vector', 'retrieval_failed');
         process.stderr.write(`[think.gather] takes-vector stream failed: ${(e as Error).message}\n`);
         return [] as TakeHit[];
       })
@@ -258,7 +295,7 @@ export async function runGather(
           return Array.from(slugs);
         })
         .catch((e) => {
-          warnings.push('GATHER_GRAPH_FAILED');
+          warn('GATHER_GRAPH_FAILED', 'graph', 'retrieval_failed');
           process.stderr.write(`[think.gather] graph stream failed: ${(e as Error).message}\n`);
           return [] as string[];
         })
@@ -273,7 +310,7 @@ export async function runGather(
   const anchorPagePromise: Promise<Page | null> = opts.anchor
     ? engine.getPage(opts.anchor, pageScope).catch((e) => {
         anchorHydrateFailed = true;
-        warnings.push('GATHER_ANCHOR_HYDRATE_FAILED');
+        warn('GATHER_ANCHOR_HYDRATE_FAILED', 'anchor_hydrate', 'retrieval_failed');
         process.stderr.write(`[think.gather] anchor hydrate failed: ${(e as Error).message}\n`);
         return null;
       })
@@ -291,7 +328,7 @@ export async function runGather(
     // The anchor slug resolves to no page (typo, wrong source scope, or
     // deleted). Distinct from a hydrate ERROR: the caller asked to anchor on
     // something that isn't there.
-    warnings.push('ANCHOR_PAGE_NOT_FOUND');
+    warn('ANCHOR_PAGE_NOT_FOUND', 'anchor', 'page_not_found');
   }
   if (anchorPage && !pages.some(p => p.slug === anchorPage.slug)) {
     pages.unshift({
@@ -317,7 +354,10 @@ export async function runGather(
     (h: TakeHit) => `${h.page_slug}#${h.row_num}`,
   ).slice(0, takesLimit);
 
-  for (const stage of searchDegraded) warnings.push(`${GATHER_DEGRADED_PREFIX}${stage}`);
+  for (const [stage, reasons] of searchDegraded) {
+    warnings.push(`${GATHER_DEGRADED_PREFIX}${stage}`);
+    for (const reason of reasons) warningDetails.push({ code: `${GATHER_DEGRADED_PREFIX}${stage}`, stage, reason });
+  }
   return {
     pages: pages.slice(0, gatherLimit),
     takes: fusedTakes,
@@ -325,6 +365,7 @@ export async function runGather(
     graphRefs: opts.anchor ? [{ slug: opts.anchor, sourceId: anchorPage?.source_id ?? opts.sourceId ?? 'default' }, ...graphRefs] : graphRefs,
     outsideWindowSlugs,
     warnings,
+    warningDetails,
     diagnostics: {
       pagesFromHybrid,
       takesFromKeyword: takesKw.length,

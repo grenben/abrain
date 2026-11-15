@@ -11,6 +11,11 @@
 
 import { withBudgetTracker, type chat as gatewayChat } from '../ai/gateway.ts';
 import { BudgetTracker, loadPricingOverrides } from '../budget/budget-tracker.ts';
+import { assertPrivateRoute, readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { localOptimizerAllowance } from './codex-local-grant.ts';
+import type { OperationContext } from '../ops/contract.ts';
 import type { BrainEngine } from '../engine.ts';
 import { runBootstrap, runBootstrapFromSkill, type BootstrapResult } from './bootstrap-benchmark.ts';
 import {
@@ -24,6 +29,8 @@ import {
 } from './models-plan.ts';
 
 export interface GuardedBootstrapOpts {
+  operationContext?: OperationContext;
+  abortSignal?: AbortSignal;
   engine: BrainEngine;
   mode: 'routing' | 'skill';
   skillsDir: string;
@@ -44,14 +51,30 @@ export interface GuardedBootstrapOpts {
 
 export type GuardedBootstrapResult =
   | { dry_run: true; models_plan: ModelsPlanEntry[]; strict: StrictVerdict }
-  | { dry_run: false; models_plan: ModelsPlanEntry[]; strict: StrictVerdict; result: BootstrapResult; cost_usd: number };
+  | { dry_run: false; models_plan: ModelsPlanEntry[]; strict: StrictVerdict; result: BootstrapResult; cost_usd: number | null };
 
 export async function runGuardedBootstrap(opts: GuardedBootstrapOpts): Promise<GuardedBootstrapResult> {
+  const privateMode = !!readPrivateCodexConfig();
+  if (privateMode) assertPrivateRoute(opts.optimizer.model, 'skillopt:bootstrap.optimizer_model');
   const plan: ModelsPlanEntry[] = [{ touchpoint: 'optimizer', ...opts.optimizer, active: true }];
   process.stderr.write(formatModelsBanner(plan, { skill: opts.skillName }));
   const strict = strictVerdict(plan, await resolveModelsStrict(opts.engine, opts.modelsStrict));
+  if (privateMode && localOptimizerAllowance()) {
+    if (strict.enabled && !strict.ok && !opts.dryRun) throw modelsStrictError(strict);
+    const result = await (await import('./codex-bootstrap-local.ts')).runLocalCodexBootstrap(opts, { plan, strict });
+    return opts.dryRun ? { dry_run: true, models_plan: plan, strict } : { dry_run: false, models_plan: plan, strict, result: result!, cost_usd: null };
+  }
   if (opts.dryRun) return { dry_run: true, models_plan: plan, strict };
   if (strict.enabled && !strict.ok) throw modelsStrictError(strict);
+
+  if (privateMode) {
+    const host = codexSubscriptionContext();
+    if (!host || host.engine !== opts.engine) throw new SubscriptionAdmissionError('subscription_required');
+    const common = { skillsDir: opts.skillsDir, skillName: opts.skillName, optimizerModel: opts.optimizer.model,
+      force: opts.force, chatFn: opts.chatFn, abortSignal: opts.abortSignal };
+    const result = opts.mode === 'routing' ? await runBootstrap(common) : await runBootstrapFromSkill({ ...common, taskCount: opts.taskCount });
+    return { dry_run: false, models_plan: plan, strict, result, cost_usd: null };
+  }
 
   const pricingOverrides = await loadPricingOverrides(opts.engine);
   const tracker = new BudgetTracker({

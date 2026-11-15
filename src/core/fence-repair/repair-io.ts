@@ -54,6 +54,8 @@ import type { FenceRepairReceipt } from './receipt.ts';
 import type { FenceCtx, FencePage } from './types.ts';
 import { gitChildEnv } from '../git-env.ts';
 import { canonicalOriginPage, originConflictMessage } from '../persistence/origin-guard.ts';
+import { privatePolicyFingerprint, readPrivateCodexConfig, requirePrivateRole } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 
 export type FenceRepairMode = 'managed' | 'legacy' | 'db' | 'mirror';
 
@@ -225,10 +227,38 @@ export type WriteOutcome =
 /** The receipt fields the writer completes (hashes) from what the caller decided (tier, classes, model, spend). */
 export type ReceiptParts = Omit<FenceRepairReceipt, 'before_sha256' | 'after_sha256'>;
 
+/** Reauthorize a subscription-backed model proposal after host hooks and before local publication work. */
+async function checkPrivateFenceAuthorization(parts: ReceiptParts, inTransaction = false, engine?: BrainEngine): Promise<void> {
+  const expected = parts.private_policy_fingerprint;
+  if (!expected) return;
+  const check = () => {
+    const policy = readPrivateCodexConfig();
+    if (!policy || privatePolicyFingerprint(policy) !== expected) throw new OperationError('invalid_params',
+      'Private fence-repair policy changed before publication.', 'Preview and apply again under the current private Codex policy.');
+    requirePrivateRole(policy, 'fence-repair');
+  };
+  check();
+  const subscription = codexSubscriptionContext();
+  if (inTransaction && engine) {
+    await engine.transaction(async tx => {
+      await subscription?.checkAuthorityInTransaction?.(tx);
+      check();
+    });
+  } else {
+    await subscription?.checkAuthority?.();
+  }
+  check();
+}
+
 /** Writes one repaired candidate through its mode's path. Trusted local callers only (the caller checks `ctx.remote === false`). */
 export async function writeFenceRepair(ctx: OperationContext, src: FenceSource, target: FenceTarget, after: FencePage, parts: ReceiptParts, opts: { embed: boolean }): Promise<WriteOutcome> {
   const engine = ctx.engine;
   const local = { ...ctx, remote: false, sourceId: src.id } as OperationContext;
+  if (parts.private_policy_fingerprint && target.mode !== 'managed') {
+    throw new OperationError('invalid_params', 'Private Codex fence repair requires a managed source owner.',
+      'Connect this brain to its managed canonical source owner and preview the repair again.');
+  }
+  await checkPrivateFenceAuthorization(parts);
   const clearCensus = async () => {
     await clearCandidateParts(engine, { sourceId: src.id, incarnation: src.incarnation }, 'page', [target.key]);
     await clearCandidateParts(engine, { sourceId: src.id, incarnation: src.incarnation }, 'file', [target.key]);
@@ -247,6 +277,7 @@ export async function writeFenceRepair(ctx: OperationContext, src: FenceSource, 
     if (publication.status === 'overlay') return { ok: false, reason: 'canonical_overlay',
       message: `Importing the repaired ${target.path} would keep page data the file does not carry (tags added outside the file, a withdrawal or sanitized text), so nothing was written. Edit the fence in the file by hand.` };
     try {
+      await checkPrivateFenceAuthorization(parts);
       const outcome = await submitManagedFileRepair(local, { sourceId: src.id,
         requestId: await repairRequestId(local, 'fences', { source_id: src.id, slug: target.slug }, `${receipt.before_sha256}:${receipt.after_sha256}`),
         slug: target.slug, path: target.path!, sourcePath: target.sourcePath!, content: fileContent!, beforeHash: target.before, resultDigest: publication.digest,
@@ -272,9 +303,17 @@ export async function writeFenceRepair(ctx: OperationContext, src: FenceSource, 
     }
     if (sha256(readFileSync(abs)) !== target.before) return { ok: false, reason: 'changed_since_read', message: `${target.path} changed after the repair read it, so nothing was written.` };
     const receipt: FenceRepairReceipt = { ...parts, before_sha256: target.before, after_sha256: sha256(Buffer.from(fileContent!, 'utf8')) };
+    await checkPrivateFenceAuthorization(parts, true, engine);
     const backup = createFrontmatterBackup(abs, { sourcePath: root, backupRoot: gbrainPath('backups', 'fences', makeFrontmatterBackupRunId()) });
     writeFileSync(abs, fileContent!);
-    const imported = await importFromFile(engine, abs, target.sourcePath ?? target.path!, { sourceId: src.id, noEmbed: !opts.embed });
+    let imported: Awaited<ReturnType<typeof importFromFile>>;
+    try {
+      await checkPrivateFenceAuthorization(parts);
+      imported = await importFromFile(engine, abs, target.sourcePath ?? target.path!, { sourceId: src.id, noEmbed: !opts.embed });
+    } catch (error) {
+      copyFileSync(backup, abs);
+      throw error;
+    }
     if (imported.status === 'error' || imported.refusal) {
       copyFileSync(backup, abs);
       return { ok: false, reason: 'still_invalid', message: `The repaired ${target.path} did not import (${imported.refusal?.code ?? 'error'}), so the file was restored from its backup.` };
@@ -292,6 +331,7 @@ export async function writeFenceRepair(ctx: OperationContext, src: FenceSource, 
   if (content === null) return { ok: false, reason: 'changed_since_read', message: `${target.slug} is gone.` };
   const receipt: FenceRepairReceipt = { ...parts, before_sha256: target.before, after_sha256: fileContent !== null ? sha256(Buffer.from(fileContent, 'utf8')) : pageSha(after) };
   try {
+    await checkPrivateFenceAuthorization(parts);
     const outcome = await submitPageMutation(local, { operation: 'put_page', params: { slug: target.slug, source_id: src.id, content,
       ...(snapshot && !snapshot.page.deleted_at ? { expected_revision: snapshot.revision } : {}),
       request_id: await repairRequestId(local, 'fences', { source_id: src.id, slug: target.slug }, `${receipt.before_sha256}:${receipt.after_sha256}`), fence_repair: receipt } });

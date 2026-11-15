@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { pageQuarantinedNotice } from '../quarantine.ts';
 import { indexRestoredNotice } from './git-door.ts';
 import { fenceNormalizedNotice, type FencesNormalized } from '../fence-repair/report.ts';
@@ -249,8 +250,10 @@ export async function submitPageMutation(ctx: OperationContext,
   const brainId = cached ? cachedPreadmitBrain(ctx.engine) : undefined;
   // Phase 4.4: the admission transaction runs on the warm single-write lane when it is free.
   // GST-1387: an explicit wait_ms also bounds the refresh-fence wait, so wait_ms 0 is refused at once, never held.
-  const admit = (admission: WriteAdmission) => withRefreshFenceBudget(() => onPersistenceLane(ctx.engine, transaction => admitWrite(ctx.engine, admission, undefined, transaction),
-    () => admitWrite(ctx.engine, admission)), wireWaitMs !== undefined ? waitMs() : undefined);
+  const admit = (admission: WriteAdmission) => withRefreshFenceBudget(() => onPersistenceLane(ctx.engine,
+    transaction => admitWrite(ctx.engine, admission, undefined, transaction, codexSubscriptionContext()?.checkAuthorityInTransaction),
+    () => admitWrite(ctx.engine, admission, undefined, undefined, codexSubscriptionContext()?.checkAuthorityInTransaction)),
+  wireWaitMs !== undefined ? waitMs() : undefined);
   let row: WriteRequest;
   try { row = await admit(brainId ? { ...prepared.admission, brainId } : prepared.admission); }
   catch (error) {
@@ -368,6 +371,10 @@ export async function preparePageAdmission(ctx: OperationContext,
         'Drop kind, preview and backup_reference from put_page; reconciling a canonical file runs through gbrain sources reconcile on the brain host.');
     }
   }
+  if (Object.hasOwn(input.params, 'edge_proposal_guard') && (input.operation !== 'add_timeline_entry' || ctx.remote !== false)) {
+    throw new OperationError('invalid_params', 'Edge proposal publication identity is reserved for the local timeline writer.',
+      'Submit ordinary timeline parameters without an edge proposal identity.');
+  }
   // #8765 review: a managed_sync_ kind marks managed sync's own rows, so no page write may carry one (a capture's event kind).
   if (typeof input.params.kind === 'string' && input.params.kind.startsWith('managed_sync_')) {
     throw new OperationError('invalid_params', `kind ${input.params.kind} is reserved for managed sync, so nothing was written.`,
@@ -441,6 +448,10 @@ export async function preparePageAdmission(ctx: OperationContext,
   if (!source || source.archived) {
     throw new OperationError('source_changed', 'The write source is not active.',
       `Source ${sourceId} is archived or not registered, so nothing was written. Write to an active source (sources_list shows them).`);
+  }
+  if (p.expected_source_incarnation !== undefined && p.expected_source_incarnation !== source.incarnation) {
+    throw new OperationError('source_changed', 'The requested source incarnation changed before admission.',
+      'Review the current source; do not replay a proposal against a replacement source.');
   }
   // GST-1943: the storage manifest takes page writes only from the storage verbs (and the owner's import of its own commits).
   assertStorageSourceWriter(ctx, sourceId, source.role, { managedFileImport: input.managedFileImport });

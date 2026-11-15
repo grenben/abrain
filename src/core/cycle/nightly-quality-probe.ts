@@ -108,8 +108,10 @@ export interface NightlyProbeDeps {
    * Refreshes the gateway from the live brain and resolves the reader,
    * extractor and judge-slot routes (#5872). Runs only on a run that passed
    * the rate limit; a rejection becomes an `error` audit row.
-   */
+  */
   resolveModelRoutes?: () => Promise<NightlyProbeModelRoutes>;
+  /** Scheduled private admission, called only after the 24-hour gate and fixture check. */
+  withRunAuthorization?: (input: NightlyProbeRunScope, run: () => Promise<NightlyProbeResult>) => Promise<NightlyProbeResult>;
   /** Runs the longmemeval command; returns the path to the JSONL output. */
   runLongMemEval: (args: {
     fixturePath: string;
@@ -126,6 +128,14 @@ export interface NightlyProbeDeps {
   }) => Promise<{ exitCode: number; summary?: CrossModalBatchSummary }>;
   /** Now provider — overridable for tests of the 24h rate limit. */
   now: () => Date;
+}
+
+export interface NightlyProbeRunScope {
+  fixturePath: string;
+  startedAt: Date;
+  maxUsd: number;
+  searchConfigSnapshot?: Record<string, string>;
+  modelRoutes?: NightlyProbeModelRoutes;
 }
 
 /**
@@ -399,88 +409,93 @@ export async function runNightlyQualityProbe(deps: NightlyProbeDeps): Promise<Ni
         throw err instanceof NightlyProbeModelRoutesError ? err : new NightlyProbeModelRoutesError(err);
       }
     }
-    const policy = deps.resolveBudgetPolicy ? await deps.resolveBudgetPolicy() : { capSource: 'default' as const };
-    tracker = new ProbeBudgetTracker({
-      label: 'nightly_quality_probe',
-      maxCostUsd: maxUsd,
-      capSource: policy.capSource,
-      ...(policy.pricingOverrides ? { pricingOverrides: policy.pricingOverrides } : {}),
-    });
-    capFields = { cap_usd: maxUsd, cap_source: policy.capSource };
-    const runTracker = tracker;
-    meter = { calls: 0, cost_usd: 0, unpriced_calls: 0, ...(policy.pricingOverrides ? { pricing_overrides: policy.pricingOverrides } : {}) };
-    const runMeter = meter;
-    await withBudgetTracker(runTracker, () => withChatCallMeter(runMeter, () =>
-      deps.runLongMemEval({ fixturePath, outputPath: lmeOutPath, searchConfigSnapshot, modelRoutes })));
-    if (runTracker.exhausted) {
-      const fields = stopped();
-      process.stderr.write(`[nightly-quality-probe] ${fields.detail}\n`);
-      logQualityProbeEvent({
-        outcome: 'budget_exceeded',
-        exit_code: 1,
-        pass_count: 0,
-        fail_count: 0,
-        inconclusive_count: 0,
-        error_count: 0,
-        est_cost_usd: 0,
-        fixture_sha8: fixtureSha8,
-        ...fields,
-        ...routeFields(modelRoutes),
-        ...spendFields(runMeter),
-        ...capFields,
-        ...keepReceipts(workDir, deps.now()),
-      });
-      return { outcome: 'budget_exceeded', exit_code: 1, detail: fields.detail };
-    }
-    const { exitCode, summary } = await withBudgetTracker(runTracker, () => withChatCallMeter(runMeter, () =>
-      deps.runCrossModalBatch({
-        batchPath: lmeOutPath,
-        summaryPath,
-        maxUsd,
-        modelRoutes,
-      })));
+    const runStages = async (): Promise<NightlyProbeResult> => {
+        const policy = deps.resolveBudgetPolicy ? await deps.resolveBudgetPolicy() : { capSource: 'default' as const };
+        tracker = new ProbeBudgetTracker({
+          label: 'nightly_quality_probe',
+          maxCostUsd: maxUsd,
+          capSource: policy.capSource,
+          ...(policy.pricingOverrides ? { pricingOverrides: policy.pricingOverrides } : {}),
+        });
+        capFields = { cap_usd: maxUsd, cap_source: policy.capSource };
+        const runTracker = tracker;
+        meter = { calls: 0, cost_usd: 0, unpriced_calls: 0, ...(policy.pricingOverrides ? { pricing_overrides: policy.pricingOverrides } : {}) };
+        const runMeter = meter;
+        await withBudgetTracker(runTracker, () => withChatCallMeter(runMeter, () =>
+          deps.runLongMemEval({ fixturePath, outputPath: lmeOutPath, searchConfigSnapshot, modelRoutes })));
+        if (runTracker.exhausted) {
+          const fields = stopped();
+          process.stderr.write(`[nightly-quality-probe] ${fields.detail}\n`);
+          logQualityProbeEvent({
+            outcome: 'budget_exceeded',
+            exit_code: 1,
+            pass_count: 0,
+            fail_count: 0,
+            inconclusive_count: 0,
+            error_count: 0,
+            est_cost_usd: 0,
+            fixture_sha8: fixtureSha8,
+            ...fields,
+            ...routeFields(modelRoutes),
+            ...spendFields(runMeter),
+            ...capFields,
+            ...keepReceipts(workDir, deps.now()),
+          });
+          return { outcome: 'budget_exceeded', exit_code: 1, detail: fields.detail };
+        }
+        const { exitCode, summary } = await withBudgetTracker(runTracker, () => withChatCallMeter(runMeter, () =>
+          deps.runCrossModalBatch({
+            batchPath: lmeOutPath,
+            summaryPath,
+            maxUsd,
+            modelRoutes,
+          })));
 
-    const verdict: NightlyProbeResult['outcome'] = (() => {
-      if (runTracker.exhausted) return 'budget_exceeded';
-      if (summary) {
-        if (summary.verdict === 'pass') return 'pass';
-        if (summary.verdict === 'fail') return 'fail';
-        if (summary.verdict === 'inconclusive') return 'inconclusive';
-        if (summary.verdict === 'error') return 'error';
-      }
-      // If exit code is 1 with no summary, the batch refused (budget).
-      if (exitCode === 1) return 'budget_exceeded';
-      return 'error';
-    })();
-    const collapse = (verdict === 'pass' || verdict === 'fail') && summary ? collapsedPanel(summary) : undefined;
-    const outcome: NightlyProbeResult['outcome'] = collapse ? 'inconclusive' : verdict;
+        const verdict: NightlyProbeResult['outcome'] = (() => {
+          if (runTracker.exhausted) return 'budget_exceeded';
+          if (summary) {
+            if (summary.verdict === 'pass') return 'pass';
+            if (summary.verdict === 'fail') return 'fail';
+            if (summary.verdict === 'inconclusive') return 'inconclusive';
+            if (summary.verdict === 'error') return 'error';
+          }
+          // If exit code is 1 with no summary, the batch refused (budget).
+          if (exitCode === 1) return 'budget_exceeded';
+          return 'error';
+        })();
+        const collapse = (verdict === 'pass' || verdict === 'fail') && summary ? collapsedPanel(summary) : undefined;
+        const outcome: NightlyProbeResult['outcome'] = collapse ? 'inconclusive' : verdict;
 
-    const failures = outcome !== 'pass' ? summary?.failures : undefined;
-    const digest = summary && outcome !== 'pass' ? failureDigest(summary, failures ?? []) : undefined;
-    const detail = collapse
-      ? `${collapse} (batch verdict: ${verdict})${digest ? `; ${digest}` : ''}`
-      : digest;
-    logQualityProbeEvent({
-      outcome,
-      exit_code: exitCode,
-      pass_count: summary?.pass_count ?? 0,
-      fail_count: summary?.fail_count ?? 0,
-      inconclusive_count: summary?.inconclusive_count ?? 0,
-      error_count: summary?.error_count ?? 0,
-      est_cost_usd: summary?.est_cost_usd ?? 0,
-      fixture_sha8: fixtureSha8,
-      ...(detail ? { detail } : {}),
-      ...(collapse ? { reason: 'panel_collapsed' } : {}),
-      ...stopped(),
-      ...routeFields(modelRoutes),
-      ...(summary ? panelFields(summary) : {}),
-      ...(failures?.length ? { failures: failures.slice(0, AUDIT_MAX_FAILURES) } : {}),
-      ...spendFields(runMeter),
-      ...capFields,
-      ...(outcome !== 'pass' ? keepReceipts(workDir, deps.now()) : {}),
-    });
+        const failures = outcome !== 'pass' ? summary?.failures : undefined;
+        const digest = summary && outcome !== 'pass' ? failureDigest(summary, failures ?? []) : undefined;
+        const detail = collapse
+          ? `${collapse} (batch verdict: ${verdict})${digest ? `; ${digest}` : ''}`
+          : digest;
+        logQualityProbeEvent({
+          outcome,
+          exit_code: exitCode,
+          pass_count: summary?.pass_count ?? 0,
+          fail_count: summary?.fail_count ?? 0,
+          inconclusive_count: summary?.inconclusive_count ?? 0,
+          error_count: summary?.error_count ?? 0,
+          est_cost_usd: summary?.est_cost_usd ?? 0,
+          fixture_sha8: fixtureSha8,
+          ...(detail ? { detail } : {}),
+          ...(collapse ? { reason: 'panel_collapsed' } : {}),
+          ...stopped(),
+          ...routeFields(modelRoutes),
+          ...(summary ? panelFields(summary) : {}),
+          ...(failures?.length ? { failures: failures.slice(0, AUDIT_MAX_FAILURES) } : {}),
+          ...spendFields(runMeter),
+          ...capFields,
+          ...(outcome !== 'pass' ? keepReceipts(workDir, deps.now()) : {}),
+        });
 
-    return { outcome, exit_code: exitCode, ...(detail ? { detail } : {}) };
+        return { outcome, exit_code: exitCode, ...(detail ? { detail } : {}) };
+    };
+    return deps.withRunAuthorization
+      ? await deps.withRunAuthorization({ fixturePath, startedAt: now, maxUsd, searchConfigSnapshot, modelRoutes }, runStages)
+      : await runStages();
   } catch (err) {
     const budget = stopped();
     const outcome = budget.reason ? 'budget_exceeded' : 'error';

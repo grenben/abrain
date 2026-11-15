@@ -24,6 +24,7 @@ import type { ChatResult } from '../ai/gateway.ts';
 import { resolveTierDefault } from '../model-config.ts';
 import type { FactRow, FactKind } from '../engine.ts';
 import { resolveSupersessionThreshold } from './supersession-threshold.ts';
+import { codexClassify, privateFactsMode } from './codex-proposals.ts';
 
 /** Classifier output. id is the matching candidate's id when not 'independent'. */
 export type ClassifyResult =
@@ -106,6 +107,7 @@ export async function classifyAgainstCandidates(
   // Engine-free key-aware default (utility tier) + gate on the model this
   // call will ACTUALLY use — the bare isAvailable('chat') probed the global
   // chat model, which can disagree with the classifier model.
+  if (privateFactsMode()) return codexClassify(newFact, candidates, opts);
   const classifierModel = opts.model ?? resolveTierDefault('utility');
   if (!isAvailable('chat', classifierModel)) {
     if (topId !== null && topScore >= fallback) {

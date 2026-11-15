@@ -41,6 +41,12 @@ import {
   compareSeverityDesc,
 } from '../core/eval-contradictions/severity-classify.ts';
 import { maybePromptForCostBeforeProbe } from '../core/eval-contradictions/cost-prompt.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { subscriptionTargetTransaction } from '../core/ai/subscription-target.ts';
+import { assertSubscriptionAuxiliaryHealthy } from '../core/ai/subscription-auxiliary.ts';
+import { codexSubscriptionContext } from '../core/ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../core/ai/subscription-admission.ts';
+import { withEvalContradictionSubscription, type EvalContradictionAllowance } from './eval-contradictions-subscription.ts';
 import type {
   ContradictionFinding,
   ProbeReport,
@@ -76,6 +82,7 @@ interface ParsedFlags {
   refreshCache: boolean;
   json: boolean;
   yes: boolean;
+  codex: EvalContradictionAllowance;
   // trend flags
   days: number;
   // review flags
@@ -113,6 +120,7 @@ export function parseFlags(args: string[]): ParsedFlags {
     refreshCache: false,
     json: false,
     yes: false,
+    codex: {},
     days: 30,
     help: false,
   };
@@ -144,6 +152,13 @@ export function parseFlags(args: string[]): ParsedFlags {
     else if (arg === '--refresh-cache') f.refreshCache = true;
     else if (arg === '--json') f.json = true;
     else if (arg === '--yes' || arg === '-y') f.yes = true;
+    else if (arg === '--codex-max-attempts' || arg === '--codex-max-turns' || arg === '--codex-deadline' ||
+             arg === '--codex-request-id' || arg === '--max-usd') {
+      const key = ({ '--codex-max-attempts': 'maxAttempts', '--codex-max-turns': 'maxTurns',
+        '--codex-deadline': 'deadline', '--codex-request-id': 'requestId', '--max-usd': 'maxUsd' } as const)[arg];
+      if (f.codex[key] !== undefined) throw new Error(`${arg} must occur once`);
+      f.codex[key] = next();
+    }
     else if (arg === '--days') f.days = Number.parseInt(next(), 10);
     else if (arg === '--severity') {
       const v = next();
@@ -158,6 +173,9 @@ export function parseFlags(args: string[]): ParsedFlags {
       throw new Error(`unknown flag: ${arg}`);
     }
   }
+  if (sub !== 'run' && Object.values(f.codex).some(value => value !== undefined)) {
+    throw new Error('Codex allowance flags apply only to run');
+  }
   return f;
 }
 
@@ -171,6 +189,8 @@ function printHelp(): void {
     [--limit N] [--budget-usd N] [--output FILE]
     [--max-pair-chars N=1500] [--sampling deterministic|score-first]
     [--no-cache] [--refresh-cache] [--json] [--yes]
+    [--codex-max-attempts N --codex-max-turns N --codex-deadline UTC]
+    [--codex-request-id UUID] [--max-usd N]  (strict private mode only)
 
   gbrain eval suspected-contradictions trend [--days N=30] [--json]
 
@@ -301,6 +321,9 @@ export function buildRunSummaryLines(r: ProbeReport, capHitMidRun: boolean): str
 }
 
 async function runRun(engine: BrainEngine, f: ParsedFlags): Promise<void> {
+  // Pin the execution lane before resolving inputs or starting any private work.
+  // Never infer this again from mutable config at publication time.
+  const privateModeAtEntry = Boolean(readPrivateCodexConfig());
   if (!exclusiveOneOf(f.queriesFile, f.query, f.fromCapture)) {
     console.error(
       `Must pass exactly one of: --queries-file FILE, --query "...", --from-capture.`,
@@ -326,7 +349,7 @@ async function runRun(engine: BrainEngine, f: ParsedFlags): Promise<void> {
   // models.eval.contradictions_judge config key + key-aware utility-tier
   // default + global models.default override + env var all compose correctly.
   // The --judge CLI flag still wins as the highest-precedence override.
-  const judgeModel = await resolveModel(engine, {
+  const judgeModel = await resolveModel(engine, { privateRole: 'contradiction-probe',
     cliFlag: f.judge,
     configKey: 'models.eval.contradictions_judge',
     tier: 'utility',
@@ -343,6 +366,33 @@ async function runRun(engine: BrainEngine, f: ParsedFlags): Promise<void> {
   console.error(
     `Contradiction probe: ${queries.length} queries, top-${f.topK}, judge=${judgeModel}, budget=$${f.budgetUsd.toFixed(2)}${budgetSuffix}.`,
   );
+
+  return withEvalContradictionSubscription(engine, f.codex, {
+    queries, judgeModel, topK: f.topK, sampling: f.sampling, budgetUsd: f.budgetUsd,
+    maxPairChars: f.maxPairChars, noCache: f.noCache, refreshCache: f.refreshCache, output: f.output,
+  }, async () => {
+    // The wrapper is selected after async query loading. Its active context is
+    // authoritative for this run, including a private policy enabled in that
+    // window. The entry pin also prevents a private run from downgrading if its
+    // policy disappears before the wrapper can establish a context.
+    const privateSubscription = codexSubscriptionContext();
+    const privateRun = privateModeAtEntry || Boolean(privateSubscription) || Boolean(readPrivateCodexConfig());
+    if (privateRun && !privateSubscription) {
+      throw new SubscriptionAdmissionError('subscription_required');
+    }
+    const checkRunAuthority = async () => {
+      const active = codexSubscriptionContext();
+      if (privateRun) {
+        if (!privateSubscription || active !== privateSubscription) {
+          throw new SubscriptionAdmissionError('subscription_required');
+        }
+        await privateSubscription.checkAuthority?.();
+      } else if (active || readPrivateCodexConfig()) {
+        // An ordinary wrapper cannot continue after a private lane appears.
+        throw new SubscriptionAdmissionError('subscription_identity_conflict');
+      }
+    };
+    await checkRunAuthority();
 
   // v0.34 / Lane C: cost-estimate prompt — TTY-only Ctrl-C window before
   // the runner spends any tokens when PROMPT_VERSION changed since the last
@@ -377,20 +427,29 @@ async function runRun(engine: BrainEngine, f: ParsedFlags): Promise<void> {
       noCache: f.noCache,
     });
 
-    // Persist to runs table (M5).
-    await writeRunRow(engine, out.report, out.report.duration_ms);
+    assertSubscriptionAuxiliaryHealthy();
 
+    // Persist to runs table (M5).
+    await checkRunAuthority();
+    if (privateRun) {
+      await subscriptionTargetTransaction(engine, tx => writeRunRow(tx, out.report, out.report.duration_ms));
+    } else await writeRunRow(engine, out.report, out.report.duration_ms);
+
+    await checkRunAuthority();
     // Human summary.
     const r = out.report;
     console.error(buildRunSummaryLines(r, out.capHitMidRun).join('\n'));
 
     if (f.output) {
+      await checkRunAuthority();
       const { writeFileSync } = await import('node:fs');
       writeFileSync(f.output, JSON.stringify(r, null, 2));
+      await checkRunAuthority();
       console.error(`Details: ${f.output}`);
     }
 
     if (f.json) {
+      await checkRunAuthority();
       console.log(JSON.stringify(r, null, 2));
     }
 
@@ -412,6 +471,7 @@ async function runRun(engine: BrainEngine, f: ParsedFlags): Promise<void> {
     }
     throw err;
   }
+  });
 }
 
 async function runTrend(engine: BrainEngine, f: ParsedFlags): Promise<void> {

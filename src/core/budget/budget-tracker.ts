@@ -59,6 +59,10 @@ export type { BudgetKind, PricingOverrides, NoPricingGuidance };
 export type BudgetReason = 'cost' | 'runtime' | 'no_pricing';
 
 export interface BudgetEstimate {
+  /** Full USD allowance to hold for a capped subscription call; never token-price-derived. */
+  subscriptionReservationUsd?: number;
+  /** Subscription calls have no per-token price; their external admission owns the cap. */
+  billing?: 'subscription';
   modelId: string;
   estimatedInputTokens: number;
   maxOutputTokens: number;
@@ -76,6 +80,8 @@ export interface BudgetEstimate {
 export type BudgetReservation = string & { readonly __budgetReservation: unique symbol };
 
 export interface BudgetActualUsage {
+  /** Explicit subscription billing remains unknown/null even with API-rate overrides. */
+  billing?: 'subscription';
   modelId: string;
   /** The reservation this usage settles, as returned by `reserve()`. */
   reservation?: BudgetReservation;
@@ -339,21 +345,43 @@ export class BudgetTracker {
    * (legacy behavior preserved for non-priced providers).
    *
    * Returns the reservation id when the projection is held against the cap
-   * (a cap is set and the model is priced); undefined when nothing is held.
-   * The caller settles it with `record({ reservation })` or `release()`.
+   * (a priced model, or a subscription with an explicit full reservation);
+   * undefined when nothing is held. The caller settles it with
+   * `record({ reservation })` or `release()`.
    */
   reserve(estimate: BudgetEstimate): BudgetReservation | undefined {
     this.assertRuntime(estimate.modelId);
 
-    const projected = reservationCostUsd(
-      estimate.modelId,
-      estimate.kind,
-      estimate.estimatedInputTokens,
-      estimate.maxOutputTokens,
-      this.opts.pricingOverrides,
-    );
+    let projected: number | null;
+    if (estimate.billing === 'subscription') {
+      if (this.opts.maxCostUsd !== undefined) {
+        const fullReservation = estimate.subscriptionReservationUsd;
+        if (fullReservation === undefined || !Number.isFinite(fullReservation) || fullReservation < 0) {
+          throw this.costExhausted(
+            `${this.opts.label}: capped subscription usage requires an explicit full reservation`,
+            this.opts.maxCostUsd,
+            estimate.modelId,
+          );
+        }
+        projected = fullReservation;
+      } else {
+        projected = null;
+      }
+    } else {
+      projected = reservationCostUsd(
+        estimate.modelId,
+        estimate.kind,
+        estimate.estimatedInputTokens,
+        estimate.maxOutputTokens,
+        this.opts.pricingOverrides,
+      );
+    }
 
     if (projected === null) {
+      // Uncapped subscription usage remains unpriced; there is no USD ceiling
+      // to reserve against. A capped subscription must have supplied its full
+      // reservation above, so it can never fall through here.
+      if (estimate.billing === 'subscription') return undefined;
       if (this.opts.maxCostUsd !== undefined && this.capSource === 'user') {
         // TX2: hard-fail when a cap is set but pricing is missing — without
         // pricing we can't enforce the cap, and silently ignoring it would
@@ -495,7 +523,7 @@ export class BudgetTracker {
   record(actual: BudgetActualUsage & { kind?: BudgetKind }): void {
     this.callsRecorded++;
     const kind: BudgetKind = actual.kind ?? 'chat';
-    const cost = usageCostUsd(
+    const cost = actual.billing === 'subscription' ? null : usageCostUsd(
       actual.modelId,
       actual.inputTokens,
       actual.outputTokens ?? 0,
@@ -528,7 +556,9 @@ export class BudgetTracker {
       const held = actual.reservation ? this.outstanding.get(actual.reservation) : undefined;
       if (held !== undefined) {
         this.settleReservation(actual.reservation!);
-        this.cumulativeUsd += held;
+        // A subscription hold is an admission ceiling, not billed spend. The
+        // entire reservation is released without fabricating token cost.
+        if (actual.billing !== 'subscription') this.cumulativeUsd += held;
       }
       appendAuditLine(this.auditPath, {
         schema_version: 1,
@@ -541,7 +571,7 @@ export class BudgetTracker {
         input_tokens: actual.inputTokens,
         output_tokens: actual.outputTokens ?? 0,
         embedding_dims: actual.embeddingDims ?? null,
-        charged_reservation_usd: held ?? null,
+        charged_reservation_usd: actual.billing === 'subscription' ? null : held ?? null,
       });
       return;
     }

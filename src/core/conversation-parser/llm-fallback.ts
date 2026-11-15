@@ -23,6 +23,7 @@
 import { runLlmCall, parseLlmJson, type ChatTransport } from './llm-base.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { MatchedMessage } from './types.ts';
+import { privateFallbackContract, validatePrivateParserBounds } from './llm-codex-fallback.ts';
 
 const FALLBACK_SYSTEM_PROMPT = `You parse messages out of a chat-log body. The body may be from any chat platform (iMessage, Slack, Telegram, Discord, WhatsApp, Signal, IRC, Matrix, Teams, email-thread, etc.).
 
@@ -127,6 +128,11 @@ function canonicalTimestamp(value: string): { iso: string; epochMs: number } | n
 export async function runLlmFallback(
   opts: RunLlmFallbackOpts,
 ): Promise<MatchedMessage[] | null> {
+  // Private Codex must validate the complete request before any chunk can
+  // consume an attempt. Keep the existing tolerant/fail-open path unchanged
+  // for the ordinary configured providers.
+  const privateCodex = /^codex-cli:/.test(opts.modelStr);
+  if (privateCodex) validatePrivateParserBounds(opts.body, opts.sampleLines, opts.fallbackDate);
   const lines = opts.body.split(/\r?\n/).filter((line) => line.trim().length > 0);
   if (lines.length === 0) return [];
   const configuredChunkSize = opts.sampleLines ?? DEFAULT_CHUNK_LINES;
@@ -161,13 +167,17 @@ export async function runLlmFallback(
   let order = 0;
   let window = 0;
   for (let start = 0; start < lines.length; start += stride, window++) {
+    const chunkBody = lines.slice(start, start + chunkSize).join('\n');
     const content = [
       `<parser-protocol>${FALLBACK_PROTOCOL}</parser-protocol>`,
       `<conversation-date>${date ?? 'unknown'}</conversation-date>`,
       '<chat-log>',
-      lines.slice(start, start + chunkSize).join('\n'),
+      chunkBody,
       '</chat-log>',
     ].join('\n');
+    const nativeContract = privateCodex
+      ? privateFallbackContract(chunkBody, content, system, date ?? undefined)
+      : null;
     const chunk = await runLlmCall<
       Array<{ message: MatchedMessage; epochMs: number }>
     >({
@@ -182,7 +192,13 @@ export async function runLlmFallback(
       // One hundred dense message objects can exceed the generic 4K default.
       // A non-terminal `length` stop is rejected by runLlmCall, never cached.
       maxTokens: 8000,
-      parse: (text) => {
+      ...(nativeContract
+        ? {
+            cacheVersion: nativeContract.version,
+            responseSchema: nativeContract.schema,
+          }
+        : {}),
+      parse: nativeContract?.parse ?? ((text) => {
         const parsed = parseLlmJson<unknown[]>(text, { array: true });
         if (parsed === null) return null;
         const out: Array<{ message: MatchedMessage; epochMs: number }> = [];
@@ -206,7 +222,7 @@ export async function runLlmFallback(
           }
         }
         return out;
-      },
+      }),
     });
     // Never checkpoint a partial page after an ordinary provider or parse
     // failure. Successful earlier chunks remain cached for the retry.

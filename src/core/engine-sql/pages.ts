@@ -23,6 +23,7 @@ import { segmentedRevertRefusal } from '../page-state/versions.ts';
 import { sanitizeText } from '../batch-rows.ts';
 import { SAFE_FENCE_CHUNKER_VERSION, bodyWriteChunkVersion } from '../search/safe-chunks.ts';
 import { privatePagesFilterFragment, privateSnapshotFilterFragment, privatePagesFilterForCaller, privacyForCaller, callerReadersAllowedSql, currentCallerAccess } from '../search/private-visibility.ts';
+import { nativeDiscoveryFilter } from './native-discovery.ts';
 import { validDateSql } from '../valid-time.ts';
 import { quarantineFilterFragment } from '../quarantine.ts';
 import { rederiveHiddenSql } from '../eligibility/sql.ts';
@@ -529,6 +530,7 @@ export async function listPages(exec: ScopedRead, filters?: PageFilters): Promis
     const privateCondition = filters?.excludePrivate === true
       ? trustedSql(`AND ${privatePagesFilterForCaller('p')}`)
       : sqlFragment``;
+    const nativeDiscoveryCondition = nativeDiscoveryFilter(filters?.nativeDiscovery);
     const effectiveAfterCondition = filters?.effective_after
       ? sqlFragment`AND p.effective_date >= ${filters.effective_after}::timestamptz`
       : sqlFragment``;
@@ -548,7 +550,7 @@ export async function listPages(exec: ScopedRead, filters?: PageFilters): Promis
       const { rows } = await exec.run(sqlFragment`
         SELECT ${columns}, to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at_iso FROM pages p
         ${tagJoin}
-        WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition}${excludedSlugCondition} ${slugAfterCondition} ${sourceCondition} ${deletedCondition} ${privateCondition} ${effectiveAfterCondition} ${effectiveBeforeCondition}${whereCondition}
+         WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition}${excludedSlugCondition} ${slugAfterCondition} ${sourceCondition} ${deletedCondition} ${privateCondition} ${nativeDiscoveryCondition} ${effectiveAfterCondition} ${effectiveBeforeCondition}${whereCondition}
         ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}
       `);
       return rows.map(rowToPage);

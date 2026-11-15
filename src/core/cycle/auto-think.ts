@@ -18,7 +18,12 @@ import type { BrainEngine } from '../engine.ts';
 import { runThink, persistSynthesis, type ThinkLLMClient } from '../think/index.ts';
 import { resolveModel } from '../model-config.ts';
 import { embedQueryWithPrefix } from '../search/query-prefix.ts';
-import { BudgetMeter, loadAllowUnpriced, loadPricingOverrides, parseBudgetUsd } from './budget-meter.ts';
+import { BudgetMeter, loadAllowUnpriced, loadPricingOverrides, parseBudgetUsd, formatCycleCost } from './budget-meter.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivateAutoThink } from './auto-think-codex.ts';
+import type { PhaseResult } from '../cycle.ts';
+import { guestSourceSkip } from '../guests/derived.ts';
+import { readGuestSourceIds } from '../guests/note.ts';
 
 /**
  * Local phase-result type for auto-think/drift. These phases are not yet
@@ -32,6 +37,7 @@ export interface DreamPhaseResult {
   status: 'complete' | 'partial' | 'failed' | 'skipped';
   detail: string;
   totals?: Record<string, number>;
+  details?: Record<string, unknown>;
   duration_ms: number;
 }
 
@@ -44,6 +50,10 @@ export interface AutoThinkPhaseOpts {
   auditPath?: string;
   /** #5426: source the cycle runs for; syntheses are saved there. */
   sourceId?: string;
+  /** Cancellation propagated from the owning cycle/job. */
+  signal?: AbortSignal;
+  /** Absolute caller deadline in epoch milliseconds. */
+  deadlineAtMs?: number | null;
 }
 
 export interface AutoThinkConfig {
@@ -104,8 +114,34 @@ async function isCoolingDown(engine: BrainEngine, days: number): Promise<boolean
   return (Date.now() - lastMs) < days * 86_400_000;
 }
 
-function skipped(_reason: string, detail: string): DreamPhaseResult {
-  return { name: 'auto_think', status: 'skipped', detail, duration_ms: 0 };
+function skipped(reason: string, detail: string, details: Record<string, unknown> = {}): DreamPhaseResult {
+  return { name: 'auto_think', status: 'skipped', detail, details: { reason, ...details }, duration_ms: 0 };
+}
+
+/** Refuse auto-think when its selected or implicit read scope may contain guest notes. */
+async function guestScopeSkip(engine: BrainEngine, opts: AutoThinkPhaseOpts): Promise<DreamPhaseResult | null> {
+  if (opts.sourceId) {
+    const guest = await guestSourceSkip(engine, 'auto_think', opts.sourceId);
+    return guest
+      ? skipped(guest.details.reason as string, guest.summary, guest.details)
+      : null;
+  }
+
+  try {
+    // Private publication always defaults to the default source. API mode has
+    // historically gathered without a source filter, so check every active
+    // source before allowing it to synthesize across that wider scope.
+    const sourceIds = readPrivateCodexConfig()
+      ? ['default']
+      : (await engine.executeRaw<{ id: string }>('SELECT id FROM sources WHERE NOT archived')).map(row => row.id);
+    const guests = await readGuestSourceIds(engine, sourceIds);
+    if (guests.size === 0) return null;
+    return skipped('guest_source', 'automatic think may read guest-source evidence, so it was skipped.', {
+      guest_sources_detected: guests.size,
+    });
+  } catch {
+    return skipped('guest_source_lookup_failed', 'could not verify guest-source visibility, so automatic think was skipped.');
+  }
 }
 
 export async function runPhaseAutoThink(
@@ -114,13 +150,12 @@ export async function runPhaseAutoThink(
 ): Promise<DreamPhaseResult> {
   const start = Date.now();
   const config = await loadConfig(engine);
+  if (!config.enabled) return skipped('not_configured', 'dream.auto_think.enabled is false');
+  if (config.questions.length === 0) return skipped('no_questions', 'dream.auto_think.questions is empty');
+  const guestSkip = await guestScopeSkip(engine, opts);
+  if (guestSkip) return guestSkip;
+  if (readPrivateCodexConfig()) return runPrivateAutoThink(engine, opts, config);
 
-  if (!config.enabled) {
-    return skipped('not_configured', 'dream.auto_think.enabled is false');
-  }
-  if (config.questions.length === 0) {
-    return skipped('no_questions', 'dream.auto_think.questions is empty');
-  }
   if (await isCoolingDown(engine, config.cooldownDays)) {
     return skipped('cooldown_active', `auto_think cooled down (${config.cooldownDays}d cooldown)`);
   }
@@ -218,7 +253,7 @@ export async function runPhaseAutoThink(
   const detail = `${results.filter(r => r.status === 'complete').length} synthesized, ` +
     `${results.filter(r => r.status === 'budget_exhausted').length} skipped (budget), ` +
     `${results.filter(r => r.status === 'failed').length} failed. ` +
-    `Cumulative cost: $${meter.totalSpent.toFixed(4)} / $${config.budgetUsd.toFixed(2)}`;
+    `Cumulative cost: ${formatCycleCost(meter.totalSpent)} / $${config.budgetUsd.toFixed(2)}`;
 
   return {
     name: 'auto_think',
@@ -231,3 +266,33 @@ export async function runPhaseAutoThink(
 
 // Test-only export: pin config-resolution behavior at function granularity.
 export const __testing = { loadConfig };
+
+/** Cycle adapter: preserves opt-in behavior while making auto_think a real phase. */
+export async function runCycleAutoThink(
+  engine: BrainEngine | null,
+  opts: AutoThinkPhaseOpts,
+): Promise<PhaseResult> {
+  if (!engine) {
+    return {
+      phase: 'auto_think',
+      status: 'skipped',
+      duration_ms: 0,
+      summary: 'no database connected',
+      details: { reason: 'no_database' },
+    };
+  }
+  const result = await runPhaseAutoThink(engine, opts);
+  return {
+    phase: 'auto_think',
+    status: result.status === 'complete' ? 'ok' :
+      result.status === 'partial' ? 'warn' :
+        result.status === 'failed' ? 'fail' : 'skipped',
+    duration_ms: result.duration_ms,
+    summary: result.detail,
+    details: {
+      ...(result.details ?? {}),
+      ...(result.totals ?? {}),
+      ...(readPrivateCodexConfig() ? { billing: 'subscription', cost_usd: null } : {}),
+    },
+  };
+}

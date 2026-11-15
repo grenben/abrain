@@ -33,6 +33,7 @@
  */
 
 import type { BrainEngine } from '../engine.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { stripGapsSection, type ThinkResult } from './index.ts';
 import { resolveOwnerHolder } from '../owner-holder.ts';
 import { resolveTakesRepoDir, addTakeToPage, TakesWriteError } from '../takes-write.ts';
@@ -96,9 +97,12 @@ export function claimFromAnswer(answer: string): string | null {
  */
 export async function persistTakeFromSynthesis(
   engine: BrainEngine,
-  result: Pick<ThinkResult, 'answer' | 'synthesisOk' | 'taint_refs'>,
+  result: Pick<ThinkResult, 'answer' | 'synthesisOk' | 'taint_refs' | 'codex_publication'> & Partial<Pick<ThinkResult, 'modelUsed'>>,
   opts: { anchor: string; sourceId?: string; lockTimeoutMs?: number },
 ): Promise<PersistTakeResult> {
+  if (result.codex_publication || result.modelUsed?.startsWith('codex-cli:') || readPrivateCodexConfig()) {
+    return (await import('./publication-execute.ts')).publishThinkTake(engine, result as ThinkResult, opts);
+  }
   const warnings: string[] = [];
 
   // Same persistence gate as persistSynthesis: an explicit false means the

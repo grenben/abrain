@@ -40,6 +40,8 @@ export interface DiscoveredTranscript {
   seat?: string;
   /** #8080: the agent that wrote the session's user turns (its `.speaker.json` sidecar); absent means the owner. */
   speaker?: string;
+  /** Source page revision for database-backed conversation transcripts. */
+  pageRevision?: string;
 }
 
 export interface DiscoverOpts {
@@ -77,6 +79,8 @@ export interface DiscoverOpts {
    * sessions (`corpusFileSessionId`) is a self-capture and is skipped.
    */
   selfCaptureSessionIds?: ReadonlySet<string>;
+  /** Optional bounded/authorized reader used by private publication lanes. */
+  readContent?: (filePath: string) => string;
 }
 
 const DATE_RE = /^(\d{4}-\d{2}-\d{2})/;
@@ -346,7 +350,7 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
 
       let content: string | null;
       try {
-        content = readFileSync(filePath, 'utf8');
+        content = opts.readContent ? opts.readContent(filePath) : readFileSync(filePath, 'utf8');
       } catch {
         continue;
       }
@@ -396,14 +400,14 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
  */
 export function readSingleTranscript(
   filePath: string,
-  opts: { minChars?: number; excludePatterns?: string[]; bypassGuard?: boolean } = {},
+  opts: { minChars?: number; excludePatterns?: string[]; bypassGuard?: boolean; readContent?: (filePath: string) => string } = {},
 ): DiscoveredTranscript | null {
   const minChars = opts.minChars ?? 2000;
   const bypass = opts.bypassGuard === true;
   const excludes = compileLabeledExcludePatterns(opts.excludePatterns);
   let content: string;
   try {
-    content = readFileSync(filePath, 'utf8');
+    content = opts.readContent ? opts.readContent(filePath) : readFileSync(filePath, 'utf8');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`could not read transcript at ${filePath}: ${msg}`);
@@ -508,6 +512,7 @@ export interface ConversationPageDiscoverOpts {
 
 interface ConversationRow {
   slug: string;
+  page_revision: string;
   compiled_truth: string;
   frontmatter: Record<string, unknown> | string | null;
 }
@@ -539,7 +544,7 @@ export async function discoverConversationPages(
 ): Promise<DiscoveredTranscript[]> {
   const minChars = opts.minChars ?? 2000;
   const rows = await engine.executeRaw<ConversationRow>(
-    `SELECT slug, compiled_truth, frontmatter FROM pages
+    `SELECT slug, knowledge_revision::text AS page_revision, compiled_truth, frontmatter FROM pages
       WHERE source_id = $1 AND type = 'conversation' AND deleted_at IS NULL
         AND length(compiled_truth) >= $2::int
       ORDER BY slug`,
@@ -568,6 +573,7 @@ export async function discoverConversationPages(
       content: row.compiled_truth,
       basename: row.slug.split('/').pop() ?? row.slug,
       inferredDate: date,
+      pageRevision: row.page_revision,
     });
   }
   if (excluded > 0) {

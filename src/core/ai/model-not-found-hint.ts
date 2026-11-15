@@ -24,6 +24,8 @@ export function modelRouteHint(route: GatewayModelSource, touchpoint: Touchpoint
       return `Selected via ${origin} (deprecated key). Fix: gbrain config unset ${origin}, then gbrain config set ${CONFIG_KEY[touchpoint]} <provider>:<model>`;
     case 'cli_flag':
       return `Selected via ${origin}. Fix: pass a model the provider serves.`;
+    case 'private_default':
+      return `Selected via the local private_codex policy. Fix: update the matching model in private_codex in ~/.gbrain/config.json.`;
     case 'env':
       return `Selected via the ${origin} environment variable. Fix: unset ${origin} or point it at a model the provider serves.`;
     case 'file_config': {

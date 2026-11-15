@@ -26,7 +26,7 @@ import type { PhaseResult } from '../cycle.ts';
 import type { ProgressReporter } from '../progress.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
-import { chat as gatewayChat, isThinkingModel, THINKING_MODEL_MAX_OUTPUT_TOKENS } from '../ai/gateway.ts';
+import { type ChatOpts, chat as gatewayChat, isThinkingModel, THINKING_MODEL_MAX_OUTPUT_TOKENS } from '../ai/gateway.ts';
 import { createGlobalLlmHaltTracker, haltedClassOf, type GlobalLlmErrorClass } from '../ai/errors.ts';
 import { canonicalLookup, type ModelPricing } from '../model-pricing.ts';
 import { priceFor, type PricingOverrides } from '../budget/reservation-cost.ts';
@@ -45,6 +45,7 @@ import { readPhaseConfigNumber, SYNTHESIZE_CONCEPTS_BUDGET_KEY, SYNTHESIZE_CONCE
 import { ConceptRetryBound, MAX_CONCEPT_ATTEMPTS } from './concept-retry-bound.ts';
 import { ConceptDriftSkips } from '../persistence/drift-conflicts.ts';
 import { throwIfAborted } from '../abort-check.ts';
+import { withPrivateConcepts, proposePrivateConcept, type PrivateConceptScope } from './concepts-codex.ts';
 
 // Miss policy for the shared resolver (`priceFor`: operator overrides, the
 // claude-cli → Anthropic sibling, canonical rows): assume Sonnet-tier
@@ -147,6 +148,7 @@ interface AtomGroup {
   atomSlugs: string[];
   atomTitles: string[];
   atomBodies: string[];
+  atomRevisions: string[];
   /** #5525: strictest effective visibility of the member atoms. */
   visibility: Visibility;
   tier: 'T1' | 'T2' | 'T3' | 'T4';
@@ -169,10 +171,19 @@ export async function runPhaseSynthesizeConcepts(
   engine: BrainEngine,
   opts: SynthesizeConceptsOpts = {},
 ): Promise<PhaseResult> {
+  return withPrivateConcepts(engine, opts, scope => synthesizeConcepts(engine, opts, scope));
+}
+
+async function synthesizeConcepts(
+  engine: BrainEngine,
+  opts: SynthesizeConceptsOpts,
+  privateScope?: PrivateConceptScope,
+): Promise<PhaseResult> {
   const chat = opts._chat ?? gatewayChat;
 
   // 1. Get atom pages (test seam OR DB query)
   let atoms = opts._atoms ?? [];
+  const selectedRevisions = new Map<string, string>();
   if (atoms.length === 0 && opts._atoms === undefined) {
     try {
       const rows = await engine.executeRaw<{
@@ -181,18 +192,20 @@ export async function runPhaseSynthesizeConcepts(
         compiled_truth: string;
         frontmatter: { concepts?: string[]; imported_from?: string };
         private: boolean;
+        knowledge_revision: string | null;
       }>(
         // Codex P2: scoped to the cycle source — the provenance edges below
         // are pinned to it, so a brain-global scan grouped same-slug atoms
         // from OTHER sources into this source's concepts.
-        `SELECT slug, title, compiled_truth, frontmatter, NOT (${privatePagesFilterFragment('pages')}) AS private
+        `SELECT slug, title, compiled_truth, frontmatter, knowledge_revision, NOT (${privatePagesFilterFragment('pages')}) AS private
            FROM pages
           WHERE type = 'atom'
             AND source_id = $1
             AND deleted_at IS NULL
-            AND (frontmatter->>'imported_from') IS NULL`,
+            AND (frontmatter->>'imported_from') IS NULL${privateScope ? ` AND (${privatePagesFilterFragment('pages')})` : ''}`,
         [opts.sourceId ?? 'default'],
       );
+      for (const row of rows) selectedRevisions.set(row.slug, row.knowledge_revision == null ? '' : String(row.knowledge_revision));
       atoms = rows
         .filter((r) => Array.isArray(r.frontmatter?.concepts) && r.frontmatter.concepts.length > 0)
         .map((r) => ({
@@ -202,7 +215,8 @@ export async function runPhaseSynthesizeConcepts(
           concept_refs: r.frontmatter!.concepts!,
           visibility: r.private ? 'private' as const : 'world' as const,
         }));
-    } catch {
+    } catch (error) {
+      if (privateScope) throw error;
       // No atoms table or query failed — phase no-ops cleanly.
     }
   }
@@ -244,6 +258,7 @@ export async function runPhaseSynthesizeConcepts(
       atomSlugs: data.slugs,
       atomTitles: data.titles,
       atomBodies: data.bodies,
+      atomRevisions: data.slugs.map(slug => selectedRevisions.get(slug) ?? ''),
       visibility: strictestVisibility(data.visibilities),
       tier,
     });
@@ -317,6 +332,7 @@ export async function runPhaseSynthesizeConcepts(
   // call inherits models.chat, so models.dream.synthesize (advertised in the
   // routing table as tier.reasoning) had no effect on this path.
   const synthModel = await resolveModel(engine, {
+    privateRole: 'concepts',
     configKey: 'models.dream.synthesize',
     tier: 'reasoning',
     fallback: 'sonnet',
@@ -326,6 +342,7 @@ export async function runPhaseSynthesizeConcepts(
   // maintenance authority before any model spend so a missing canonical owner
   // fails fast; null on an unmanaged brain.
   const maintenance = opts.dryRun ? null : await maintenancePreflight(engine, opts.sourceId ?? 'default', opts.brainDir);
+  if (privateScope && !maintenance) throw new Error('codex_publication_requires_managed_persistence');
   const conceptFiles = await derivedWriteThrough(engine, 'synthesize_concepts', opts.sourceId ?? 'default', { managed: maintenance !== null, dryRun: opts.dryRun ?? false });
   // Managed publication outcomes, kept out of `failures` (LLM fallback). A
   // deferred concept moved under a concurrent writer and is retried next run;
@@ -380,7 +397,7 @@ export async function runPhaseSynthesizeConcepts(
     // narrative, there is nothing to spend or rewrite; a fallback page is retried,
     // and so is one a chat_fallback_chain model wrote (hashed under that model).
     const hashOf = (model: string, bodies: string[]): string => createHash('sha256')
-      .update(JSON.stringify([model, group.visibility, group.atomSlugs.map((s, i) => [s, group.atomTitles[i], bodies[i]])
+      .update(JSON.stringify([privateScope ? [model, privateScope.fingerprint] : model, group.visibility, group.atomSlugs.map((s, i) => [s, group.atomTitles[i], bodies[i]])
         .sort((a, b) => a[0].localeCompare(b[0]))]))
       .digest('hex').slice(0, 16);
     const narrativeBodies = group.atomBodies.map(stripFenceSections);
@@ -388,6 +405,7 @@ export async function runPhaseSynthesizeConcepts(
     // #7269: a T3 narrative is the deterministic template, which never calls the model, so its hash leaves the model out.
     const hashModel = group.tier === 'T1' || group.tier === 'T2' ? synthModel : '';
     const memberHash = hashFor(hashModel);
+    const privateEvidence = await privateScope?.capture(group);
     const priorMode = existing?.frontmatter?.synthesis_mode;
     const realNarrative = priorMode === 'llm' || priorMode === 'deterministic_tier';
     // #7269: rewriting a deterministic page to the template it already holds, at a visibility it already has, would
@@ -399,7 +417,8 @@ export async function runPhaseSynthesizeConcepts(
       skippedUnchanged.push(conceptSlug);
       // #7548: the cache skips the model, not the member provenance an unchanged concept may have lost.
       if (!opts.dryRun && !await conceptProvenanceCovers(engine, src, conceptSlug, group.atomSlugs)) {
-        await writer.restoreProvenance({ concept: group.conceptSlug, conceptSlug, atomSlugs: group.atomSlugs, revision: existingSnapshot!.revision });
+        await writer.restoreProvenance({ concept: group.conceptSlug, conceptSlug, atomSlugs: group.atomSlugs,
+          revision: existingSnapshot!.revision, privateEvidence });
         provenanceRestored.push(conceptSlug);
       }
       continue;
@@ -420,7 +439,7 @@ export async function runPhaseSynthesizeConcepts(
       synthesisMode = priorMode as ConceptSynthesisMode;
       rehashed.push(conceptSlug);
     } else if (group.tier === 'T1' || group.tier === 'T2') {
-      if (estimatedSpendUsd >= budgetCap) {
+      if (!privateScope && estimatedSpendUsd >= budgetCap) {
         narrative = deterministicNarrative(group);
         synthesisMode = 'budget_fallback';
         budgetCapped++;
@@ -429,32 +448,15 @@ export async function runPhaseSynthesizeConcepts(
         continue;
       } else {
         try {
-          const result = await chat({
-            model: synthModel,
-            system: SYNTH_PROMPT,
-            messages: [
-              {
-                role: 'user',
-                content:
-                  `Concept slug: ${group.conceptSlug}\n` +
-                  `${group.atomTitles.length} atoms reference this concept.\n\n` +
-                  `Sample atom titles:\n${group.atomTitles.slice(0, 10).map((t) => `  - ${t}`).join('\n')}\n\n` +
-                  `Sample atom bodies:\n${narrativeBodies
-                    .slice(0, 5)
-                    .map((b, i) => `${i + 1}. ${b.slice(0, 500)}`)
-                    .join('\n\n')}`,
-              },
-            ],
-            maxTokens: synthMaxOutputTokens,
-            abortSignal: opts.signal,
-          });
+          const result = privateScope ? await proposePrivateConcept(synthModel, group.conceptSlug, group, privateEvidence!)
+            : await chat(conceptNarrativeRequest(synthModel, group, synthMaxOutputTokens, opts.signal));
           // Post-await yield (T3): the LLM call is the main TTL hazard
           // codex flagged. Throttle inside maybeYield bounds the actual
           // refresh rate.
           await maybeYield();
           llmHalt.reset();
-          const pricing = narrativePricing(result.model, pricingOverrides, pricingFallbackModels, budgetCap);
-          estimatedSpendUsd +=
+          const pricing = privateScope ? null : narrativePricing(result.model, pricingOverrides, pricingFallbackModels, budgetCap);
+          if (pricing) estimatedSpendUsd +=
             (result.usage.input_tokens * pricing.input +
               result.usage.output_tokens * pricing.output) /
             1_000_000;
@@ -462,9 +464,10 @@ export async function runPhaseSynthesizeConcepts(
           // #6260: a narrative stopped before the end never replaces a page or advances its member hash.
           const stopped = result.stopReason === 'length' || result.stopReason === 'refusal' || result.stopReason === 'content_filter';
           if (text && !stopped) {
-            ({ narrative, unverified: unverifiedClaims } = await groundConceptNarrative(engine, text, group));
+            ({ narrative, unverified: unverifiedClaims } = privateScope ? { narrative: text, unverified: [] } : await groundConceptNarrative(engine, text, group));
             synthesisMode = 'llm';
             if (result.fallbackFrom) fallbackWriter = result.model;
+            retries.succeed(`${opts.sourceId ?? 'default'}:${conceptSlug}`);
           } else {
             failures.push({ concept: group.conceptSlug, error: stopped ? `output stopped before the end (stopReason=${result.stopReason})` : 'empty model response' });
             narrative = deterministicNarrative(group);
@@ -472,6 +475,7 @@ export async function runPhaseSynthesizeConcepts(
             retries.fail(`${opts.sourceId ?? 'default'}:${conceptSlug}`, memberHash);
           }
         } catch (err) {
+          if (privateScope) throw err;
           await stopIfAborted();
           const msg = err instanceof Error ? err.message : String(err);
           // #3044 adoption: a whole-run LLM outage must not overwrite
@@ -532,7 +536,7 @@ export async function runPhaseSynthesizeConcepts(
       // world, so a strict source never commits an intermediate private page.
       const covered = visibility === 'world' && await conceptProvenanceCovers(engine, src, conceptSlug, group.atomSlugs);
       const write: ConceptWrite = { concept: group.conceptSlug, conceptSlug, atomSlugs: group.atomSlugs, visibility, covered, synthesisMode, synthesized, narrative,
-        revision: existingSnapshot?.revision ?? null, baseline: existing?.compiled_truth ?? '' };
+        revision: existingSnapshot?.revision ?? null, baseline: existing?.compiled_truth ?? '', privateEvidence };
       // GBRA-60: a managed run's concepts publish in batches (concept-writes.ts), each one publication group on Postgres.
       await stopIfAborted();
       await (maintenance ? writer.queue(write) : writer.publish(write));
@@ -552,7 +556,7 @@ export async function runPhaseSynthesizeConcepts(
   // fires when concepts were actually written; rollup always fires so doctor
   // sees the phase ran.
   const driftActions = await driftSkips.finish();
-  const warnings = budgetWarnings(budget.warning, budgetCapped, budgetCap);
+  const warnings = privateScope ? [] : budgetWarnings(budget.warning, budgetCapped, budgetCap);
   if (!opts.dryRun) await retries.save(engine);
   // Managed brains skip the receipt page (a legacy putPage), like extract_atoms;
   // the rollup row below still records the run for doctor.
@@ -583,6 +587,7 @@ export async function runPhaseSynthesizeConcepts(
       kind: 'concepts',
       source_id: opts.sourceId ?? 'default',
       cost_delta: estimatedSpendUsd,
+      subscription: !!privateScope,
       round_completed_delta: failures.length === 0 && publicationDeferred.length === 0 && publicationHeld.length === 0 && publicationPending.length === 0 ? 1 : 0,
       halt_delta: failures.length > 0 ? 1 : 0, halt_reason: 'item_error',
     });
@@ -631,8 +636,8 @@ export async function runPhaseSynthesizeConcepts(
       publication_held: publicationHeld,
       publication_pending: publicationPending,
       ...(abortedGlobalError ? { aborted_global_error: abortedGlobalError } : {}),
-      estimated_spend_usd: estimatedSpendUsd,
-      budget_usd: budgetCap,
+      estimated_spend_usd: privateScope ? null : estimatedSpendUsd,
+      budget_usd: privateScope ? null : budgetCap,
       pricing_fallback_models: [...pricingFallbackModels],
       dry_run: opts.dryRun ?? false,
     },
@@ -708,4 +713,14 @@ async function groundConceptNarrative(engine: BrainEngine, narrative: string, gr
   ];
   const v = verifyBody(narrative, sources, { checks: 'quotes' });
   return { narrative: v.body.trim() || ALL_CLAIMS_QUARANTINED_BODY, unverified: v.quarantined };
+}
+
+/** Ordinary provider prompt, kept separate from the native Codex protocol. */
+function conceptNarrativeRequest(model: string, group: AtomGroup, maxTokens: number, abortSignal?: AbortSignal): ChatOpts {
+  return { model, system: SYNTH_PROMPT, maxTokens, ...(abortSignal ? { abortSignal } : {}), messages: [{ role: 'user', content:
+    `Concept slug: ${group.conceptSlug}\n` +
+    `${group.atomTitles.length} atoms reference this concept.\n\n` +
+    `Sample atom titles:\n${group.atomTitles.slice(0, 10).map(t => `  - ${t}`).join('\n')}\n\n` +
+    `Sample atom bodies:\n${group.atomBodies.map(stripFenceSections).slice(0, 5).map((b, i) => `${i + 1}. ${b.slice(0, 500)}`).join('\n\n')}`,
+  }] };
 }

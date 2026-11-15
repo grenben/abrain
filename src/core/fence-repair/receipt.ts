@@ -47,6 +47,8 @@ export interface FenceRepairReceipt {
   after_sha256: string;
   /** Model spend for this page (USD); 0 for the free tiers, null for an unpriced model. */
   cost_usd: number | null;
+  /** Private Codex authorization bound to a model-generated fence repair. */
+  private_policy_fingerprint?: string;
   /** Where every row of each merged fence went (`merge_fences`); absent otherwise. */
   merged?: MergedFenceReceipt[];
 }
@@ -66,11 +68,13 @@ export function parseFenceRepairReceipt(value: unknown): FenceRepairReceipt | nu
   if (r.model !== null && (typeof r.model !== 'string' || r.model.length > 200 || /[\r\n]/.test(r.model))) return null;
   if (typeof r.before_sha256 !== 'string' || !SHA.test(r.before_sha256) || typeof r.after_sha256 !== 'string' || !SHA.test(r.after_sha256)) return null;
   if (r.cost_usd !== null && (typeof r.cost_usd !== 'number' || !Number.isFinite(r.cost_usd) || r.cost_usd < 0)) return null;
+  if (r.private_policy_fingerprint !== undefined && (typeof r.private_policy_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(r.private_policy_fingerprint))) return null;
   const merged = r.merged === undefined ? undefined : parseMerged(r.merged);
   if (merged === null) return null;
   return { actor: FENCE_REPAIR_ACTOR, tier: r.tier as FenceRepairReceipt['tier'], classes: [...r.classes as string[]], rows: [...r.rows as number[]],
-    columns: [...r.columns as string[]], model: r.model as string | null, before_sha256: r.before_sha256, after_sha256: r.after_sha256, cost_usd: r.cost_usd as number | null,
-    ...(merged ? { merged } : {}) };
+     columns: [...r.columns as string[]], model: r.model as string | null, before_sha256: r.before_sha256, after_sha256: r.after_sha256, cost_usd: r.cost_usd as number | null,
+     ...(typeof r.private_policy_fingerprint === 'string' ? { private_policy_fingerprint: r.private_policy_fingerprint } : {}),
+     ...(merged ? { merged } : {}) };
 }
 
 const index = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;

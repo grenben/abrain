@@ -35,71 +35,17 @@
 import type { BrainEngine } from '../core/engine.ts';
 import { readFileSync, existsSync } from 'fs';
 import { runBrainstorm, BRAINSTORM_PROFILE } from '../core/brainstorm/orchestrator.ts';
+import { runPrivateBrainstormEval } from '../eval/brainstorm/codex.ts';
+import { withBrainstormAllowance, BRAINSTORM_ALLOWANCE_HELP } from '../core/brainstorm/codex-local-grant.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
 import { loadConfig } from '../core/config.ts';
 
-export interface BrainstormEvalFixture {
-  question: string;
-  /** Optional: prefixes the domain-bank should surface (asserted in --strict mode). */
-  expected_far_prefixes?: string[];
-  notes?: string;
-}
-
-export interface BrainstormEvalThresholds {
-  /** Mean normalized distance of passing ideas. Default 0.4. */
-  distance_min: number;
-  /** Mean judge weighted_score of passing ideas. Default 3.5. */
-  usefulness_min: number;
-  /** Fraction of ideas that cite a real slug from the brain. Default 1.0. */
-  grounding_min: number;
-}
-
-export const DEFAULT_BRAINSTORM_THRESHOLDS: BrainstormEvalThresholds = Object.freeze({
-  distance_min: 0.4,
-  usefulness_min: 3.5,
-  grounding_min: 1.0,
-});
-
-export interface PerFixtureResult {
-  question: string;
-  /** Number of generated ideas that passed the judge threshold. */
-  pass_count: number;
-  /** Number of ideas total (before judge filtering). */
-  total_ideas: number;
-  /** Mean distance_score over passing ideas. */
-  mean_distance: number;
-  /** Mean judge weighted_score over passing ideas (NaN if no judge scores). */
-  mean_usefulness: number;
-  /** Fraction of ideas citing a real slug. */
-  grounding_rate: number;
-  /** Did the domain-bank surface enough prefixes? D11 sparse signal. */
-  short_of_target: boolean;
-  /** Cost in USD (actual). */
-  cost_usd: number;
-  /** True iff judge failed mid-run for this fixture. */
-  judge_failed: boolean;
-}
-
-export interface BrainstormEvalReport {
-  schema_version: 1;
-  fixture_path: string;
-  total_fixtures: number;
-  parseable_fixtures: number;
-  thresholds: BrainstormEvalThresholds;
-  per_fixture: PerFixtureResult[];
-  aggregate: {
-    distance: number;
-    usefulness: number;
-    grounding: number;
-  };
-  /** pass / fail / inconclusive. */
-  verdict: 'pass' | 'fail' | 'inconclusive';
-  /** Reasons supporting the verdict. */
-  reasons: string[];
-  total_cost_usd: number;
-}
+import { DEFAULT_BRAINSTORM_THRESHOLDS, summarizeFixture, computeVerdict, type BrainstormEvalFixture, type BrainstormEvalThresholds, type PerFixtureResult, type BrainstormEvalReport } from '../eval/brainstorm/metrics.ts';
+export * from '../eval/brainstorm/metrics.ts';
 
 export interface EvalBrainstormCliArgs {
   fixture?: string;
+  source?: string;
   json: boolean;
   limit?: number;
   help: boolean;
@@ -115,7 +61,11 @@ function parseArgs(args: string[]): EvalBrainstormCliArgs {
   let i = 0;
   while (i < args.length) {
     const a = args[i];
-    if (a === '--help' || a === '-h') {
+    if (a === '--source') {
+      const source=args[++i];
+      if(!source||source.startsWith('--')||out.source!==undefined){out.error='--source requires one source ID';return out;}
+      out.source=source;
+    } else if (a === '--help' || a === '-h') {
       out.help = true;
     } else if (a === '--json') {
       out.json = true;
@@ -203,94 +153,6 @@ export function readBrainstormEvalFixture(path: string): BrainstormEvalFixture[]
   return fixtures;
 }
 
-/** Verify grounding: a real slug means a slug present in `realSlugs`. Returns the fraction of ideas citing ≥1 real slug. */
-export function computeGroundingRate(
-  ideas: Array<{ close_slug: string; far_slug: string }>,
-  realSlugs: Set<string>
-): number {
-  if (ideas.length === 0) return 0;
-  let grounded = 0;
-  for (const idea of ideas) {
-    const closeReal = realSlugs.has(idea.close_slug);
-    const farReal = realSlugs.has(idea.far_slug);
-    if (closeReal || farReal) grounded++;
-  }
-  return grounded / ideas.length;
-}
-
-/**
- * Aggregate one fixture's brainstorm result into the three-axis metrics.
- * `realSlugs` is the set of slugs known to exist in the test brain (so we
- * can detect hallucinated citations — codex r2 #11's grounding signal).
- */
-export function summarizeFixture(
-  question: string,
-  result: Awaited<ReturnType<typeof runBrainstorm>>,
-  realSlugs: Set<string>
-): PerFixtureResult {
-  const passing = result.ideas.filter((i) => i.passes);
-  const meanDistance = passing.length === 0
-    ? 0
-    : passing.reduce((s, i) => s + i.distance_score, 0) / passing.length;
-  const judgedPassing = passing.filter((i) => i.judge !== undefined);
-  const meanUsefulness = judgedPassing.length === 0
-    ? Number.NaN
-    : judgedPassing.reduce((s, i) => s + (i.judge!.weighted_score), 0) / judgedPassing.length;
-  const grounding = computeGroundingRate(result.ideas, realSlugs);
-
-  return {
-    question,
-    pass_count: passing.length,
-    total_ideas: result.ideas.length,
-    mean_distance: meanDistance,
-    mean_usefulness: meanUsefulness,
-    grounding_rate: grounding,
-    short_of_target: result.short_of_target,
-    cost_usd: result.cost.actual_usd,
-    judge_failed: result.judge_failed,
-  };
-}
-
-/** Compute the three aggregate axes across all parseable fixtures + the verdict. */
-export function computeVerdict(
-  perFixture: PerFixtureResult[],
-  thresholds: BrainstormEvalThresholds
-): { aggregate: { distance: number; usefulness: number; grounding: number }; verdict: 'pass' | 'fail' | 'inconclusive'; reasons: string[] } {
-  const usable = perFixture.filter((r) => r.pass_count > 0 && !r.judge_failed);
-  if (usable.length < 2) {
-    return {
-      aggregate: { distance: 0, usefulness: 0, grounding: 0 },
-      verdict: 'inconclusive',
-      reasons: [`Only ${usable.length} fixture(s) produced parseable, judged ideas. Need at least 2 to compute meaningful aggregates.`],
-    };
-  }
-  const distance = usable.reduce((s, r) => s + r.mean_distance, 0) / usable.length;
-  const validUseful = usable.filter((r) => Number.isFinite(r.mean_usefulness));
-  const usefulness = validUseful.length === 0
-    ? 0
-    : validUseful.reduce((s, r) => s + r.mean_usefulness, 0) / validUseful.length;
-  const grounding = usable.reduce((s, r) => s + r.grounding_rate, 0) / usable.length;
-
-  const reasons: string[] = [];
-  if (distance < thresholds.distance_min) {
-    reasons.push(`distance ${distance.toFixed(3)} < ${thresholds.distance_min} (ideas too close to the question — domain-bank not surfacing distant pages)`);
-  }
-  if (usefulness < thresholds.usefulness_min) {
-    reasons.push(`usefulness ${usefulness.toFixed(2)} < ${thresholds.usefulness_min} (ideas far but low judge score)`);
-  }
-  if (grounding < thresholds.grounding_min) {
-    reasons.push(`grounding ${grounding.toFixed(3)} < ${thresholds.grounding_min} (some ideas cite non-existent slugs — hallucination signal)`);
-  }
-  if (reasons.length > 0) {
-    return { aggregate: { distance, usefulness, grounding }, verdict: 'fail', reasons };
-  }
-  return {
-    aggregate: { distance, usefulness, grounding },
-    verdict: 'pass',
-    reasons: [`all three axes cleared: distance ${distance.toFixed(3)} >= ${thresholds.distance_min}, usefulness ${usefulness.toFixed(2)} >= ${thresholds.usefulness_min}, grounding ${grounding.toFixed(3)} >= ${thresholds.grounding_min}`],
-  };
-}
-
 /** Build the set of slugs known to exist in the brain (for grounding check). */
 async function loadRealSlugs(engine: BrainEngine): Promise<Set<string>> {
   const refs = await engine.listAllPageRefs();
@@ -299,9 +161,12 @@ async function loadRealSlugs(engine: BrainEngine): Promise<Set<string>> {
 
 /** CLI entry. Exits with 0/1/2 mirroring eval convention. */
 export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Promise<number> {
+  return withBrainstormAllowance(engine,args,clean=>runEvalBrainstormArgs(engine,clean));
+}
+async function runEvalBrainstormArgs(engine:BrainEngine,args:string[]):Promise<number> {
   const parsed = parseArgs(args);
   if (parsed.help) {
-    console.log(HELP);
+    console.log(HELP+BRAINSTORM_ALLOWANCE_HELP);
     return 0;
   }
   if (parsed.error) {
@@ -313,6 +178,14 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
     console.error('gbrain eval brainstorm: fixture path required');
     console.error(HELP);
     return 2;
+  }
+  if(readPrivateCodexConfig()) {
+    const report=await runPrivateBrainstormEval(engine,{path:parsed.fixture,source:parsed.source,limit:parsed.limit,
+      thresholds:{distance_min:parsed.distance_min??DEFAULT_BRAINSTORM_THRESHOLDS.distance_min,
+        usefulness_min:parsed.usefulness_min??DEFAULT_BRAINSTORM_THRESHOLDS.usefulness_min,grounding_min:parsed.grounding_min??DEFAULT_BRAINSTORM_THRESHOLDS.grounding_min}});
+    if(parsed.json)console.log(JSON.stringify(report,null,2));
+    else {console.log(`Brainstorm evaluation: ${report.verdict}; ${report.completed_fixtures}/${report.selected_fixtures} fixtures completed; cost unknown (subscription).`);for(const reason of report.reasons)console.log(reason);}
+    return report.verdict==='pass'?0:report.verdict==='fail'?1:2;
   }
   let fixtures: BrainstormEvalFixture[];
   try {
@@ -332,7 +205,7 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
   const realSlugs = await loadRealSlugs(engine);
 
   const perFixture: PerFixtureResult[] = [];
-  let totalCost = 0;
+  let totalCost: number | null = 0;
   for (const [idx, fix] of slice.entries()) {
     if (!parsed.json) {
       console.error(`[eval-brainstorm] ${idx + 1}/${slice.length}: ${fix.question.slice(0, 60)}...`);
@@ -345,8 +218,9 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
       });
       const summary = summarizeFixture(fix.question, result, realSlugs);
       perFixture.push(summary);
-      totalCost += summary.cost_usd;
+      totalCost = totalCost === null || summary.cost_usd === null ? null : totalCost + summary.cost_usd;
     } catch (err) {
+      totalCost = null;
       const msg = err instanceof Error ? err.message : String(err);
       if (!parsed.json) {
         console.error(`[eval-brainstorm] fixture ${idx + 1} failed: ${msg}`);
@@ -359,7 +233,7 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
         mean_usefulness: Number.NaN,
         grounding_rate: 0,
         short_of_target: false,
-        cost_usd: 0,
+        cost_usd: null,
         judge_failed: true,
       });
     }
@@ -388,7 +262,7 @@ export async function runEvalBrainstorm(engine: BrainEngine, args: string[]): Pr
     console.log(`Distance:   ${aggregate.distance.toFixed(3)} (threshold ${thresholds.distance_min})`);
     console.log(`Usefulness: ${aggregate.usefulness.toFixed(2)} (threshold ${thresholds.usefulness_min})`);
     console.log(`Grounding:  ${aggregate.grounding.toFixed(3)} (threshold ${thresholds.grounding_min})`);
-    console.log(`Cost:       $${totalCost.toFixed(2)}`);
+    console.log(`Cost:       ${totalCost === null ? 'unknown' : '$'+totalCost.toFixed(2)}`);
     console.log(`Verdict:    ${verdict.toUpperCase()}`);
     for (const r of reasons) {
       console.log(`  - ${r}`);

@@ -2082,18 +2082,15 @@ async function routeEngineFreeSubcommands(command: string, args: string[]): Prom
   }
 
   // v0.28.8: longmemeval brings its own in-memory PGLite. Bypassing
-  // connectEngine here keeps `gbrain eval longmemeval --help` and benchmark
-  // runs working on machines that have no `~/.gbrain/config.json` configured.
+  // connectEngine here keeps help and benchmark runs working without a host DB.
+  // Explicit private allowances use a probe-only owner connection, with no
+  // implicit migration/startup work.
   //
   // The in-memory brain's import + hybridSearch still embed through the
   // configured provider, so the shared eval gateway bootstrap runs first.
   if (command === 'eval' && args[0] === 'longmemeval') {
-    const { runEvalLongMemEval } = await import('../commands/eval-longmemeval.ts');
-    if (!(args.length > 1 && (args[1] === '--help' || args[1] === '-h'))) {
-      const { configureEvalGateway } = await import('../eval/shared/gateway-bootstrap.ts');
-      configureEvalGateway();
-    }
-    await runEvalLongMemEval(args.slice(1));
+    const { runConfiguredLocalLongMemEval } = await import('../commands/eval-longmemeval-subscription.ts');
+    await runConfiguredLocalLongMemEval(args.slice(1), () => connectEngine({ probeOnly: true }));
     return true;
   }
 

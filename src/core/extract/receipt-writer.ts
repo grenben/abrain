@@ -72,8 +72,10 @@ export interface ExtractReceiptInput {
   extracted_at: string;
   /** Rows committed to the target store this round. */
   total_rows: number;
-  /** Cumulative cost across the round in USD. 0 for deterministic extractors. */
-  cost_usd: number;
+  /** Cumulative known API cost; null when subscription inference is not priced. */
+  cost_usd: number | null;
+  /** Billing mode when the provider uses a subscription rather than API metering. */
+  billing?: 'subscription';
   /** LLM model id (optional; only for LLM-backed extractors). */
   model_id?: string;
   /** Eval gate verdict (optional; only when a gate fired). */
@@ -184,6 +186,7 @@ function buildReceiptFrontmatter(input: ExtractReceiptInput): Record<string, unk
     total_rows: input.total_rows,
     cost_usd: input.cost_usd,
   };
+  if (input.billing) fm.billing = input.billing;
   if (input.model_id) fm.model_id = input.model_id;
   if (typeof input.eval_pass === 'boolean') fm.eval_pass = input.eval_pass;
   if (typeof input.eval_score === 'number') fm.eval_score = input.eval_score;
@@ -215,6 +218,7 @@ function buildReceiptFrontmatter(input: ExtractReceiptInput): Record<string, unk
 export async function writeReceipt(
   engine: BrainEngine,
   input: ExtractReceiptInput,
+  authorize?: (tx: BrainEngine, slug: string) => Promise<void>,
 ): Promise<{ slug: string; page: Page }> {
   const slug = receiptSlug(input);
   const title = `${input.kind} — ${input.round} — ${input.source_id}`;
@@ -223,6 +227,7 @@ export async function writeReceipt(
 
   const page = await maintenanceTransaction(engine, async tx => {
     await tx.lockPageKeys([{ sourceId: input.source_id, slug }]);
+    await authorize?.(tx, slug);
     const [prior] = await tx.executeRaw<{ type: string | null; source_path: string | null; source_uri: string | null; withheld_source_path: string | null }>(
       'SELECT type, source_path, source_uri, withheld_source_path FROM pages WHERE source_id=$1 AND slug=$2', [input.source_id, slug]);
     if (!isNeverFiledDerivedPage(slug, prior ?? {}) || (prior && prior.type !== 'extract_receipt')) {

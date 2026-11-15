@@ -34,6 +34,13 @@ import { submitPageMutation } from './persistence/page-mutations.ts';
 import { waitForWrite } from './persistence/service.ts';
 import type { WriteRequest } from './persistence/model.ts';
 
+/** JSON stored by the private proposal producer; consumers validate its complete contract. */
+export interface TakeProposalCodexEvidence {
+  source_quote?: string | null;
+  acceptance?: unknown;
+  [key: string]: unknown;
+}
+
 export interface TakeProposalRow {
   id: number;
   source_id: string;
@@ -43,6 +50,10 @@ export interface TakeProposalRow {
   holder: string;
   weight: number;
   domain: string | null;
+  content_hash: string;
+  prompt_version: string;
+  /** Private-proposal evidence is validated at the point it is consumed. */
+  codex_evidence: TakeProposalCodexEvidence | null;
   status: string;
   proposed_at: string | Date;
   model_id: string;
@@ -84,7 +95,7 @@ export function coerceProposalKind(raw: string): TakeKind {
 }
 
 const PROPOSAL_COLUMNS =
-  'id, source_id, page_slug, claim_text, kind, holder, weight, domain, status, proposed_at, model_id, promoted_row_num';
+  'id, source_id, page_slug, claim_text, kind, holder, weight, domain, content_hash, prompt_version, codex_evidence, status, proposed_at, model_id, promoted_row_num';
 
 export interface ListPendingOpts {
   /** Scope to one source (the CLI always provides one). Omit = all sources (trusted local only). */

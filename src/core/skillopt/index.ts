@@ -27,6 +27,15 @@ export type {
 export { scoreSkillOnTasks, scoreSkillPerTask } from './validate-gate.ts';
 export type { ScoreOnTasksOpts, PerTaskScore } from './validate-gate.ts';
 export { loadHeldOut } from './held-out.ts';
+export { resolveSkillOptModels } from './models-plan.ts';
+export type { SkillOptModels, SkillOptModelFlags } from './models-plan.ts';
+export { submitCodexSkillOptBatch } from './codex-batch-job.ts';
+export type {
+  CodexSkillOptBatchAllowance,
+  CodexSkillOptBatchInput,
+  CodexSkillOptBatchJobReceipt,
+  CodexSkillOptBatchScope,
+} from './codex-batch-job.ts';
 export { runRollout, READ_ONLY_BRAIN_TOOLS, rolloutToolsForSkill } from './rollout.ts';
 export type { RolloutOpts } from './rollout.ts';
 export { scoreTrajectory } from './score.ts';

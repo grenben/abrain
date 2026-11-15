@@ -44,6 +44,7 @@ import {
 import { childConfigurationError, encodeHandlerError, unrefTimer, writeChildOutcomeFile } from './job-isolation.ts';
 import { isLocalConfigurationError } from './configuration-error.ts';
 import { jobChildBuildVerdict } from './child-readiness.ts';
+import { jobSubscriptionBound } from './subscription-child.ts';
 
 export function writeChildBootstrapError(resultPath: string, error: unknown): number {
   if (!isLocalConfigurationError(error)) return 1;
@@ -170,6 +171,17 @@ export async function runChildJobEntry(
       try { await context.log(verdict.note); }
       catch (error) { process.stderr.write(`[run-child] could not record the build skew on job ${job.id}: ${error instanceof Error ? error.message : String(error)}\n`); }
       if (verdict.refused) return writeChildBootstrapError(opts.resultPath, childConfigurationError('child_protocol_incompatible'));
+    }
+    if (await jobSubscriptionBound(engine, job.id)) {
+      let parentFeatures: unknown;
+      try { parentFeatures = JSON.parse(opts.parentBuild ?? 'null')?.features; }
+      catch { parentFeatures = undefined; }
+      const required = ['codex-subscription-v1', 'codex-host-read-v1', 'codex-host-actions-v1'];
+      if (!Array.isArray(parentFeatures) || !required.every(feature => parentFeatures.includes(feature)) ||
+          (job.data?.read_registry === 'codex-discovery-v1' && !parentFeatures.includes('codex-discovery-v1'))) {
+        process.stderr.write('[run-child] subscription-bound job lacks the required parent authorization protocol.\n');
+        return writeChildBootstrapError(opts.resultPath, childConfigurationError('child_protocol_incompatible'));
+      }
     }
     let outcome;
     try {

@@ -19,11 +19,14 @@
  */
 
 import type { BrainEngine } from '../core/engine.ts';
+import { ROLLUP_COST_SELECT, rollupCost } from '../core/extract/rollup-cost.ts';
 
 export interface ExtractStatusRow {
   kind: string;
   source_id: string;
-  cost_7d_usd: number;
+  cost_7d_usd: number | null;
+  api_metered_cost_7d_usd?: number | null;
+  subscription_run_count?: number;
   eval_pass_count: number;
   eval_fail_count: number;
   halt_count: number;
@@ -49,6 +52,7 @@ export function buildStatusReport(
     kind: string;
     source_id: string;
     cost_7d_usd: number | string | null;
+    subscription_run_count?: number | string | null;
     eval_pass_count: number | string | null;
     eval_fail_count: number | string | null;
     halt_count: number | string | null;
@@ -61,10 +65,14 @@ export function buildStatusReport(
     const halts = Number(r.halt_count) || 0;
     const completed = Number(r.round_completed_count) || 0;
     const total = halts + completed;
+    const cost = rollupCost(r);
     return {
       kind: r.kind,
       source_id: r.source_id,
-      cost_7d_usd: Number(r.cost_7d_usd) || 0,
+      ...cost,
+      // Keep the historical zero display for ordinary rows with no recorded
+      // cost; a subscription run is different and must remain explicitly unknown.
+      cost_7d_usd: cost.subscription_run_count ? null : cost.cost_7d_usd ?? 0,
       eval_pass_count: Number(r.eval_pass_count) || 0,
       eval_fail_count: Number(r.eval_fail_count) || 0,
       halt_count: halts,
@@ -80,7 +88,7 @@ export function buildStatusReport(
   // most-troubled kinds first.
   rows.sort((a, b) => {
     if (b.halt_rate !== a.halt_rate) return b.halt_rate - a.halt_rate;
-    return b.cost_7d_usd - a.cost_7d_usd;
+    return (b.cost_7d_usd ?? 0) - (a.cost_7d_usd ?? 0);
   });
 
   return { schema_version: 1, rows, filters };
@@ -103,12 +111,17 @@ export function formatStatusTable(report: ExtractStatusReport, verbose: boolean)
   // Column widths
   const KIND = Math.max(4, ...shown.map(r => r.kind.length));
   const SOURCE = Math.max(6, ...shown.map(r => r.source_id.length));
+  const COST = Math.max(11, ...shown.map(r => r.cost_7d_usd === null
+    ? 'unknown'.length
+    : ('$' + r.cost_7d_usd.toFixed(4)).length));
 
   const lines: string[] = [];
   lines.push(
     `${'KIND'.padEnd(KIND)}  ` +
     `${'SOURCE'.padEnd(SOURCE)}  ` +
-    `${'COST_7D_USD'.padStart(11)}  ` +
+    `${'COST_7D_USD'.padStart(COST)}  ` +
+    `${'API_METERED_7D_USD'.padStart(18)}  ` +
+    `${'SUB_RUNS'.padStart(8)}  ` +
     `${'COMPLETED'.padStart(9)}  ` +
     `${'HALTS'.padStart(5)}  ` +
     `${'HALT_RATE'.padStart(9)}  ` +
@@ -121,7 +134,13 @@ export function formatStatusTable(report: ExtractStatusReport, verbose: boolean)
     lines.push(
       `${r.kind.padEnd(KIND)}  ` +
       `${r.source_id.padEnd(SOURCE)}  ` +
-      `${('$' + r.cost_7d_usd.toFixed(4)).padStart(11)}  ` +
+      `${(r.cost_7d_usd === null ? 'unknown' : '$' + r.cost_7d_usd.toFixed(4)).padStart(COST)}  ` +
+      `${(r.api_metered_cost_7d_usd === undefined
+        ? '—'
+        : r.api_metered_cost_7d_usd === null
+          ? 'unknown'
+          : '$' + r.api_metered_cost_7d_usd.toFixed(4)).padStart(18)}  ` +
+      `${String(r.subscription_run_count ?? 0).padStart(8)}  ` +
       `${String(r.round_completed_count).padStart(9)}  ` +
       `${String(r.halt_count).padStart(5)}  ` +
       `${(r.halt_rate * 100).toFixed(1).padStart(8) + '%'}  ` +
@@ -167,6 +186,7 @@ export async function runExtractStatus(
     kind: string;
     source_id: string;
     cost_7d_usd: number | string | null;
+    subscription_run_count: number | string | null;
     eval_pass_count: number | string | null;
     eval_fail_count: number | string | null;
     halt_count: number | string | null;
@@ -180,7 +200,7 @@ export async function runExtractStatus(
       `SELECT
          kind,
          source_id,
-         SUM(cost_usd) AS cost_7d_usd,
+         ${ROLLUP_COST_SELECT},
          SUM(eval_pass_count) AS eval_pass_count,
          SUM(eval_fail_count) AS eval_fail_count,
          SUM(halt_count) AS halt_count,

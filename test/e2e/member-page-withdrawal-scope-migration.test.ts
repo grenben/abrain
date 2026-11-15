@@ -2,22 +2,16 @@
  * GST-2346: the member_page_withdrawal_scope migration re-creates the two fact insert guards
  * (gbrain_preserve_fact_withdrawal, gbrain_guard_inserted_facts) and nothing else. Each arm stubs both functions,
  * winds the brain back one schema version and runs two migration runners at once, then expects both to succeed,
- * the brain at the latest version and both guards back with the member-page rule. On Postgres (direct, and through
- * a transaction-mode PgBouncer: this file is in scripts/e2e-backend-matrix.txt) the runners do it while another
- * connection holds ROW EXCLUSIVE on facts, so a step that locked the table (an index or trigger rebuild) would wait
- * on that transaction and fail the bound. PGLite admits one connection, so its arm checks the two runners only.
+ * the brain at the latest version and both guards back with the member-page rule. The PGLite test checks the full
+ * upgrade path and two runners. The PostgreSQL lock assertion is isolated in
+ * member-page-withdrawal-scope-migration-postgres.test.ts, which runs only v306.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import postgres from '#postgres';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
-import { PostgresEngine } from '../../src/core/postgres-engine.ts';
 import { LATEST_VERSION, MIGRATIONS, runMigrations } from '../../src/core/migrate.ts';
 import type { BrainEngine } from '../../src/core/engine.ts';
-import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
-import { probeDatabase } from '../helpers/schema-lock-probe.ts';
 import { withEnv } from '../helpers/with-env.ts';
 
-const DATABASE_URL = process.env.DATABASE_URL;
 const GUARDS = ['gbrain_guard_inserted_facts', 'gbrain_preserve_fact_withdrawal'];
 const migration = MIGRATIONS.find(m => m.name === 'member_page_withdrawal_scope')!;
 
@@ -65,30 +59,4 @@ describe('member_page_withdrawal_scope migration under two runners (PGLite)', ()
     expect(settled(await twoRunners(engine, engine))).toEqual(['ok', 'ok']);
     await expectGuardsRestored(engine);
   }, 120_000);
-});
-
-describe.skipIf(!DATABASE_URL)(`member_page_withdrawal_scope migration under two runners [${process.env.GBRAIN_TEST_BACKEND ?? 'postgres'}] (E2E)`, () => {
-  test('two runners finish while another connection holds ROW EXCLUSIVE on facts, and restore both guards', async () => {
-    assertSafeE2eDatabaseUrl(DATABASE_URL!);
-    const db = await probeDatabase(DATABASE_URL!);
-    const a = new PostgresEngine();
-    const b = new PostgresEngine();
-    const holder = postgres(db.url, { max: 1, prepare: false, onnotice: () => {} });
-    try {
-      await a.connect({ database_url: db.url, poolSize: 4 });
-      await b.connect({ database_url: db.url, poolSize: 4 });
-      await windBack(a);
-      const results = await holder.begin(async sql => {
-        await sql`LOCK TABLE facts IN ROW EXCLUSIVE MODE`;
-        return twoRunners(a, b);
-      });
-      expect(settled(results)).toEqual(['ok', 'ok']);
-      await expectGuardsRestored(a);
-    } finally {
-      await holder.end();
-      await a.disconnect();
-      await b.disconnect();
-      await db.drop();
-    }
-  }, 240_000);
 });

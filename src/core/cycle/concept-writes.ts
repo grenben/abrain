@@ -9,6 +9,7 @@
 import type { BrainEngine, LinkBatchInput } from '../engine.ts';
 import type { Visibility } from '../search/private-visibility.ts';
 import type { MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
+import { PRIVATE_CONCEPT_FENCE_FAILURE, type PrivateConceptEvidence } from './concepts-codex.ts';
 import { isAvailable } from '../ai/gateway.ts';
 // #2163: unmanaged concept pages route through importFromContent (the same
 // parse→chunk→embed pipeline put_page uses) instead of a bare engine.putPage,
@@ -39,6 +40,8 @@ export interface ConceptWrite {
   revision: string | null;
   /** Unmanaged: the narrative the page held when synthesis started; a different narrative under the page lock defers the concept (D-N3). */
   baseline: string;
+  /** Immutable source and host-authority fence captured for this exact member group. */
+  privateEvidence?: PrivateConceptEvidence;
 }
 
 export interface ConceptWriterDeps {
@@ -97,14 +100,17 @@ export function conceptWriter(deps: ConceptWriterDeps) {
     return write.visibility === 'world' && !write.covered && await conceptProvenanceCovers(engine, src, write.conceptSlug, write.atomSlugs);
   };
   /** The edges of a concept at `write.revision` (managed) or its current revision (unmanaged); a failure is a link warning. */
-  const bankLinks = async (write: Pick<ConceptWrite, 'concept' | 'conceptSlug' | 'atomSlugs' | 'revision'>): Promise<void> => {
+  const bankLinks = async (write: Pick<ConceptWrite, 'concept' | 'conceptSlug' | 'atomSlugs' | 'revision' | 'privateEvidence'>): Promise<void> => {
     const { conceptSlug } = write;
     const provenanceLinks: LinkBatchInput[] = [...new Set(write.atomSlugs)].flatMap((atomSlug) => [
       { from_slug: conceptSlug, to_slug: atomSlug, link_type: 'synthesized_from', link_source: 'concept-provenance', context: 'member atom', from_source_id: src, to_source_id: src },
       { from_slug: atomSlug, to_slug: conceptSlug, link_type: 'synthesizes', link_source: 'concept-provenance', context: 'concept synthesized from this atom', from_source_id: src, to_source_id: src },
     ]);
     try {
-      const written = await replaceConceptProvenanceLinks(engine, src, conceptSlug, provenanceLinks, { expectedRevision: maintenance ? write.revision : null, managed: !!maintenance });
+      const written = await replaceConceptProvenanceLinks(engine, src, conceptSlug, provenanceLinks, {
+        expectedRevision: maintenance ? write.revision : null, managed: !!maintenance,
+        beforeWrite: write.privateEvidence?.checkAuthorityInTransaction,
+      });
       // Zero rows back with edges requested means every member atom fell
       // out of the batch JOIN (not in this source) — unless a prior run
       // already banked them (ON CONFLICT DO NOTHING also returns 0). A
@@ -118,6 +124,9 @@ export function conceptWriter(deps: ConceptWriterDeps) {
         }
       }
     } catch (err) {
+      const code = (err as { code?: unknown })?.code;
+      if (code === PRIVATE_CONCEPT_FENCE_FAILURE
+        || write.privateEvidence && typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       deps.linkWarnings.push({ concept: write.concept, warning: `provenance links failed: ${msg}` });
       console.error(`[synthesize_concepts] provenance links failed for ${conceptSlug} (non-fatal): ${msg}`);
@@ -126,7 +135,10 @@ export function conceptWriter(deps: ConceptWriterDeps) {
   /** One managed batch; each concept settles on its own, and the ones that published carry their new revision. */
   const publishManaged = async (writes: ConceptWrite[], pageVisibility: (write: ConceptWrite) => Visibility): Promise<ConceptWrite[]> => {
     const outcomes = writes.length ? await publishManagedConcepts(engine, maintenance!, writes.map(write => ({ slug: write.conceptSlug,
-      synthesized: write.synthesized(pageVisibility(write)), narrative: write.narrative, expectedRevision: write.revision, members: write.atomSlugs })), deps.brainDir) : [];
+      synthesized: write.synthesized(pageVisibility(write)), narrative: write.narrative, expectedRevision: write.revision, members: write.atomSlugs,
+      evidence: write.privateEvidence?.pages,
+      privateAuthority: write.privateEvidence ? { role: write.privateEvidence.role, policyFingerprint: write.privateEvidence.policyFingerprint } : undefined,
+      beforeAdmission: write.privateEvidence?.checkAuthorityForAdmission })), deps.brainDir) : [];
     return writes.filter((write, i) => {
       const outcome = outcomes[i]!;
       if ('error' in outcome) return recorded(write, outcome.error);

@@ -30,6 +30,8 @@
  * by default.
  */
 
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
+import type { PrivateRole } from '../ai/private-roles.ts';
 import { BudgetMeter, loadAllowUnpriced, loadPricingOverrides, parseBudgetUsd, type SubmitEstimate, type BudgetCheckResult } from './budget-meter.ts';
 import { sourceScopeOpts, type OperationContext } from '../operations.ts';
 import type { BrainEngine } from '../engine.ts';
@@ -100,6 +102,7 @@ export function effectivePhaseDeadlineMs(
 }
 
 export abstract class BaseCyclePhase {
+  protected readonly privateRoles?: readonly PrivateRole[];
   /** Phase name; matches a CyclePhase enum entry in cycle.ts. */
   abstract readonly name: CyclePhase;
 
@@ -227,7 +230,8 @@ export abstract class BaseCyclePhase {
     }
 
     try {
-      const out = await this.process(ctx.engine, scope, ctx, opts);
+      const process = () => this.process(ctx.engine, scope, ctx, opts);
+      const out = await (this.privateRoles ? withPrivateRoleScope(this.privateRoles, process, false) : process());
       return {
         phase: this.name,
         status: out.status ?? 'ok',

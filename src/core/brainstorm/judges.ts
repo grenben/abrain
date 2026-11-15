@@ -24,6 +24,9 @@
 
 import { chat as defaultChat, getChatModel, type ChatResult, type ChatOpts } from '../ai/gateway.ts';
 import { splitProviderModelId } from '../model-id.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
 
 export const PROMPT_VERSION = 'brainstorm-judge-v1';
 
@@ -159,6 +162,8 @@ export interface JudgeResult {
   /** Provider:model that answered (for cost accounting / debugging). */
   model: string;
   usage: ChatResult['usage'];
+  cache_hits?: number;
+  billing?: { kind: 'subscription'; costUsd: null; remainingQuota: null };
 }
 
 /** Brainstorm vs LSD config delta. */
@@ -250,7 +255,7 @@ validateConfig(LSD_JUDGE_CONFIG);
 
 const FENCE_RE = /```(?:json)?\s*\n?([\s\S]*?)```/i;
 
-function buildJudgePrompt(config: JudgeConfig, ideas: JudgeIdea[]): string {
+export function buildJudgePrompt(config: JudgeConfig, ideas: JudgeIdea[]): string {
   const w = config.weights;
   const ideasBlock = ideas
     .map(
@@ -464,9 +469,16 @@ export async function runJudge(
   options: RunJudgeOptions = {}
 ): Promise<JudgeResult> {
   if (ideas.length === 0) {
-    // Empty input is a no-op success; callers can short-circuit too but
-    // returning a well-formed empty result is more ergonomic.
+    // Empty input is a deterministic no-op and never reaches a provider,
+    // including when private Codex policy is active.
     return { ideas: [], pass_count: 0, model: 'noop', usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 } };
+  }
+  // Subscription-authorized private runs must use the native Codex judge;
+  // keep ordinary/provider-neutral runs on the established gateway path.
+  if (codexSubscriptionContext() || readPrivateCodexConfig()) {
+    if (!codexSubscriptionContext()) throw new SubscriptionAdmissionError('subscription_required');
+    const { runCodexBrainstormJudge } = await import('./codex-judge.ts');
+    return runCodexBrainstormJudge(config, ideas, options);
   }
   const chunkSize = Math.max(1, options.maxIdeasPerCall ?? DEFAULT_JUDGE_CHUNK_SIZE);
   const stderr = options.stderrWrite ?? ((s: string) => { process.stderr.write(s); });

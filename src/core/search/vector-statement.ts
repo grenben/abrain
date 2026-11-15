@@ -60,6 +60,7 @@
  * ran out of eligible chunks).
  */
 import type { SearchOpts } from '../types.ts';
+import { utcSearchDateBound } from './date-bounds.ts';
 import { hnswIndexExpected } from '../vector-index.ts';
 import { unverifiedExtractionFragment } from '../extraction-review.ts';
 import { buildVectorCastFragment, normalizeEngineColumn } from './embedding-column.ts';
@@ -338,8 +339,8 @@ export function buildVectorSearchStatement(input: VectorSearchStatementInput): V
     const bound = `${bind(value)}::text::timestamptz`;
     return `AND (p.effective_date ${op} ${bound} OR (p.effective_date IS NULL AND (p.updated_at ${op} ${bound} OR (p.updated_at IS NULL AND p.created_at ${op} ${bound}))))`;
   };
-  if (opts?.afterDate) filters.push(dateBound(opts.afterDateInclusive ? '>=' : '>', opts.afterDate));
-  if (opts?.beforeDate) filters.push(dateBound(opts.beforeDateInclusive ? '<=' : '<', opts.beforeDate));
+  if (opts?.afterDate) filters.push(dateBound(opts.afterDateInclusive ? '>=' : '>', utcSearchDateBound(opts.afterDate)));
+  if (opts?.beforeDate) filters.push(dateBound(opts.beforeDateInclusive ? '<=' : '<', utcSearchDateBound(opts.beforeDate)));
   // v0.34.1 (#861): source isolation in the INNER CTE narrows the HNSW
   // candidate set before re-rank. Array form wins over scalar.
   if (opts?.sourceIds && opts.sourceIds.length > 0) filters.push(`AND p.source_id = ANY(${bind(opts.sourceIds)}::text[])`);

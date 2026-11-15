@@ -357,6 +357,7 @@ const think: Operation = {
       anchor: p.anchor ? String(p.anchor) : undefined,
       rounds: remote ? 1 : typeof p.rounds === 'number' ? (p.rounds as number) : undefined,
       save: safeSave,
+      publicationContext: ctx,
       take: safeTake,
       model: thinkModel.model,
       // #1698: the local CLI hard-errors on an unusable explicit model. A remote
@@ -429,7 +430,7 @@ const think: Operation = {
     const feedbackMeta = feedbackMetaFields(await recordThinkAnswer(ctx, 'think', result));
     const evidence = result.taint_refs && [...result.taint_refs, ...(result.room_extra ?? [])];
     delete result.feedback_evidence; delete result.taint_refs; delete result.room_extra;
-    const { persist: _persist, persist_base: _persistBase, ...visible } = result;
+    const { persist: _persist, persist_base: _persistBase, codex_publication: _publication, ...visible } = result;
     // GBRA-498: a think answer going into a room is marked at the strictest class of everything it was built from.
     return keepRoomEvidence({
       ...visible,

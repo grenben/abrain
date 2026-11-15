@@ -28,6 +28,15 @@ Required (one of):
                                 after human review)
   --bootstrap-reviewed          Confirm bootstrap benchmark was hand-reviewed
 
+Shared canonical skills (private Codex mode):
+  --shared-skill                Optimize and publish an exact approved catalog revision.
+  --pack-id ID                  Catalog pack containing the skill.
+  --source-incarnation UUID     Exact catalog source incarnation.
+  --expected-revision UUID      Original revision; concurrent changes refuse publication.
+                                Requires --source and Codex allowance flags below.
+                                The Codex request UUID also identifies publication.
+                                Supports --background; PGLite runs inline.
+
 Training knobs (--epochs, --lr, --lr-schedule apply to --loop only;
 --batch-size is also the one-shot forward-pass size):
   --epochs N                    Default 4
@@ -56,6 +65,9 @@ Models:
                                 Same as skillopt.models_strict=true.
 
 Modes:
+  --optimizer-mode MODE         one-shot-rewrite|reflect. Default is one-shot
+                                rewrite ordinarily; private Codex supports
+                                reflect only. Explicit unsupported modes refuse.
   --loop                        Iterative reflect loop (edit ops, epochs).
                                 Deprecated: removed on or after 2026-12-03.
                                 Default is one gated one-shot rewrite.
@@ -69,6 +81,20 @@ Modes:
   --json                        Machine-readable stdout
 
 Safety:
+  Private runs and --all batches require explicit subscription admission:
+  --codex-max-attempts N        Native attempts, including failed calls (1–1000)
+  --codex-max-turns N           Accepted turns (at most the attempt limit)
+  --codex-deadline UTC          Absolute ISO UTC deadline (new grants: within 24h)
+  --codex-request-id UUID       Reuse unchanged inputs/limits to recover a run/job
+  --source ID                  Explicit source for private benchmark reads
+  --read-prefix PATH           Allowed slug or prefix/*; repeat for more prefixes
+  --read-tool NAME             Repeat: get_page, list_pages or search (keyword only)
+  --aux-max-usd N              Separate paid embedding/reranking allowance
+                                Default read tool: get_page. Discovery requires explicit tools.
+                                Cost and remaining subscription quota are unknown.
+                                --max-usd never authorizes subscription calls.
+                                Batches share one allowance (at most 20 skills); fleet grants are pending.
+
   --max-usd N|off               Hard cap. Default 5.00. Preflight refuses
                                 if estimate exceeds. A model with no price
                                 runs under the default with a warning; an
@@ -84,14 +110,16 @@ Safety:
 
 Batch + fleet + background:
   --all                         Optimize every skill with a benchmark
-                                (per-skill cap = --max-usd; brain-wide
-                                cap = --brain-wide-max-cost-usd, default $10)
+                                Private mode: shared allowance, at most 20 skills;
+                                --background queues one preflighted durable batch on PostgreSQL.
+                                API mode: --max-usd per skill; brain-wide USD cap below.
   --brain-wide-max-cost-usd N   Cumulative ceiling for --all (default 10.00)
   --target-models a,b,c         Fleet mode: optimize ONCE per model. Always
                                 runs no-mutate; per-model receipts under
                                 skills/<name>/skillopt/fleet/<slug>/
   --background                  Submit as a Minion job + print job_id; exits.
-                                Combine with --follow to attach.
+                                With --all, preflight and queue one retained batch
+                                on PostgreSQL. Combine with --follow to attach.
   --held-out <path>             Independent held-out test set (JSONL, same shape
                                 as the benchmark). The held-out gate refuses to
                                 promote a candidate whose held-out score is below

@@ -1,5 +1,11 @@
 import type { SearchOpts } from '../types.ts';
 
+// A bare date cast to timestamptz uses the PostgreSQL session timezone.
+// Search bounds are UTC dates regardless of that setting.
+export function utcSearchDateBound(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value;
+}
+
 export function resolveDateBoundary(raw: string | undefined, boundary: 'since' | 'until'): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   const s = String(raw).trim();

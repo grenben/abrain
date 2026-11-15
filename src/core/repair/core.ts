@@ -97,6 +97,8 @@ export interface RepairPlan {
    * user-set cap) and what is left under the kind's own daily cap (null when it has none).
    */
   llm?: { usd: number | null; cap_remaining_usd: number | null };
+  /** A native subscription pays for generation through its attempt/turn envelope, not USD repair budgets. */
+  llm_billing?: 'subscription';
   /** Discovery kinds: when the scan the plan read last finished (`fresh_at`) and whether it is still partial. */
   scan?: { fresh_at: string | null; partial: boolean };
   /**
@@ -241,7 +243,8 @@ export interface RepairResult {
   residuals: Record<string, number>;
   /**
    * `llm_usd` and `llm_cap_remaining_usd` are present only for `spends: 'llm'` kinds: the plan's estimate on a dry
-   * run, the actual spend on an apply, and what is left under the kind's daily cap and the run's allowance.
+   * run, the actual spend on an apply, and what is left under the kind's daily cap and the run's allowance. They are
+   * null for subscription-backed generation, whose attempt/turn limits are separate from USD budgets.
    */
   cost: { lifetime_ids: number; receipt_bytes: number; embedding_pages: number; embedding_usd: number | null; llm_usd?: number | null; llm_cap_remaining_usd?: number | null };
   capacity: Array<{ scope: string; resource: string; used: number; limit: number; stop_at: number }>;
@@ -419,6 +422,7 @@ async function runRepairScoped(ctx: OperationContext, handler: RepairHandler, sc
   const embedded = plan.embedding_items ? pending.filter(item => plan.embedding_items!.includes(item)) : handler.embeds === false ? [] : pending;
   const llm = spec?.spends === 'llm';
   const llmLeft = (spent: number): number | null => {
+    if (plan.llm_billing === 'subscription') return null;
     const caps = [plan.llm?.cap_remaining_usd, opts.maxLlmUsd].filter((cap): cap is number => typeof cap === 'number');
     return caps.length ? Math.max(0, Math.min(...caps) - spent) : null;
   };
@@ -427,7 +431,7 @@ async function runRepairScoped(ctx: OperationContext, handler: RepairHandler, sc
     sample: plan.items.slice(0, SAMPLE).map(item => `${item.source_id}:${item.slug}`), residuals: plan.residuals,
     cost: { lifetime_ids: admits, receipt_bytes: admits * RECEIPT_RESERVATION_FLOOR, embedding_pages: embedded.length,
       embedding_usd: embeddingUsd((plan.embedding_items ? embedded : pending).reduce((sum, item) => sum + item.chars, 0), opts.embeddingModel),
-      ...(llm ? { llm_usd: opts.apply || !plan.llm ? 0 : plan.llm.usd === null ? null
+      ...(llm ? { llm_usd: plan.llm_billing === 'subscription' ? null : opts.apply || !plan.llm ? 0 : plan.llm.usd === null ? null
         : pending.some(item => item.llm_usd !== undefined) ? pending.reduce((sum, item) => sum + (item.llm_usd ?? 0), 0) : plan.llm.usd,
       llm_cap_remaining_usd: llmLeft(0) } : {}) },
     capacity: counters.map(({ scope: key, resource, used, limit, stop_at }) => ({ scope: key, resource, used, limit, stop_at })),
@@ -556,7 +560,7 @@ async function runRepairScoped(ctx: OperationContext, handler: RepairHandler, sc
           + `The next run resumes; rerun \`${result.apply_command}\` to continue now.` });
       }
       const allowanceLeft = opts.maxLlmUsd !== undefined ? opts.maxLlmUsd - llmSpent : undefined;
-      if (llm && allowanceLeft !== undefined && (llmSpent >= opts.maxLlmUsd! || (item.llm_usd !== undefined && item.llm_usd > allowanceLeft + 1e-9))) {
+      if (llm && plan.llm_billing !== 'subscription' && allowanceLeft !== undefined && (llmSpent >= opts.maxLlmUsd! || (item.llm_usd !== undefined && item.llm_usd > allowanceLeft + 1e-9))) {
         return stopAfterSettle({ reason: 'budget_exhausted', message: `Stopped before ${item.source_id}:${item.slug}: this run's paid-model allowance `
           + `${llmSpent >= opts.maxLlmUsd! ? 'is used up' : `cannot cover its estimate ($${item.llm_usd!.toFixed(4)})`} `
           + `($${llmSpent.toFixed(4)} spent of $${opts.maxLlmUsd!.toFixed(4)}; ${remaining} item(s) still pending). Rerun \`${result.apply_command}\` to resume.` });
@@ -587,7 +591,7 @@ async function runRepairScoped(ctx: OperationContext, handler: RepairHandler, sc
     try {
       const applied = prefetched ? await ('error' in prefetched ? Promise.reject(prefetched.error) : prefetched.value)
         : await step(() => handler.apply({ ...ctx, sourceId: item.source_id, ...(unresolved.length ? { writeWaitMs: 0 } : {}) }, item, { embed: opts.embed === true, runId,
-          ...(llm && opts.maxLlmUsd !== undefined ? { llmAllowanceUsd: opts.maxLlmUsd - llmSpent } : {}),
+          ...(llm && plan.llm_billing !== 'subscription' && opts.maxLlmUsd !== undefined ? { llmAllowanceUsd: opts.maxLlmUsd - llmSpent } : {}),
           ...(opts.deadline !== undefined ? { deadline: opts.deadline } : {}), ...(opts.noLlm ? { noLlm: true } : {}), ...(opts.expect ? { expect: opts.expect } : {}) }));
       if (llm && typeof applied === 'object' && applied.llm_usd) {
         llmSpent += applied.llm_usd;

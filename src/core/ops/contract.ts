@@ -21,6 +21,7 @@ import type { WriteAuthority } from '../persistence/model.ts';
 import type { TrustTier } from '../trust/tier.ts';
 import type { StdioSurfaceState } from '../../mcp/surface.ts';
 import type { GuestChannels } from '../guests/admission.ts';
+import type { NativeDiscoveryScope } from '../page-read-policy.ts';
 
 /** Agent contract v1: the wire renderer for `fix`/`notices` in toJSON(), registered by agent-output.ts on load. */
 interface OperationErrorWireRenderer { fix(a: Action): unknown; notice(n: Notice): unknown }
@@ -614,6 +615,10 @@ export interface OperationContext {
    * v0.15 behavior; pure addition, no regression).
    */
   allowedSlugPrefixes?: string[];
+  /** Host-only, deterministic discovery; never hydrated from operation parameters. */
+  nativeDiscovery?: NativeDiscoveryScope;
+  /** This host registry requires native discovery and must not fall back to ordinary search/list behavior. */
+  nativeDiscoveryRequired?: boolean;
   /**
    * #5994: the stored authority of a failed write that `gbrain repair
    * failed-writes` replays. Set only by that trusted local repair lane; no

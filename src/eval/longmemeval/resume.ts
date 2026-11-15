@@ -37,9 +37,14 @@ import { normalizeModelId } from '../../core/model-id.ts';
  */
 export function readJsonlRows(path: string): Array<Record<string, unknown>> {
   if (!existsSync(path)) return [];
+  return parseJsonlRows(readFileSync(path, 'utf8'));
+}
+
+/** Parse an already captured file snapshot without reopening its mutable path. */
+export function parseJsonlRows(text: string): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   const slot = new Map<string, number>();
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
+  for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
       const row = JSON.parse(line);
@@ -137,10 +142,10 @@ export function checkResumeReaderConfig(
  * (the full list the live `expandFn` returned, original included). Rows
  * without a variants array (keyword-only runs, error rows) are ignored.
  */
-export function loadExpansionReplay(path: string): Map<string, string[]> {
-  if (!existsSync(path)) throw new Error(`--expansion-replay file not found: ${path}`);
+export function loadExpansionReplay(path: string, snapshot?: string): Map<string, string[]> {
+  if (snapshot === undefined && !existsSync(path)) throw new Error(`--expansion-replay file not found: ${path}`);
   const map = new Map<string, string[]>();
-  for (const row of readJsonlRows(path)) {
+  for (const row of snapshot === undefined ? readJsonlRows(path) : parseJsonlRows(snapshot)) {
     if (typeof row.question_id !== 'string') continue;
     const v = row.expansion_variants;
     if (!Array.isArray(v) || !v.every(x => typeof x === 'string')) continue;

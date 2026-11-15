@@ -19,12 +19,14 @@ import { BUILTIN_PATTERNS } from '../core/conversation-parser/builtins.ts';
 import { readConversationBodyForParsing } from '../core/conversation-parser/body.ts';
 import { parseConversation } from '../core/conversation-parser/parse.ts';
 import type { BrainEngine } from '../core/engine.ts';
+import { previewParserPolish } from './conversation-parser-polish.ts';
 
 function printHelp(): void {
   process.stdout.write(`Usage: gbrain conversation-parser <subcommand> [options]
 
 Subcommands:
   scan <slug>          Dry-run the parser on a page; report pattern hit.
+                       Add --polish for an explicit, presentation-only Codex preview.
   list-builtins        Print the built-in pattern registry.
   validate <file>      Validate a user-declared simple_pattern JSON spec.
                        (v1: simple_pattern compilation not yet implemented;
@@ -32,6 +34,7 @@ Subcommands:
 
 Examples:
   gbrain conversation-parser scan conversations/imessage/alice-example
+  gbrain conversation-parser scan conversations/imessage/alice-example --polish --codex-request-id <id> --codex-max-attempts 1 --codex-max-turns 1 --codex-deadline <RFC3339>
   gbrain conversation-parser list-builtins --json
   gbrain conversation-parser validate ./my-pattern.json
 
@@ -174,6 +177,9 @@ async function runScan(
   const body = await readConversationBodyForParsing(engine, page);
 
   const result = parseConversation(body, { page, diagnostic: true });
+  const polished = args.includes('--polish')
+    ? await previewParserPolish(engine, args, page, result)
+    : undefined;
 
   if (json) {
     process.stdout.write(
@@ -195,6 +201,9 @@ async function runScan(
             timestamp: m.timestamp,
             text_preview: m.text.slice(0, 80),
           })),
+          // Presentation is deliberately separate from the canonical parse;
+          // downstream extraction continues to use result.messages.
+          ...(polished ? { presentation: polished.presentation } : {}),
         },
         null,
         2,
@@ -228,6 +237,12 @@ async function runScan(
       process.stdout.write(
         `    - ${m.speaker} @ ${m.timestamp}: ${m.text.slice(0, 80)}\n`,
       );
+    }
+  }
+  if (polished?.presentation.length) {
+    process.stdout.write('  presentation-only polish preview:\n');
+    for (const row of polished.presentation) {
+      process.stdout.write(`    - message ${row.message_index + 1}: ${row.prose}\n`);
     }
   }
 }

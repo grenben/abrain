@@ -49,6 +49,7 @@ export const MANAGED_PHASE_TABLE: Readonly<Record<CyclePhase, ManagedPhaseEntry>
   propose_takes: { tier: 'paid', class: 'no_coordinated_write', reason: 'Writes the take_proposals review queue; managed brains skip the legacy receipt page.' },
   grade_takes: { tier: 'paid', class: 'no_coordinated_write', reason: 'The cycle runs it with auto-resolve off, so it only caches verdicts in take_grade_cache; opt-in auto-applied resolutions go through the coordinated takes_resolve mutation.' },
   calibration_profile: { tier: 'paid', class: 'no_coordinated_write', reason: 'Writes the calibration_profiles side table only.' },
+  auto_think: { tier: 'paid', class: 'writes', reason: 'Opt-in automatic think proposals publish synthesis pages through the coordinated write path.' },
   edge_contradictions: { tier: 'paid', class: 'writes', reason: 'Applied closures append a timeline line through the coordinated add_timeline_entry mutation; proposals live in the link_edge_proposals side table.' },
   claim_conflicts: { tier: 'free', class: 'no_coordinated_write', reason: 'writes the decide_proposals review queue only' },
   drift: { tier: 'paid', class: 'writes', reason: 'The drift report page publishes through the maintenance coordinator.' },

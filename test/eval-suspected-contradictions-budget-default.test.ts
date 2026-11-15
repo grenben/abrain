@@ -34,4 +34,19 @@ describe('parseFlags budgetUsdExplicit', () => {
     expect(f.budgetUsd).toBe(2);
     expect(f.budgetUsdExplicit).toBe(true);
   });
+
+  test('parses explicit Codex allowance flags', () => {
+    const f = parseFlags(['run', '--codex-max-attempts', '3', '--codex-max-turns', '2',
+      '--codex-deadline', '2026-11-15T12:00:00Z', '--codex-request-id', '00000000-0000-4000-8000-000000000001',
+      '--max-usd', '1.25']);
+    expect(f.codex).toEqual({
+      maxAttempts: '3', maxTurns: '2', deadline: '2026-11-15T12:00:00Z',
+      requestId: '00000000-0000-4000-8000-000000000001', maxUsd: '1.25',
+    });
+  });
+
+  test('rejects duplicate Codex allowance flags', () => {
+    expect(() => parseFlags(['--codex-max-attempts', '2', '--codex-max-attempts', '3']))
+      .toThrow('--codex-max-attempts must occur once');
+  });
 });

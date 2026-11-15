@@ -9,6 +9,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   RETRIEVAL_WATCH_PATTERNS,
+  RACY_DIFF_MS,
   matchesWatchPattern,
   watchedFilesDrifted,
   filesDriftedSince,
@@ -108,6 +109,14 @@ describe('filesDriftedSince + watchedFilesDrifted probe failure is distinguishab
   test('a real repo with a staged watched file reports exactly that file', () => {
     const repo = scratchRepoWithStagedSearchFile();
     expect(watchedFilesDrifted(repo)).toEqual(['src/core/search/hybrid.ts']);
+  });
+
+  test('a scoped diff excludes unrelated files and treats watch paths literally', () => {
+    const repo = scratchRepoWithStagedSearchFile();
+    writeFileSync(join(repo, 'README.md'), 'unrelated\n');
+    execSync('git add README.md', { cwd: repo, stdio: 'pipe' });
+    expect(filesDriftedSince(repo, undefined, RACY_DIFF_MS, 5000, ['src/core/search/']))
+      .toEqual(['src/core/search/hybrid.ts']);
   });
 
   test('watchedFilesDrifted filters through the same matcher', () => {

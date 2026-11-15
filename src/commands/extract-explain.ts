@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { BrainEngine } from '../core/engine.ts';
+import { ROLLUP_COST_SELECT, rollupCost } from '../core/extract/rollup-cost.ts';
 import { bigintToStringReplacer } from '../core/utils.ts';
 import { loadActivePackBestEffort } from '../core/schema-pack/best-effort.ts';
 import { getExtractableSpec, extractableSpecsFromPack } from '../core/schema-pack/extractable.ts';
@@ -144,7 +145,8 @@ export async function runExtractExplain(
   // cost_usd is REAL (not INT), so SUM(cost_usd) is already a plain number
   // and doesn't need the cast.
   type RollupRow = {
-    cost_7d_usd: number | null;
+    cost_7d_usd: number | string | null;
+    subscription_run_count?: number | string | null;
     eval_pass_count: string | null;
     eval_fail_count: string | null;
     halt_count: string | null;
@@ -155,7 +157,7 @@ export async function runExtractExplain(
   try {
     const rows = await engine.executeRaw<RollupRow>(
       `SELECT
-         SUM(cost_usd) AS cost_7d_usd,
+         ${ROLLUP_COST_SELECT},
          SUM(eval_pass_count)::text AS eval_pass_count,
          SUM(eval_fail_count)::text AS eval_fail_count,
          SUM(halt_count)::text AS halt_count,
@@ -179,7 +181,7 @@ export async function runExtractExplain(
     // some other way; it's a no-op here since rollup is already
     // string/number/null-only.
     const rollupJson = rollup ? {
-      cost_7d_usd: rollup.cost_7d_usd,
+      ...rollupCost(rollup),
       eval_pass_count: Number(rollup.eval_pass_count) || 0,
       eval_fail_count: Number(rollup.eval_fail_count) || 0,
       halt_count: Number(rollup.halt_count) || 0,
@@ -222,7 +224,8 @@ export async function runExtractExplain(
     const total = halts + completed;
     const haltRate = total > 0 ? ((halts / total) * 100).toFixed(1) : '0.0';
     console.log('Last 7 days (rollup):');
-    console.log(`  cost_usd:         $${(Number(rollup.cost_7d_usd) || 0).toFixed(4)}`);
+    const cost = rollupCost(rollup).cost_7d_usd;
+    console.log(`  cost_usd:         ${cost === null ? 'unknown' : '$' + cost.toFixed(4)}`);
     console.log(`  rounds_completed: ${completed}`);
     console.log(`  halts:            ${halts} (${haltRate}%)`);
     console.log(`  eval_pass:        ${Number(rollup.eval_pass_count) || 0}`);

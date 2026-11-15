@@ -15,9 +15,12 @@ import type { ThinkLLMClient } from '../../core/think/index.ts';
 import { chat as gatewayChat } from '../../core/ai/gateway.ts';
 import { normalizeModelId } from '../../core/model-id.ts';
 import { readerUsageFromGateway } from './reader.ts';
+const gatewayClients = new WeakSet<ThinkLLMClient>();
+/** Native role dispatch accepts only the host factory, never an injected inference client. */
+export function isGatewayThinkClient(client: ThinkLLMClient): boolean { return gatewayClients.has(client); }
 
 export function makeGatewayThinkClient(): ThinkLLMClient {
-  return {
+  const client: ThinkLLMClient = {
     create: async (params) => {
       const system = typeof params.system === 'string'
         ? params.system
@@ -54,4 +57,6 @@ export function makeGatewayThinkClient(): ThinkLLMClient {
       } as unknown as Anthropic.Message;
     },
   };
+  gatewayClients.add(client);
+  return Object.freeze(client);
 }

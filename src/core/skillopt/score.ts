@@ -18,6 +18,8 @@
  * nDCG@k (more discriminating than P@k for the optimization signal).
  */
 
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { scoreCodexTrajectory } from './codex-score.ts';
 import { chat as gatewayChat } from '../ai/gateway.ts';
 import { ndcgAtK } from '../search/eval.ts';
 import { isSkilloptMustAbort } from './must-abort.ts';
@@ -30,6 +32,7 @@ export async function scoreTrajectory(
   judge: Judge,
   opts: {
     judgeModel?: string;
+    abortSignal?: AbortSignal;
     /** Test seam — substitute for gateway.chat. */
     chatFn?: typeof gatewayChat;
     /** Test seam — substitute clock for cache invalidation. */
@@ -40,6 +43,7 @@ export async function scoreTrajectory(
     case 'rule':
       return { trajectory, score: scoreRule(trajectory, judge.checks) };
     case 'llm':
+      if (readPrivateCodexConfig()) return scoreCodexTrajectory(trajectory, judge, opts);
       return scoreLlm(trajectory, judge.rubric, judge.model ?? opts.judgeModel, opts);
     case 'qrels':
       return { trajectory, score: scoreQrels(trajectory, judge.expected_slugs, judge.k) };

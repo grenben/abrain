@@ -6,6 +6,7 @@
  * key, config is exactly what it was. Every explicit setting wins.
  */
 import { describe, expect, test } from 'bun:test';
+import { decideTypesafeApiKey } from '../../src/commands/decide.ts';
 import { DEFAULT_TYPESAFE_PROVIDER, enableDecideEvalOverride, readDecideConfig } from '../../src/core/ai/decide/config.ts';
 import { checkEgress } from '../../src/core/ai/decide/egress.ts';
 import { packShape } from '../../src/core/ai/decide/pack.ts';
@@ -26,6 +27,19 @@ function inputs(cfg: ReturnType<typeof readDecideConfig>, slot: 'triage' | 'conf
 }
 
 describe('key-aware default modes', () => {
+  test('strict private Codex mode ignores a leftover TypeSafe key but preserves explicit slot opt-in', () => {
+    const env = { TYPESAFE_API_KEY: 'sk-test-leftover' };
+    expect(decideTypesafeApiKey(env, true)).toBeNull();
+    expect(onSlots(readDecideConfig({}, { typesafeKey: decideTypesafeApiKey(env, true) !== null }))).toEqual([]);
+
+    const explicit = readDecideConfig({
+      'decide.slots.triage.mode': 'on',
+      'decide.slots.triage.provider': DEFAULT_TYPESAFE_PROVIDER,
+    }, { typesafeKey: decideTypesafeApiKey(env, true) !== null });
+    expect(explicit.slots.triage).toMatchObject({ mode: 'on', provider: DEFAULT_TYPESAFE_PROVIDER });
+    expect(explicit.slots.triage.keyDefault).toBeUndefined();
+  });
+
   test('the default-on set is derived from the reference rows and equals the enable --recommended set', () => {
     expect(recommendedSlots(DEFAULT_TYPESAFE_PROVIDER).sort()).toEqual([...DEFAULT_ON].sort());
     expect(onSlots(keyed()).sort()).toEqual(recommendedSlots(DEFAULT_TYPESAFE_PROVIDER).sort());

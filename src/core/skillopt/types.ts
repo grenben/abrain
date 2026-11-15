@@ -93,6 +93,8 @@ export type EditResult =
 
 /** What a rollout produced. Captured in-process; never persisted to DB (D2). */
 export interface Trajectory {
+  /** Retained native job identity; usage is a measured subtotal if usage_complete is false. */
+  codex?: { job_id: number; subscription_run_id: string; cost_usd: null; usage_complete: boolean };
   task_id: string;
   task: string;
   /** Final assistant text (typically the user-visible output). */
@@ -115,6 +117,10 @@ export interface Trajectory {
 }
 
 export interface ScoredRollout {
+  judge_evidence_quote?: string | null;
+  judge_cache_hit?: boolean;
+  judge_usage?: { input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_creation_tokens: number };
+  judge_billing?: { kind: 'subscription'; costUsd: null; remainingQuota: null };
   trajectory: Trajectory;
   /** 0..1 score from the judge. */
   score: number;
@@ -127,6 +133,10 @@ export interface ScoredRollout {
 // ─── Run state + receipts ─────────────────────────────────────────────────
 
 export interface SkillOptOpts {
+  /** Trusted queued workflow snapshot; checked before grant claim or inference. */
+  codexExpectedInputHash?: string;
+  /** Explicit host scope for native evaluations; never inferred from candidate skill content. */
+  codex?: { allowedTools: string[]; allowedSlugPrefixes: string[]; readRegistry?: 'codex-discovery-v1' };
   operationContext?: OperationContext;
   sharedSkill?: {
     source_id: string;
@@ -266,7 +276,9 @@ export interface RunReceipt {
   best_sel_score?: number;
   baseline_test_score?: number;
   test_score?: number;
-  final_cost_usd?: number;
+  final_cost_usd?: number | null;
+  subscription?: { cost_usd: null; remaining_quota: null; attempts: number; accepted_turns: number; max_attempts: number; max_turns: number;
+    measured_input_tokens: number; measured_cached_input_tokens: number; measured_output_tokens: number; unmeasured_attempts: number };
   total_steps?: number;
   epochs_completed?: number;
   // #3516: present when outcome is 'aborted' | 'errored' — machine-readable
