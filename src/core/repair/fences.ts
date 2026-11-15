@@ -44,7 +44,10 @@ import { trustedCliRequired } from '../ops/op-fix.ts';
 import { shellQuote, type Action } from '../agent-output.ts';
 import { parseMarkdown } from '../markdown.ts';
 import { FENCE_REPAIR_MEASURED_MODELS } from '../fence-repair/measured.ts';
-import { FENCE_REPAIR_MODEL_KEY, resolveFenceRepairModel } from '../fence-repair/model.ts';
+import { FENCE_REPAIR_MODEL_KEY, resolveFenceRepairModelWithSource } from '../fence-repair/model.ts';
+import { privatePolicyFingerprint, readPrivateCodexConfig, PrivateRoutingError } from '../ai/private-policy.ts';
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
+import { assertSubscriptionTarget } from '../ai/subscription-target.ts';
 import { loadPricingOverrides } from '../budget/budget-tracker.ts';
 import { dailyLedger, FENCE_REPAIR_LEDGER, nextUtcMidnight } from '../budget/daily-ledger.ts';
 import { pricingSetCommand } from '../budget/no-pricing.ts';
@@ -84,7 +87,7 @@ export interface FenceRepairVerification {
 }
 
 type RepairTier = Exclude<FenceTier, 'manual'>;
-interface Selection { source_ids: string[]; only: string[]; skip: string[]; slugs: string[]; no_llm: boolean }
+interface Selection { source_ids: string[]; only: string[]; skip: string[]; slugs: string[]; no_llm: boolean; private_policy_fingerprint: string | null }
 
 /** One previewed repair: everything the hash binds (location, hashes, tier), never a cell value. */
 interface ApprovedFence {
@@ -108,6 +111,7 @@ export interface FencesPreviewDetails {
   counts: Record<RepairTier | 'held', number>;
   model: string | null;
   llm_enabled: boolean;
+  model_billing: 'usd' | 'private_subscription';
   samples: Partial<Record<RepairTier, FileDiff>>;
   diffs: FileDiff[];
   llm_items: Array<{ item: string; rows: number[]; reasons: string[]; estimate_usd: number }>;
@@ -155,17 +159,18 @@ function afterBytes(target: FenceTarget, after: FencePage): { sha: string; text:
 
 interface Settings {
   llmEnabled: boolean; model: string | null; overrides: Awaited<ReturnType<typeof loadPricingOverrides>>; capSource: CapSource;
-  perPageUsd: number; perDayUsd: number; dayRemaining: number | null; runMaxUsd: number | null;
+  perPageUsd: number; perDayUsd: number; dayRemaining: number | null; runMaxUsd: number | null; privateSubscription: boolean;
 }
 
 async function settings(engine: BrainEngine, opts: Pick<RepairPlanOptions, 'noLlm' | 'maxLlmUsd'>): Promise<Settings> {
   const caps = await readFenceRepairCaps(engine);
-  const model = await resolveFenceRepairModel(engine);
+  const resolved = await resolveFenceRepairModelWithSource(engine);
+  const model = resolved.model;
   const day = await dailyLedger(engine, FENCE_REPAIR_LEDGER).readDay().catch(() => null);
   return { llmEnabled: !opts.noLlm && await fenceRepairLlmEnabled(engine), model, overrides: await loadPricingOverrides(engine),
     capSource: caps.perPageSource === 'user' || caps.perDaySource === 'user' || opts.maxLlmUsd !== undefined ? 'user' : 'default',
     perPageUsd: caps.perPageUsd, perDayUsd: caps.perDayUsd, dayRemaining: day ? Math.max(0, caps.perDayUsd - day.committedUsd - day.reservedUsd) : null,
-    runMaxUsd: opts.maxLlmUsd ?? null };
+    runMaxUsd: resolved.source === 'private' ? null : opts.maxLlmUsd ?? null, privateSubscription: resolved.source === 'private' };
 }
 
 /** The tier a reason's hold state records. */
@@ -235,17 +240,24 @@ export const fencesRepair: RepairHandler = {
   kind: 'fences',
   outcomeItemsLimit: 1000,
   async plan(engine, scope, _after, opts): Promise<RepairPlan> {
+    const policy = readPrivateCodexConfig();
     const selection: Selection = { source_ids: scope.source_ids, only: [...(opts?.only ?? [])].sort(), skip: [...(opts?.skip ?? [])].sort(),
-      slugs: [...(opts?.slugs ?? [])].sort(), no_llm: opts?.noLlm === true };
+      slugs: [...(opts?.slugs ?? [])].sort(), no_llm: opts?.noLlm === true, private_policy_fingerprint: policy ? privatePolicyFingerprint(policy) : null };
     const preview = previewArgv(scope, selection);
     if (opts?.apply && opts.expect) {
       // #6377: a preview that found nothing saved no set; its hash still binds "nothing to apply" (the content lane passes one hash per kind).
-      if (opts.expect === await emptyPlanHash(engine, scope, selection)) return { items: [], preview_hash: opts.expect, residuals: {}, llm: { usd: 0, cap_remaining_usd: null } };
-      const approved = await loadApprovedSet<ApprovedSetItem>(engine, { command: 'fences', hash: opts.expect, previewCommand: shellQuote(preview) });
+       if (opts.expect === await emptyPlanHash(engine, scope, selection)) return { items: [], preview_hash: opts.expect, residuals: {}, llm: { usd: 0, cap_remaining_usd: null } };
+       const approved = await loadApprovedSet<ApprovedSetItem>(engine, { command: 'fences', hash: opts.expect, previewCommand: shellQuote(preview) });
+      if (approved.items.some(entry => entry.selection.private_policy_fingerprint !== selection.private_policy_fingerprint)) {
+        throw new PrivateRoutingError('fence-repair:policy_changed');
+      }
       if (approved.items.some(entry => digestOf(entry.selection) !== digestOf(selection))) throw previewChangedError(opts.expect, shellQuote(preview));
       const items = approved.items.map(({ selection: _chosen, ...entry }, index) => item(entry, index, opts.expect!, index === approved.items.length - 1, false));
       const s = await settings(engine, opts);
-      return { items, preview_hash: opts.expect, residuals: {}, llm: { usd: items.reduce((sum, i) => sum + (i.llm_usd ?? 0), 0), cap_remaining_usd: s.llmEnabled ? s.dayRemaining : 0 } };
+      return { items, preview_hash: opts.expect, residuals: {},
+        llm: { usd: s.privateSubscription ? null : items.reduce((sum, i) => sum + (i.llm_usd ?? 0), 0),
+          cap_remaining_usd: s.privateSubscription ? null : s.llmEnabled ? s.dayRemaining : 0 },
+        ...(s.privateSubscription ? { llm_billing: 'subscription' as const } : {}) };
     }
     const now = Date.now();
     const runs = await runFenceCensus(engine, { sourceIds: scope.source_ids, deadline: Math.min(now + SCAN_MS(), opts?.deadline ?? Infinity) });
@@ -307,6 +319,11 @@ export const fencesRepair: RepairHandler = {
       const reasons = [...new Set(analysis.residual.map(i => i.reason))];
       const at = fixLocation(analysis.fixes, analysis.residual);
       const llmHeld = (reason: FenceReason, resolution: string, next: string | null = null) => keep({ item: name, reason, tier: 'llm', resolution, rows: at.rows }, next);
+      if (s.privateSubscription && target.mode !== 'managed') {
+        hold(cand, { item: name, reason: 'private_model_requires_managed_source', tier: 'manual',
+          resolution: 'Private Codex fence repair publishes only through a managed source owner; no model call or write was attempted.' });
+        continue;
+      }
       if (!s.llmEnabled) {
         await llmHeld('llm_disabled', `Model repair is off (${selection.no_llm ? '--no-llm' : 'fences.repair.llm false'}), so row(s) ${at.rows.join(', ') || '?'} stay held (${reasons.join(', ')}). `
           + 'Fix them by hand, or ask the user before turning model repair on: gbrain config set fences.repair.llm true.');
@@ -321,7 +338,8 @@ export const fencesRepair: RepairHandler = {
           continue;
         }
       }
-      const estimate = tier3Estimate(analysis.requests, { model, overrides: s.overrides, capSource: s.capSource }, analysis.tails);
+      const estimate = s.privateSubscription ? { ok: true as const, usd: 0, estimated: false } :
+        tier3Estimate(analysis.requests, { model, overrides: s.overrides, capSource: s.capSource }, analysis.tails);
       if (!estimate.ok) {
         await llmHeld('no_pricing', `A spend cap is set but gbrain has no price for ${model}. ${estimate.guidance.lookup} Register it with: ${estimate.guidance.register_command}`);
         continue;
@@ -330,7 +348,7 @@ export const fencesRepair: RepairHandler = {
         unpricedWarned = true;
         warnings.push(`gbrain has no price for the fence repair model ${model}; model repair runs under the default caps and is metered at an estimated ceiling (the highest chat rate gbrain knows). Make it exact with: ${pricingSetCommand(model, 'chat')}`);
       }
-      if (s.perPageUsd === 0 || s.perDayUsd === 0) {
+      if (!s.privateSubscription && (s.perPageUsd === 0 || s.perDayUsd === 0)) {
         await llmHeld('budget_exhausted', `Model repair spend is set to 0 (fences.repair.max_usd_per_${s.perPageUsd === 0 ? 'page' : 'day'}), so these rows stay held. Raising it is the user's call: gbrain config set fences.repair.max_usd_per_${s.perPageUsd === 0 ? 'page' : 'day'} <usd>.`);
         continue;
       }
@@ -357,28 +375,36 @@ export const fencesRepair: RepairHandler = {
     const freshAt = runs.every(run => run.fresh_at) ? runs.map(run => run.fresh_at!).sort()[0] ?? null : null;
     const listing: RepairListing[] = [
       ...approved.map(entry => ({ item: itemName(entry), class: entry.tier, detail: `${entry.classes.join(', ')}${entry.rows.length ? `; rows ${entry.rows.join(', ')}` : ''}`
-        + `${entry.tier === 'llm' ? `; rewritten by ${s.model} at apply time, gated by (a)-(g); est. $${entry.estimate_usd.toFixed(4)}` : ''}` })),
+        + `${entry.tier === 'llm' ? `; rewritten by ${s.model} at apply time, gated by (a)-(g); ${s.privateSubscription ? 'private Codex subscription (attempt limits apply)' : `est. $${entry.estimate_usd.toFixed(4)}`}` : ''}` })),
       ...held.map(entry => ({ item: entry.item, class: entry.reason, detail: entry.resolution })),
     ];
     const llmUsd = approved.reduce((sum, entry) => sum + entry.estimate_usd, 0);
     const apply = [...preview, ...(s.runMaxUsd !== null ? ['--max-usd', String(s.runMaxUsd)] : []), '--apply', '--expect', hash];
     const next_actions: Action[] = approved.length ? [{ argv: apply, consent: [], actor: 'agent', requires_exclusive: false, plan_hash: hash, preview_argv: preview,
-      why: `Applies exactly the ${approved.length} previewed fence repair(s)${llmItems.length ? `, ${llmItems.length} of them by the model (estimated $${llmUsd.toFixed(4)})` : ''}; a file or page that changed since this preview is skipped.`,
+      why: `Applies exactly the ${approved.length} previewed fence repair(s)${llmItems.length ? `, ${llmItems.length} of them by the model (${s.privateSubscription ? 'private Codex subscription; attempt limits apply' : `estimated $${llmUsd.toFixed(4)}`})` : ''}; a file or page that changed since this preview is skipped.`,
       verify: { argv: ['gbrain', 'doctor', '--only', 'fence_integrity', '--json'] } }] : [];
     const counts = { deterministic: 0, resolver: 0, llm: 0, held: held.length };
     for (const entry of approved) counts[entry.tier]++;
-    const details: FencesPreviewDetails = { counts, model: s.llmEnabled ? s.model : null, llm_enabled: s.llmEnabled,
+    const details: FencesPreviewDetails = { counts, model: s.llmEnabled ? s.model : null, llm_enabled: s.llmEnabled, model_billing: s.privateSubscription ? 'private_subscription' : 'usd',
       samples: Object.fromEntries((['deterministic', 'resolver'] as const).flatMap(tier => { const d = diffs.find(x => x.tier === tier); return d ? [[tier, d]] : []; })),
       diffs, llm_items: llmItems, held, caps: { max_usd_per_page: s.perPageUsd, max_usd_per_day: s.perDayUsd, day_remaining_usd: s.dayRemaining, run_max_usd: s.runMaxUsd }, next_actions };
     return { items: approved.map((entry, index) => item(entry, index, null, index === approved.length - 1, partial)), preview_hash: hash, residuals, listing,
       ...(warnings.length ? { warnings } : {}), details: details as unknown as Record<string, unknown>,
-      llm: { usd: llmUsd, cap_remaining_usd: s.llmEnabled ? s.dayRemaining : 0 }, scan: { fresh_at: freshAt, partial } };
+      llm: { usd: s.privateSubscription ? null : llmUsd, cap_remaining_usd: s.privateSubscription ? null : s.llmEnabled ? s.dayRemaining : 0 },
+      ...(s.privateSubscription ? { llm_billing: 'subscription' as const } : {}), scan: { fresh_at: freshAt, partial } };
   },
   async apply(ctx, raw, opts): Promise<RepairItemOutcome> {
     if (ctx.remote !== false) throw trustedCliRequired('gbrain repair fences writes files and may call a paid model, so it runs only from the trusted local CLI or the maintenance job on the brain host.');
     const { entry, hash, last } = raw as FenceItem;
     try {
-      return await retireAfterLastItem(ctx.engine, 'fences', hash, last, () => applyFence(ctx, entry, { embed: opts?.embed === true, expect: hash, allowanceUsd: opts?.llmAllowanceUsd, deadline: opts?.deadline, noLlm: opts?.noLlm === true }));
+      return await withPrivateRoleScope(['fence-repair'], async () => {
+        if (entry.tier === 'llm' && readPrivateCodexConfig()) {
+          await assertSubscriptionTarget(ctx.engine);
+          if (entry.mode !== 'managed') throw new PrivateRoutingError('fence-repair:managed_source_required');
+        }
+        return retireAfterLastItem(ctx.engine, 'fences', hash, last,
+          () => applyFence(ctx, entry, { embed: opts?.embed === true, expect: hash, allowanceUsd: opts?.llmAllowanceUsd, deadline: opts?.deadline, noLlm: opts?.noLlm === true }));
+      });
     } finally {
       if (!hash) await saveRotation(ctx.engine, ROTATION_OP, await rotationBrain(ctx.engine), rotationKey(entry)).catch(() => undefined);
     }
@@ -387,13 +413,15 @@ export const fencesRepair: RepairHandler = {
     const d = details as unknown as FencesPreviewDetails;
     const lines = [`  tiers: deterministic=${d.counts.deterministic}, resolver=${d.counts.resolver}, llm=${d.counts.llm}, held=${d.counts.held}`
       + `${d.llm_enabled ? `; model ${d.model}` : '; model repair off'}`];
-    const capLine = `  model caps: $${d.caps.max_usd_per_page.toFixed(2)}/page, $${d.caps.max_usd_per_day.toFixed(2)}/day${d.caps.day_remaining_usd !== null ? ` ($${d.caps.day_remaining_usd.toFixed(4)} left today)` : ''}`
+    const capLine = d.model_billing === 'private_subscription'
+      ? '  model billing: private Codex subscription (subscription attempt/turn limits apply; USD caps are for auxiliary APIs only)'
+      : `  model caps: $${d.caps.max_usd_per_page.toFixed(2)}/page, $${d.caps.max_usd_per_day.toFixed(2)}/day${d.caps.day_remaining_usd !== null ? ` ($${d.caps.day_remaining_usd.toFixed(4)} left today)` : ''}`
       + `${d.caps.run_max_usd !== null ? `; this run at most $${d.caps.run_max_usd.toFixed(4)}` : ''}`;
     if (d.counts.llm || d.held.some(h => h.tier === 'llm')) lines.push(capLine);
     const shown = opts.diff ? d.diffs : Object.values(d.samples);
     for (const diff of shown) lines.push(`  ${diff.tier}: ${diff.item} (${diff.classes.join(', ')})`, ...diff.diff.split('\n').map(line => `    ${line}`));
     if (!opts.diff && d.diffs.length > shown.length) lines.push(`  (one sample diff per tier; --diff or --json shows all ${d.diffs.length})`);
-    for (const llm of d.llm_items) lines.push(`  llm: ${llm.item}${llm.rows.length ? ` rows ${llm.rows.join(', ')}` : ''} (${llm.reasons.join(', ')}): rewritten by ${d.model} at apply time, gated by (a)-(g); est. $${llm.estimate_usd.toFixed(4)}`);
+    for (const llm of d.llm_items) lines.push(`  llm: ${llm.item}${llm.rows.length ? ` rows ${llm.rows.join(', ')}` : ''} (${llm.reasons.join(', ')}): rewritten by ${d.model} at apply time, gated by (a)-(g); ${d.model_billing === 'private_subscription' ? 'private Codex subscription' : `est. $${llm.estimate_usd.toFixed(4)}`}`);
     for (const h of d.held) lines.push(`  held ${h.item} [${h.reason}${h.gate ? `, gate ${h.gate}` : ''}]: ${h.resolution}`);
     for (const action of d.next_actions) lines.push(`  next: ${shellQuote(action.argv!)}`);
     return lines;
@@ -404,7 +432,7 @@ export const fencesRepair: RepairHandler = {
 };
 
 function digestOf(selection: Selection): string {
-  return sha256(JSON.stringify([selection.source_ids, selection.only, selection.skip, selection.slugs, selection.no_llm]));
+  return sha256(JSON.stringify([selection.source_ids, selection.only, selection.skip, selection.slugs, selection.no_llm, selection.private_policy_fingerprint]));
 }
 
 interface ApplyOptions { embed: boolean; expect: string | null; allowanceUsd?: number; deadline?: number; noLlm: boolean }
@@ -468,8 +496,9 @@ async function analysisOpts(engine: BrainEngine, target: FenceTarget, src: Fence
 type HeldFn = (reason: string, message: string, extra?: { gate?: GateLetter; rows?: number[]; next?: string | null; tier?: FenceTier }) => Promise<RepairItemOutcome>;
 
 async function write(ctx: OperationContext, src: FenceSource, target: FenceTarget, after: FencePage,
-  r: { tier: RepairTier; classes: string[]; rows: number[]; columns: string[]; model: string | null; cost: number | null; merged?: MergedFenceReceipt[] | undefined }, opts: ApplyOptions, held: HeldFn): Promise<RepairItemOutcome> {
+  r: { tier: RepairTier; classes: string[]; rows: number[]; columns: string[]; model: string | null; cost: number | null; merged?: MergedFenceReceipt[] | undefined; privatePolicyFingerprint?: string }, opts: ApplyOptions, held: HeldFn): Promise<RepairItemOutcome> {
   const outcome = await writeFenceRepair(ctx, src, target, after, { actor: FENCE_REPAIR_ACTOR, tier: r.tier, classes: r.classes, rows: r.rows, columns: r.columns, model: r.model, cost_usd: r.cost,
+    ...(r.privatePolicyFingerprint ? { private_policy_fingerprint: r.privatePolicyFingerprint } : {}),
     ...(r.merged ? { merged: r.merged } : {}) }, { embed: opts.embed });
   if (!outcome.ok) {
     if (outcome.reason === 'changed_since_read') return { applied: false, outcome: 'skipped', reason: 'changed_since_read', detail: { path: target.path, slug: target.slug, mode: target.mode, message: outcome.message } };
@@ -490,7 +519,7 @@ async function tier3(ctx: OperationContext, src: FenceSource, target: FenceTarge
   if (!s.llmEnabled) return held('llm_disabled', `Model repair is off; row(s) ${rows.join(', ')} stay held.`, { rows, tier: 'llm' });
   const model = s.model;
   if (!model) return held('no_measured_model', noMeasuredModel(rows), { rows, tier: 'llm' });
-  if (s.perPageUsd === 0 || s.perDayUsd === 0) return held('budget_exhausted', 'Model repair spend is set to 0.', { rows, tier: 'llm' });
+  if (!s.privateSubscription && (s.perPageUsd === 0 || s.perDayUsd === 0)) return held('budget_exhausted', 'Model repair spend is set to 0.', { rows, tier: 'llm' });
   const now = () => new Date();
   const timeoutMs = Math.max(5_000, Math.min(CALL_TIMEOUT_MS(), opts.deadline !== undefined ? opts.deadline - Date.now() : Infinity));
   const result = await runTier3(target, analysis, src.incarnation, { ledger: dailyLedger(engine, FENCE_REPAIR_LEDGER), store: attemptStore(engine), model, overrides: s.overrides,
@@ -514,6 +543,7 @@ async function tier3(ctx: OperationContext, src: FenceSource, target: FenceTarge
       verify: { argv: ['gbrain', 'doctor', '--only', 'fence_integrity', '--json'] } } } };
   }
   const written = await write(ctx, src, target, result.after, { tier: 'llm', classes: classesOf(analysis.fixes, result.cleared), ...fixLocation(analysis.fixes, analysis.residual), model, cost: result.spentUsd,
+    ...(result.privatePolicyFingerprint ? { privatePolicyFingerprint: result.privatePolicyFingerprint } : {}),
     merged: mergedReceipt(target.page, analysis.fixes) }, opts, held);
   const store = attemptStore(engine);
   if (written.applied) await store.publish(result.claim);
@@ -525,7 +555,9 @@ async function tier3(ctx: OperationContext, src: FenceSource, target: FenceTarge
 /** Verification and the summary counts: what this run repaired by tier, what is left by reason, and the oldest hold. */
 /** Candidates of the selection this run did not touch, by the reason they are held (the last repair's, else the census's). */
 async function heldInScope(engine: BrainEngine, scope: RepairScope, opts: RepairPlanOptions, result: RepairResult): Promise<Record<string, number>> {
-  const selection: Selection = { source_ids: scope.source_ids, only: opts.only ?? [], skip: opts.skip ?? [], slugs: opts.slugs ?? [], no_llm: opts.noLlm === true };
+  const policy = readPrivateCodexConfig();
+  const selection: Selection = { source_ids: scope.source_ids, only: opts.only ?? [], skip: opts.skip ?? [], slugs: opts.slugs ?? [],
+    no_llm: opts.noLlm === true, private_policy_fingerprint: policy ? privatePolicyFingerprint(policy) : null };
   const touched = new Set((result.outcome_items ?? []).map(outcome => outcome.item));
   const holds = new Map((await readGitSourceHolds(engine, { sourceIds: scope.source_ids })).flatMap(source => source.holds.map(hold => [`${hold.source_id}:${hold.path}`, hold] as const)));
   const out: Record<string, number> = {};
@@ -556,10 +588,9 @@ async function reportFences(ctx: OperationContext, scope: RepairScope, result: R
   const [oldest] = await ctx.engine.executeRaw<{ held_at: string | null }>(`SELECT min(completed_keys->0->>'held_at') AS held_at FROM op_checkpoints
     WHERE op='sync-hold' AND completed_keys->0->>'code'='invalid_fence' AND completed_keys->0->>'source_id'=ANY($1::text[])`, [scope.source_ids]).catch(() => [{ held_at: null }]);
   const llmRepairs = repairedByTier.llm;
-  const spent = typeof result.cost.llm_usd === 'number' ? result.cost.llm_usd : 0;
+  const spent = typeof result.cost.llm_usd === 'number' ? result.cost.llm_usd : null;
   const verification: FenceRepairVerification = { candidates: result.affected + Object.values(result.residuals).reduce((a, b) => a + b, 0) - (result.residuals.already_clean ?? 0),
     repaired_by_tier: repairedByTier, held_by_reason: Object.fromEntries(Object.entries(remaining).filter(([reason]) => reason !== 'pending_repair')),
-    oldest_hold_at: oldest?.held_at ?? null, llm_repairs: llmRepairs, llm_usd_per_repair: llmRepairs ? spent / llmRepairs : null, partial: result.scan?.partial ?? false };
+    oldest_hold_at: oldest?.held_at ?? null, llm_repairs: llmRepairs, llm_usd_per_repair: llmRepairs && spent !== null ? spent / llmRepairs : null, partial: result.scan?.partial ?? false };
   return { repaired, remaining, verification: verification as unknown as Record<string, unknown> };
 }
-

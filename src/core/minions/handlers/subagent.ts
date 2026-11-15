@@ -1,3 +1,6 @@
+import { stampSubagentResultMode } from './subagent-result-mode.ts';
+import { makeCodexSubagentHandler } from './subagent-codex.ts';
+import { assertPrivateNativeLoopAllowed, readPrivateCodexConfig } from '../../ai/private-policy.ts';
 /**
  * Subagent LLM-loop handler (v0.15).
  *
@@ -264,6 +267,7 @@ function legacyMessagesClient(engine: BrainEngine, make?: () => Anthropic): Mess
 }
 
 export function makeSubagentHandler(deps: SubagentDeps) {
+  if (readPrivateCodexConfig()) return makeCodexSubagentHandler(deps.engine);
   const engine = deps.engine;
   // sdk.messages IS the MessagesClient-shaped object. The v0.16.0 bug was
   // casting new Anthropic() (top level) to MessagesClient, but .create()
@@ -277,6 +281,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
 
   return async function subagentHandler(ctx: MinionJobContext): Promise<SubagentResult> {
+    assertPrivateNativeLoopAllowed('minions.legacy_subagent');
     const dataForAccounting = (ctx.data ?? {}) as unknown as SubagentHandlerData;
     // #4217: every subagent job gets structural write accounting merged into
     // its result; jobs submitted with require_writes (dream synthesize /
@@ -296,29 +301,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // write lost) re-enters via the loop replay path with no marker — leaving
     // synth_mode_used unset there is honest 'unknown/replay', never a fake
     // fallback in phase telemetry.
-    const stamped: SubagentResult = dataForAccounting.mode === 'oneshot' && inner.synth_mode_used !== 'oneshot' && modeState.fallbackReason
-      ? {
-          ...inner,
-          synth_mode_used: 'agentic_fallback',
-          fallback_reason: modeState.fallbackReason,
-          // The PAID oneshot attempt is part of this job's real cost/turn
-          // count — fold it into the rollup instead of silently dropping a
-          // full model call from details.synthesis math.
-          ...(modeState.oneshotTokens
-            ? {
-                turns_count: inner.turns_count + 1,
-                tokens: {
-                  in: inner.tokens.in + modeState.oneshotTokens.in,
-                  out: inner.tokens.out + modeState.oneshotTokens.out,
-                  cache_read: inner.tokens.cache_read + modeState.oneshotTokens.cache_read,
-                  cache_create: inner.tokens.cache_create + modeState.oneshotTokens.cache_create,
-                },
-              }
-            : {}),
-        }
-      : dataForAccounting.mode === 'agentic' && !inner.synth_mode_used
-        ? { ...inner, synth_mode_used: 'agentic' }
-        : inner;
+    const stamped = stampSubagentResultMode(dataForAccounting, inner, modeState);
     return finalizeWriteAccounting(engine, ctx.id, stamped, {
       requireWrites: dataForAccounting.require_writes === true, allowCleanZeroWrites: dataForAccounting.allow_clean_zero_writes === true,
       // OV-4: a successful oneshot job's verdict is scoped to its own

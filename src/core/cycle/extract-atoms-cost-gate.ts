@@ -49,14 +49,14 @@ export function resolveExtractAtomsCostGate(
   extractModel: string,
   embedModel: string | null,
   overrides?: PricingOverrides,
-  opts: { explicitBudget?: boolean } = {},
+  opts: { explicitBudget?: boolean; subscription?: boolean } = {},
 ): ExtractAtomsCostGate {
   const unpriced: { model: string; kind: 'chat' | 'embed' } | null =
-    !isModelPriceable(extractModel, 'chat', overrides) ? { model: extractModel, kind: 'chat' }
+    !(opts.subscription && extractModel.startsWith('codex-cli:')) && !isModelPriceable(extractModel, 'chat', overrides) ? { model: extractModel, kind: 'chat' }
       : embedModel !== null && !isModelPriceable(embedModel, 'embed', overrides) ? { model: embedModel, kind: 'embed' }
         : null;
   if (!unpriced) return { enforceCap: true };
-  if (opts.explicitBudget) {
+  if (opts.explicitBudget || opts.subscription) {
     return { enforceCap: true, unpricedModel: unpriced.model, unpricedKind: unpriced.kind, refusal: noPricingGuidance(unpriced.model, unpriced.kind) };
   }
   return { enforceCap: false, unpricedModel: unpriced.model, unpricedKind: unpriced.kind };

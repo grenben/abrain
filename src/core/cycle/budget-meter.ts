@@ -35,6 +35,7 @@ import type { BrainEngine } from '../engine.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import { overrideFor, type PricingOverrides } from '../budget/reservation-cost.ts';
 import { pricingSetCommand } from '../budget/no-pricing.ts';
+import { cycleSubscriptionBudget } from './subscription-budget.ts';
 // Re-exported beside loadAllowUnpriced so meter call sites read both knobs from one module.
 export { loadPricingOverrides } from '../budget/budget-tracker.ts';
 
@@ -95,8 +96,9 @@ export interface SubmitEstimate {
 
 export interface BudgetCheckResult {
   allowed: boolean;
-  estimatedCostUsd: number;
-  cumulativeCostUsd: number;
+  estimatedCostUsd: number | null;
+  cumulativeCostUsd: number | null;
+  billing?: 'subscription';
   budgetUsd: number;
   reason?: string;
   /** True when the model wasn't in the pricing map (metered at the fallback rate, or bypassed when allowed). */
@@ -124,6 +126,7 @@ export class BudgetMeter {
   private cumulativeUsd = 0;
   private readonly auditPath: string;
   private unpricedSubmitsThisCycle = 0;
+  private subscriptionObserved = false;
 
   constructor(private readonly opts: BudgetMeterOpts) {
     this.auditPath = auditFilePath(opts.auditPath);
@@ -180,6 +183,15 @@ export class BudgetMeter {
    * Caller is responsible for skipping the actual LLM call when allowed=false.
    */
   check(estimate: SubmitEstimate): BudgetCheckResult {
+    const subscription = cycleSubscriptionBudget(estimate, Math.max(0, this.opts.budgetUsd));
+    if (subscription) {
+      this.subscriptionObserved = true;
+      this.unpricedSubmitsThisCycle++;
+      writeLedgerLine(this.auditPath, { schema_version: 2, event: 'subscription_preflight', phase: this.opts.phase,
+        ts: new Date().toISOString(), model: estimate.modelId, label: estimate.label, allowed: subscription.allowed,
+        estimated_cost_usd: null, cumulative_cost_usd: null, remaining_quota: null, api_metered_cost_usd: this.cumulativeUsd });
+      return subscription;
+    }
     const priced = this.estimateCost(estimate);
     const budgetUsd = Math.max(0, this.opts.budgetUsd);
 
@@ -212,7 +224,7 @@ export class BudgetMeter {
       return {
         allowed: true,
         estimatedCostUsd: 0,
-        cumulativeCostUsd: this.cumulativeUsd,
+        cumulativeCostUsd: this.totalSpent,
         budgetUsd,
         unpriced: true,
       };
@@ -236,13 +248,13 @@ export class BudgetMeter {
         estimated_input_tokens: estimate.estimatedInputTokens,
         max_output_tokens: estimate.maxOutputTokens,
         estimated_cost_usd: cost,
-        cumulative_cost_usd: this.cumulativeUsd,
+        cumulative_cost_usd: this.totalSpent,
         budget_usd: budgetUsd,
       });
       return {
         allowed,
         estimatedCostUsd: cost,
-        cumulativeCostUsd: this.cumulativeUsd,
+        cumulativeCostUsd: this.totalSpent,
         budgetUsd,
         unpriced: true,
         ...(allowed ? {} : { reason: `BUDGET_EXHAUSTED: projected $${(this.cumulativeUsd + cost).toFixed(4)} > cap $${budgetUsd.toFixed(2)} (unpriced model at fallback rate)` }),
@@ -259,13 +271,13 @@ export class BudgetMeter {
         model: estimate.modelId,
         label: estimate.label,
         estimated_cost_usd: cost,
-        cumulative_cost_usd: this.cumulativeUsd,
+        cumulative_cost_usd: this.totalSpent,
         budget_usd: budgetUsd,
       });
       return {
         allowed: false,
         estimatedCostUsd: cost,
-        cumulativeCostUsd: this.cumulativeUsd,
+        cumulativeCostUsd: this.totalSpent,
         budgetUsd,
         reason: `BUDGET_EXHAUSTED: projected $${projected.toFixed(4)} > cap $${budgetUsd.toFixed(2)}`,
       };
@@ -280,14 +292,14 @@ export class BudgetMeter {
       model: estimate.modelId,
       label: estimate.label,
       estimated_cost_usd: cost,
-      cumulative_cost_usd: this.cumulativeUsd,
+      cumulative_cost_usd: this.totalSpent,
       budget_usd: budgetUsd,
     });
-    return { allowed: true, estimatedCostUsd: cost, cumulativeCostUsd: this.cumulativeUsd, budgetUsd };
+    return { allowed: true, estimatedCostUsd: cost, cumulativeCostUsd: this.totalSpent, budgetUsd };
   }
 
-  /** Cumulative cost spent so far this cycle. */
-  get totalSpent(): number { return this.cumulativeUsd; }
+  /** Cumulative estimated cost; unknown once this cycle includes subscription inference. */
+  get totalSpent(): number | null { return this.subscriptionObserved ? null : this.cumulativeUsd; }
 
   /** Count of submits whose model had no canonical pricing. */
   get unpricedSubmits(): number { return this.unpricedSubmitsThisCycle; }
@@ -300,3 +312,8 @@ export function _resetBudgetMeterWarningsForTest(): void {
 
 /** Re-export the pricing map for callers that need to introspect it. */
 export { ANTHROPIC_PRICING };
+
+/** Render an unknown subscription total without inventing a zero or API-rate estimate. */
+export function formatCycleCost(cost: number | null): string {
+  return cost === null ? 'unknown (subscription)' : `$${cost.toFixed(4)}`;
+}

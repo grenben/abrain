@@ -17,9 +17,14 @@ import { logError } from './autopilot.ts';
 export async function resolveNightlyProbeModelRoutesForDaemon(engine: BrainEngine): Promise<NightlyProbeModelRoutes> {
   // refreshGatewayForJob's two calls, inlined: importing jobs.ts would grant its flags to `autopilot` in the flag registry.
   const { refreshGatewayEnvFromFilePlane, reconfigureGatewayWithEngine } = await import('../core/ai/gateway.ts');
+  const { readPrivateCodexConfig } = await import('../core/ai/private-policy.ts');
   const { resolveNightlyProbeModelRoutes } = await import('../core/cycle/nightly-probe-routes.ts');
   refreshGatewayEnvFromFilePlane();
-  await reconfigureGatewayWithEngine(engine);
+  // The generic gateway resolver has no operation-specific identity and
+  // correctly refuses tiered private policies with private_role_required.
+  // The probe resolves its reader, extractor and judge roles explicitly below;
+  // only ordinary mode should re-stamp ambient gateway model routes here.
+  if (!readPrivateCodexConfig()) await reconfigureGatewayWithEngine(engine);
   return resolveNightlyProbeModelRoutes(engine);
 }
 
@@ -51,6 +56,7 @@ export async function runNightlyQualityProbeStep(engine: BrainEngine, cfg: GBrai
       const { loadPricingOverrides } = await import('../core/budget/budget-tracker.ts');
       const { isAvailable } = await import('../core/ai/gateway.ts');
       const cap = resolveProbeCap(dbMaxUsd, cfg?.autopilot?.nightly_quality_probe?.max_usd);
+      const { withScheduledNightlyProbe } = await import('./nightly-probe-subscription.ts');
       await runNightlyQualityProbe({
         isEnabled: () => true, // already gated above; phase re-checks for defense-in-depth
         hasEmbeddingProvider: () => isAvailable('embedding'),
@@ -60,6 +66,7 @@ export async function runNightlyQualityProbeStep(engine: BrainEngine, cfg: GBrai
         resolveFixturePath: () => NIGHTLY_PROBE_FIXTURES.longMemEval,
         resolveSearchConfigSnapshot: () => resolveNightlyProbeSearchConfigSnapshot(engine),
         resolveModelRoutes: () => resolveNightlyProbeModelRoutesForDaemon(engine),
+        withRunAuthorization: (input, run) => withScheduledNightlyProbe(engine, input, run),
         runLongMemEval: runLongMemEvalForProbe,
         runCrossModalBatch: runCrossModalBatchForProbe,
         now: () => new Date(),

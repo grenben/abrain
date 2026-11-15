@@ -95,7 +95,15 @@ export async function prepareSemanticPageMutation(engine: BrainEngine, row: Writ
   const prepared = await preparePageMutation(engine, row, config, {
     expectedRevision: snapshot.revision, content: serializePageToMarkdown(page, snapshot.tags),
   }, undefined, { boundedChunkWrites: true });
-  return { ...prepared, apply: async tx => {
+  return { ...prepared, validate: async tx => {
+    if (p.edge_proposal_guard !== undefined) {
+      const guard = p.edge_proposal_guard as { id?: unknown; snapshotHash?: unknown };
+      const { validateEdgeProposalPublication } = await import('../cycle/edge-contradictions.ts');
+      await validateEdgeProposalPublication(tx, { id: guard?.id as number, snapshotHash: guard?.snapshotHash as string },
+        { sourceId: row.source_id, slug: row.slug, date: entry.date, summary: entry.summary, pageId: row.page_id });
+    }
+    await prepared.validate?.(tx);
+  }, apply: async tx => {
     const outcome = await prepared.apply(tx);
     const inserted = await tx.addTimelineEntry(row.slug, { ...rendered.canonical, detail: rendered.detail }, { sourceId: row.source_id });
     const [stored] = gate.verdict === 'flag' ? await tx.executeRaw<{ id: number }>(`SELECT t.id FROM timeline_entries t JOIN pages p ON p.id = t.page_id

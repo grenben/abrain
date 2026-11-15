@@ -1,4 +1,10 @@
 import { observationDateLine, observationDateRule } from '../ai/date-grounding.ts';
+import { privatePolicyCheck } from '../ai/private-role-scope.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivateSynthesize } from './synthesize-codex.ts';
+import { makeJudgeClient, type JudgeClient } from './triage-client.ts';
+export { makeJudgeClient, type JudgeClient } from './triage-client.ts';
+import { assertTriageRoute, isCodexTriageModel, validateCodexTriage, triageVersionForModel, triageCacheModel, privateTriageModel } from './triage-codex.ts';
 import { isConsumerDateGroundingOn } from '../facts/extract.ts';
 import { maintenancePreflight, publishMaintenancePage, type MaintenanceAuthority } from '../persistence/prepared-maintenance.ts';
 import { reportFileHolds, reverseWriteDreamRefs, writeDreamPageFile } from './derived-write-through.ts';
@@ -53,13 +59,10 @@ import { deferPublishOrThrow, finishDeferredPostprocess, loadCommittedOutputsOrD
  *     (manual `gbrain dream retriage --audit-rejects` is the v1 control).
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'node:crypto';
-import { chat as gatewayChat, validateModelId, type ChatResult } from '../ai/gateway.ts';
 import { AIConfigError } from '../ai/errors.ts';
 import { resolveChatContextTokens } from '../ai/model-resolver.ts';
 import { normalizeModelId, splitProviderModelId } from '../model-id.ts';
-import { hasAnthropicKey } from '../ai/anthropic-key.ts';
 import { basename, join, dirname, isAbsolute, resolve } from 'node:path';
 import { parseLlmJson } from '../llm-json.ts';
 import type { BrainEngine, DreamVerdict, TriageSegment } from '../engine.ts';
@@ -407,7 +410,9 @@ export async function runPhaseSynthesize(
   // authoritative child spend rolls up from minion_jobs token columns below.
   const startedAt = Date.now(); // #6757: outputs an earlier pass deferred finish even when this pass returns before postprocessing
   const routing = emptySessionSourceRouting(); // #7805: corpus files left out because they belong to another source, or to none yet
-  return withChatPhase('phase:synthesize', async () => withSessionSourceRouting(await finishDeferredPostprocess(engine, opts, startedAt, await runPhaseSynthesizeInner(engine, opts, routing), loadSynthConfig), routing, opts.sourceId ?? 'default'));
+  return withChatPhase('phase:synthesize', async () => readPrivateCodexConfig()
+    ? runPrivateSynthesize(engine, opts)
+    : withSessionSourceRouting(await finishDeferredPostprocess(engine, opts, startedAt, await runPhaseSynthesizeInner(engine, opts, routing), loadSynthConfig), routing, opts.sourceId ?? 'default'));
 }
 
 async function runPhaseSynthesizeInner(
@@ -1644,7 +1649,7 @@ export async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig>
   // v0.28: resolveModel() unifies CLI flag > new key > deprecated key > models.default > env > fallback
   const { resolveModel, resolveAlias } = await import('../model-config.ts');
   const model = await resolveModel(engine, {
-    configKey: 'models.dream.synthesize',
+    privateRole: 'dream-synthesis', configKey: 'models.dream.synthesize',
     deprecatedConfigKey: 'dream.synthesize.model',
     tier: 'reasoning',
     fallback: 'sonnet',
@@ -1654,10 +1659,12 @@ export async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig>
   // stays free for a future real CLI flag). Both legacy spellings keep
   // resolving through the standard chain when the new key is unset.
   const triageModelOverride = await engine.getConfig('models.dream.triage');
-  const verdictModel = triageModelOverride?.trim()
+  const verdictModel = readPrivateCodexConfig()
+    ? await privateTriageModel(engine)
+    : triageModelOverride?.trim()
     ? await resolveAlias(engine, triageModelOverride.trim())
     : await resolveModel(engine, {
-        configKey: 'models.dream.synthesize_verdict',
+        privateRole: 'dream-triage', configKey: 'models.dream.synthesize_verdict',
         deprecatedConfigKey: 'dream.synthesize.verdict_model',
         tier: 'utility',
         fallback: 'haiku',
@@ -1800,7 +1807,7 @@ export async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig>
  * cancelled rows are excluded so retriage-cancelled jobs don't eat budget;
  * dead rows count through the key the queue recorded when it released them.
  */
-async function countRecentSynthSubmissions(engine: BrainEngine, sourceId: string): Promise<number> {
+export async function countRecentSynthSubmissions(engine: BrainEngine, sourceId: string): Promise<number> {
   const rows = await engine.executeRaw<{ n: number }>(
     `SELECT COUNT(*)::int AS n
        FROM minion_jobs
@@ -1845,142 +1852,6 @@ async function checkCooldown(
 // the tests keep importing from here.
 
 // ── Significance judge (gateway-routed; provider-agnostic) ──────────────
-//
-// The JudgeClient interface keeps the legacy create(params) call shape for
-// test-seam stability — existing mocks keep working (the options bag is
-// optional, #4077 cooperative cancellation). Only the construction path
-// moved from `new Anthropic()` to
-// `gateway.chat()` so any provider with a registered recipe (Anthropic,
-// DeepSeek, OpenRouter, Voyage, Ollama, llama-server, etc.) is reachable
-// via `gbrain config set models.dream.synthesize_verdict <provider>:<model>`.
-//
-// This mirrors v0.35.5.0's `tryBuildGatewayClient` in src/core/think/index.ts
-// (which closed #952 for runThink). Same pattern, same trade-offs:
-// construction-time provider/key probe returns null on a clear miss (cheap
-// pre-flight), and the verdict loop wraps the actual chat call in try/catch
-// for AIConfigError surfacing mid-run.
-
-export interface JudgeClient {
-  create: (
-    params: Anthropic.MessageCreateParamsNonStreaming,
-    options?: { signal?: AbortSignal },
-  ) => Promise<Anthropic.Message>;
-}
-
-/**
- * Build a gateway-routed JudgeClient for the resolved verdict model.
- * Returns null when no chat provider is reachable for `verdictModel`:
- *   - Unknown provider id (resolveRecipe throws AIConfigError).
- *   - Anthropic provider with no key (env or config) — preserves the legacy
- *     "no ANTHROPIC_API_KEY" cheap-skip semantics.
- * On null, the verdict loop short-circuits each transcript with an explicit
- * "no configured provider" reason and continues the phase.
- *
- * For non-Anthropic providers (deepseek, openrouter, voyage, ollama,
- * llama-server, ...), we delegate auth probing to the gateway's own
- * recipe `auth_env.required` machinery — AIConfigError at gateway.chat()
- * time is caught by the verdict loop and surfaced per-transcript.
- */
-export function makeJudgeClient(verdictModel: string): JudgeClient | null {
-  // Normalize: ensure provider:model shape (and slash→colon — #1698). resolveModel
-  // returns bare anthropic ids (e.g. `claude-haiku-4-5`); gateway.chat needs `anthropic:...`.
-  const modelStr = normalizeModelId(verdictModel);
-
-  // #1698 (C1): id-validity via the shared `validateModelId` core (resolveRecipe +
-  // assertTouchpoint) — catches unknown provider AND chat-less provider (model-id
-  // typos pass locally and fail at the provider; no runtime allowlist). We do NOT
-  // use the full `probeChatModel` here: its `isAvailable` layer would reject
-  // non-Anthropic-no-key providers and an unconfigured gateway, breaking the
-  // deliberate per-transcript-degrade contract (and test A9). validateModelId reads
-  // the recipe registry, not gateway _config, so it works pre-configureGateway().
-  const v = validateModelId(modelStr);
-  if (!v.ok) return null;
-
-  // Anthropic key probe (legacy behavior preserved verbatim). Other providers' key
-  // checks happen lazily at chat call time and surface as AIConfigError, which the
-  // verdict loop catches per-transcript.
-  if (v.parsed.providerId === 'anthropic' && !hasAnthropicKey()) return null;
-
-  return {
-    create: async (params, options): Promise<Anthropic.Message> => {
-      // Map Anthropic.MessageCreateParamsNonStreaming → gateway.ChatOpts.
-      // `judgeSignificance` always sends string content + string system,
-      // and the adapter only TEXT-flattens the array-of-blocks shape —
-      // `tool_use`, `tool_result`, image, and other non-text blocks become
-      // empty strings. If a future caller wires tool-use or image content
-      // through this client, extend the mapping instead of relying on the
-      // current silent drop. Same pattern as think/index.ts:607-615.
-      const messages = params.messages.map(m => ({
-        role: m.role,
-        content: typeof m.content === 'string'
-          ? m.content
-          : (Array.isArray(m.content)
-              ? m.content.map(b => ('text' in b ? b.text : '')).join('')
-              : ''),
-      }));
-      const system = typeof params.system === 'string'
-        ? params.system
-        : (Array.isArray(params.system)
-            ? params.system.map(b => ('text' in b ? b.text : '')).join('')
-            : undefined);
-
-      const result: ChatResult = await gatewayChat({
-        model: modelStr,
-        system,
-        messages,
-        maxTokens: params.max_tokens,
-        // DeepSeek v4 thinks by default and bills reasoning as OUTPUT tokens
-        // against max_tokens (recipe thinking_by_default, #4172) — same for
-        // OpenRouter's DeepSeek hosts (#4758) and a configured Anthropic
-        // thinking mode. The judge wants only the small JSON verdict, so it
-        // turns thinking off per call (#5331; per-route mapping in thinking-off.ts).
-        thinking: 'off',
-        // #4077: a cancelled cycle tears down the in-flight judge call too.
-        abortSignal: options?.signal,
-      });
-
-      // Map gateway.ChatResult → Anthropic.Message shape. judgeSignificance
-      // reads `.content[0].type === 'text'`, `.content[0].text`, and
-      // `.stop_reason`; other fields are best-effort for downstream
-      // telemetry parity. The stopReason mapping is load-bearing:
-      // 'length' → 'max_tokens' lets judgeSignificance detect a truncated
-      // verdict (reasoning models can burn the whole max_tokens budget on
-      // reasoning tokens, leaving empty/partial text) and
-      // 'refusal'/'content_filter' → 'refusal' surfaces a blocked response,
-      // instead of silently treating either as a clean end-of-turn.
-      // 'other' (gateway's mapStopReason catch-all — unknown provider
-      // finish reasons, which includes both non-standard SUCCESSFUL stops
-      // and the AI SDK's 'error'/'unknown' labels) maps to 'end_turn'
-      // deliberately. Rationale: (a) treating 'other' as abnormal would
-      // permanently disable verdict caching on providers whose successful
-      // stops the gateway doesn't recognize; (b) the residual risk is
-      // narrow — an errored response only gets cached if it still contains
-      // a complete, parseable JSON object with a finite numeric score in
-      // [0,1] (unparseable output is never cached), and such a complete
-      // verdict is trustworthy regardless of the finish label. Distinguishing
-      // error/unknown from benign-unknown belongs in gateway.ts's
-      // mapStopReason (out of scope here — see PR notes).
-      return {
-        id: '',
-        type: 'message',
-        role: 'assistant',
-        model: modelStr,
-        // A chat_fallback_chain entry answered: judgeSignificance marks the verdict uncacheable.
-        ...(result.fallbackFrom ? { answered_by: result.model } : {}),
-        content: [{ type: 'text', text: result.text }],
-        stop_reason: result.stopReason === 'length' ? 'max_tokens'
-          : result.stopReason === 'tool_calls' ? 'tool_use'
-          : (result.stopReason === 'refusal' || result.stopReason === 'content_filter') ? 'refusal'
-          : 'end_turn',
-        stop_sequence: null,
-        usage: {
-          input_tokens: result.usage.input_tokens,
-          output_tokens: result.usage.output_tokens,
-        },
-      } as unknown as Anthropic.Message;
-    },
-  };
-}
 
 export interface TriageResult {
   /**
@@ -2130,7 +2001,7 @@ Quote verbatim; never paraphrase inside "quote".`;
     max_tokens: opts.maxTokens ?? DEFAULT_TRIAGE_MAX_TOKENS,
     system: sys,
     messages: [{ role: 'user', content: `Transcript ${t.basename}:\n\n${trimmed}` }],
-  }, { signal: opts.signal });
+  }, { signal: opts.signal, validateCodexProposal: text => validateCodexTriage(verdictModel, text, trimmed, t.content) });
 
   // stop_reason === 'max_tokens' means the response was cut off; 'refusal'
   // means the model refused or a content filter blocked it. Even if a
@@ -2164,6 +2035,7 @@ Quote verbatim; never paraphrase inside "quote".`;
     .map(b => (b.type === 'text' ? b.text : ''))
     .join('')
     .trim();
+  validateCodexTriage(verdictModel, text, trimmed, t.content);
   const parsed = parseLlmJson<{
     score?: unknown;
     content_type?: unknown;
@@ -2268,7 +2140,8 @@ export function parseSynthV2Key(key: string): ParsedSynthV2Key | null {
 }
 
 /** A transcript over the whole synthesis cap on its own is skipped (like oversize_after_split), never a deferral of the rest; null for a cumulative denial or a 0 cap. */
-function overBudgetAloneReason(spend: { estimatedCostUsd: number; budgetUsd: number }, name: string): string | null {
+function overBudgetAloneReason(spend: { estimatedCostUsd: number | null; budgetUsd: number }, name: string): string | null {
+  if (spend.estimatedCostUsd === null) return null;
   if (spend.budgetUsd <= 0 || spend.estimatedCostUsd <= spend.budgetUsd) return null;
   process.stderr.write(`[dream] transcript ${name} alone is estimated at $${spend.estimatedCostUsd.toFixed(4)}, over the $${spend.budgetUsd.toFixed(2)} dream.synthesize.budget_usd cap; skipping it. Raise the cap or use a cheaper synthesis model.\n`);
   return `over_budget_alone: $${spend.estimatedCostUsd.toFixed(4)} > $${spend.budgetUsd.toFixed(2)}`;
@@ -2289,8 +2162,8 @@ export function isTriageCacheValid(
   staleBefore?: Date,
 ): boolean {
   return cached.score !== null
-    && cached.triage_version === TRIAGE_VERSION
-    && cached.model === model
+    && cached.triage_version === triageVersionForModel(model, TRIAGE_VERSION)
+    && cached.model === triageCacheModel(model)
     && (!staleBefore || Date.parse(cached.judged_at) >= staleBefore.getTime());
 }
 
@@ -2447,9 +2320,12 @@ export async function runTriagePass(
   cfg: TriagePassCfg,
   yieldDuringPhase?: () => Promise<void>,
 ): Promise<TriagePassResult> {
+  assertTriageRoute(cfg.model, !!cfg.decide);
+  const checkPolicy = privatePolicyCheck(['dream-triage']), cacheModel = triageCacheModel(cfg.model);
+  const triageVersion = triageVersionForModel(cfg.model, TRIAGE_VERSION);
   const now = cfg.now ?? Date.now;
   const start = now();
-  const concurrency = Math.max(1, Math.min(16, Math.floor(cfg.concurrency) || 1));
+  const concurrency = isCodexTriageModel(cfg.model) ? 1 : Math.max(1, Math.min(16, Math.floor(cfg.concurrency) || 1));
   const judge = cfg.judge !== undefined ? cfg.judge : makeJudgeClient(cfg.model);
 
   const reports: TriageFileReport[] = new Array(transcripts.length);
@@ -2496,7 +2372,7 @@ export async function runTriagePass(
     const d = cfg.decide;
     if (!d?.acting) { await processLlm(idx); if (d && freshlyJudged.has(idx)) await d.observe(transcripts[idx]); return; }
     const t = transcripts[idx];
-    const r = await d.triage(t, { triageVersion: TRIAGE_VERSION, llmModel: cfg.model, force: cfg.force, staleBefore: cfg.staleBefore, signal: cfg.signal, budgetExhausted });
+    const r = await d.triage(t, { triageVersion, llmModel: cfg.model, force: cfg.force, staleBefore: cfg.staleBefore, signal: cfg.signal, budgetExhausted });
     if (!r.verdict) {
       if (r.deferred || judge) return processLlm(idx);
       reports[idx] = { filePath: t.filePath, worth: true, score: null, content_type: null, reasons: [r.reason ?? 'decide triage no-change'], cached: false };
@@ -2513,6 +2389,7 @@ export async function runTriagePass(
     const t = transcripts[idx];
     // Cache lookup is always free — never deferred by the time budget.
     const existing = await engine.getDreamVerdict(t.filePath, t.contentHash);
+    checkPolicy();
     const cached = cfg.force ? null : existing;
     const cacheValid = cached !== null && isTriageCacheValid(cached, cfg.model, cfg.staleBefore);
     if (cached && cacheValid) {
@@ -2530,7 +2407,7 @@ export async function runTriagePass(
       };
       return;
     }
-    const backedOffUntil = cfg.force ? null : backoffUntil(existing, cfg.model, TRIAGE_VERSION);
+    const backedOffUntil = cfg.force ? null : backoffUntil(existing, cacheModel, triageVersion);
     if (backedOffUntil) {
       backoffCount++;
       reports[idx] = {
@@ -2583,6 +2460,7 @@ export async function runTriagePass(
         // be bypassed by refusals/truncations/unparseable responses.
         if (cfg.shouldStop?.()) stopped = true;
       }
+      checkPolicy();
       judged++;
       if (triage.tokens) {
         tokensIn += triage.tokens.in;
@@ -2595,7 +2473,7 @@ export async function runTriagePass(
         unreliableCount++;
         await recordUnreliableTriage(engine, t, triage.unreliable, triage.diagnostic, {
           existing, keepExisting: existing !== null && isTriageCacheValid(existing, cfg.model),
-          model: cfg.model, triageVersion: TRIAGE_VERSION, aborted: cfg.signal?.aborted === true,
+          model: cacheModel, triageVersion, aborted: cfg.signal?.aborted === true,
         });
         reports[idx] = {
           filePath: t.filePath,
@@ -2621,8 +2499,8 @@ export async function runTriagePass(
           content_type: triage.content_type,
           segments: triage.segments,
           entities: triage.entities,
-          model: cfg.model,
-          triage_version: TRIAGE_VERSION,
+          model: cacheModel,
+          triage_version: triageVersion,
         }, { existing, keepExisting: existing !== null && isTriageCacheValid(existing, cfg.model), signal: cfg.signal });
       }
       byPath.set(t.filePath, {
@@ -2633,8 +2511,8 @@ export async function runTriagePass(
         content_type: triage.content_type,
         segments: triage.segments,
         entities: triage.entities,
-        model: cfg.model,
-        triage_version: TRIAGE_VERSION,
+        model: cacheModel,
+        triage_version: triageVersion,
       });
       const g = gate(triage, t.content);
       reports[idx] = {
@@ -2689,7 +2567,8 @@ export async function runTriagePass(
     Array.from({ length: Math.min(concurrency, Math.max(1, transcripts.length)) }, () => worker()),
   );
   if (abortError !== null) throw abortError;
-  await verdictCache.backOff(engine, { model: cfg.model, triageVersion: TRIAGE_VERSION, aborted: cfg.signal?.aborted === true });
+  checkPolicy();
+  await verdictCache.backOff(engine, { model: cacheModel, triageVersion, aborted: cfg.signal?.aborted === true });
 
   // Defensive: today every claimed index either sets its report or the pass
   // rethrows above, so no holes can exist — but a future early-exit path

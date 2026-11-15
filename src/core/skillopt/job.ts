@@ -24,16 +24,19 @@ import { runSkillOpt } from './orchestrator.ts';
 import { clampRemoteReflectMaxTokens } from './output-cap.ts';
 import { noteSkillOptLoopDeprecated } from './loop-deprecation.ts';
 import type { SkillOptOpts } from './types.ts';
+import type { MinionJobContext } from '../minions/types.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
 
 export type SkillOptJobInput = Pick<SkillOptOpts,
   | 'skillsDir' | 'skillName' | 'benchmarkPath' | 'epochs' | 'batchSize' | 'lr' | 'lrSchedule' | 'split'
-  | 'reflectMaxTokens' | 'mode' | 'optimizerMode' | 'dryRun' | 'noMutate' | 'allowMutateBundled' | 'heldOutPath'
+  | 'sharedSkill' | 'reflectMaxTokens' | 'mode' | 'optimizerMode' | 'dryRun' | 'noMutate' | 'allowMutateBundled' | 'heldOutPath'
   | 'bootstrapReviewed' | 'maxCostUsd' | 'maxCostSource' | 'maxRuntimeMin' | 'force'
 > & { benchmarkPath: string; models: SkillOptModels; modelFlags: SkillOptModelFlags; modelsStrict: boolean };
 
 export function buildSkillOptJobData(input: SkillOptJobInput): Record<string, unknown> {
   const flags = input.modelFlags;
   return {
+    ...(input.sharedSkill ? { shared_skill: structuredClone(input.sharedSkill) } : {}),
     skills_dir: input.skillsDir,
     skill_name: input.skillName,
     benchmark_path: input.benchmarkPath,
@@ -91,8 +94,8 @@ export async function resolveJobModels(engine: BrainEngine, data: Record<string,
   }, 'legacy job data');
 }
 
-export async function runSkillOptJob(engine: BrainEngine, rawData: unknown): Promise<Record<string, unknown>> {
-  const data = (rawData ?? {}) as Record<string, unknown>;
+export async function skillOptJobOptions(engine: BrainEngine, rawData: unknown): Promise<SkillOptOpts> {
+  const data = structuredClone((rawData ?? {}) as Record<string, unknown>);
   const skillsDir = String(data.skills_dir ?? '');
   const skillName = String(data.skill_name ?? '');
   const benchmarkPath = String(data.benchmark_path ?? '');
@@ -103,9 +106,10 @@ export async function runSkillOptJob(engine: BrainEngine, rawData: unknown): Pro
   // A job queued before one-shot became the default carries no mode: it was queued for the loop.
   const optimizerMode = data.optimizer_mode === 'one-shot-rewrite' ? 'one-shot-rewrite' : 'reflect';
   noteSkillOptLoopDeprecated(optimizerMode);
-  const result = await runSkillOpt({
+  return {
     engine,
     skillName,
+    ...(data.shared_skill && typeof data.shared_skill === 'object' ? { sharedSkill: structuredClone(data.shared_skill) as SkillOptOpts['sharedSkill'] } : {}),
     skillsDir,
     benchmarkPath,
     epochs: Number(data.epochs ?? 4),
@@ -128,11 +132,28 @@ export async function runSkillOptJob(engine: BrainEngine, rawData: unknown): Pro
     maxCostSource: data.max_cost_source === 'default' ? 'default' : 'user',
     maxRuntimeMin: Number(data.max_runtime_min ?? 30),
     force: Boolean(data.force),
-  });
+  };
+}
+
+export async function runSkillOptJob(engine: BrainEngine, rawData: unknown, context?: MinionJobContext): Promise<Record<string, unknown>> {
+  const data = structuredClone((rawData ?? {}) as Record<string, unknown>);
+  if (data.bootstrap_protocol !== undefined) {
+    if (!context) throw new Error('skillopt bootstrap job requires its host job context');
+    return (await import('./codex-bootstrap-job.ts')).runCodexBootstrapJob(engine, data, context);
+  }
+  if (data.optimizer_batch_protocol !== undefined) {
+    if (!context) throw new Error('skillopt batch job requires its host job context');
+    return (await import('./codex-batch-job.ts')).runCodexSkillOptBatchJob(engine, data, context);
+  }
+  const native = !!readPrivateCodexConfig() || data.optimizer_protocol !== undefined || data.shared_skill !== undefined;
+  const scope = native ? await (await import('./codex-job.ts')).codexOptimizerJobScope(engine, data, context) : {};
+  const result = await runSkillOpt({ ...await skillOptJobOptions(engine, data), ...scope });
   return {
+    ...(native ? { cost_usd: null } : {}),
     outcome: result.outcome,
     receipt: result.receipt,
     mutated_skill_file: result.mutatedSkillFile,
     proposed_path: result.proposedPath,
+    ...(result.sharedOptimization ? { shared_optimization: result.sharedOptimization } : {}),
   };
 }

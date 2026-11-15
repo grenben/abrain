@@ -158,6 +158,8 @@ import {
 } from './version-store.ts';
 import { runValidationGate } from './validate-gate.ts';
 import { ROLLOUT_SUCCESS_THRESHOLD, VALIDATION_RUNS_PER_TASK } from './types.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexSkillOpt } from './codex-run.ts';
 import type { SkillOptOpts, EditOp, RunReceipt, BenchmarkTask, RolloutPhase } from './types.ts';
 
 export interface RunSkillOptResult {
@@ -177,6 +179,7 @@ export async function runSkillOpt(opts: SkillOptOpts): Promise<RunSkillOptResult
     const { optimizeSharedSkill } = await import('../shared-skills/optimizer.ts');
     return optimizeSharedSkill(opts, runSkillOpt);
   }
+  if (readPrivateCodexConfig()) return runCodexSkillOpt(opts);
   const { engine, skillName, skillsDir } = opts;
 
   // ── Pre-flight gates (fail-loud BEFORE any LLM spend) ───────────────────

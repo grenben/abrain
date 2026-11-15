@@ -81,7 +81,7 @@ export type CyclePhase =
   //    judge model to verdict them. Auto-resolve OFF by default (D17).
   //  - calibration_profile: aggregates the resolved subset into 2-4
   //    narrative pattern statements + active bias tags. Voice-gated.
-  | 'propose_takes' | 'grade_takes' | 'calibration_profile'
+  | 'propose_takes' | 'grade_takes' | 'calibration_profile' | 'auto_think'
   | 'edge_contradictions' // temporal typed edges: LLM flags conflicts, date math closes
   | 'claim_conflicts' // GBRA-216: keyless typed-claim conflicts filed as decide_proposals (default off)
   // #2653 — drift detection (default OFF; dream.drift.enabled). LLM-judges
@@ -186,6 +186,9 @@ export const ALL_PHASES: CyclePhase[] = [
   'propose_takes',
   'grade_takes',
   'calibration_profile',
+  // Default-disabled automatic think; the phase wrapper retains the existing
+  // dream.auto_think.enabled opt-in and cooldown behavior.
+  'auto_think',
   'edge_contradictions', // temporal typed edges; after extract so it judges fresh relationship state
   'claim_conflicts', // GBRA-216: keyless typed-claim conflicts; after extract_facts so it reads fresh fence claims
   // #2653 — drift detection. Default OFF (dream.drift.enabled). Runs AFTER
@@ -359,6 +362,7 @@ const NEEDS_LOCK_PHASES: ReadonlySet<CyclePhase> = new Set([
   'propose_takes',
   'grade_takes',
   'calibration_profile',
+  'auto_think',
   // #2653 — writes the reports/drift-<date> page.
   'drift',
   'standing_questions', // C4: writes pinned answers and question pages.
@@ -2781,6 +2785,23 @@ async function runCycleUnscoped(
       }
     }
 
+    if (phases.includes('auto_think')) {
+      checkAborted(cycleSignal);
+      progress.start('cycle.auto_think');
+      const { runCycleAutoThink } = await import('./cycle/auto-think.ts');
+      const { result, duration_ms } = await timePhase(() => runCycleAutoThink(engine, {
+        dryRun,
+        sourceId: cycleSourceId,
+        brainDir: brainDir ?? undefined,
+        signal: cycleSignal,
+        deadlineAtMs: opts.deadlineAtMs,
+      }), 'auto_think');
+      result.duration_ms = duration_ms;
+      phaseResults.push(result);
+      progress.finish();
+      await safeYield(opts.yieldBetweenPhases);
+    }
+
     // Temporal typed edges (proposes or, certified, applies closures for live relationships that cannot both hold), then keyless typed-claim conflicts (GBRA-216); both cover sources with no local path.
     for (const [phase, run] of [['edge_contradictions', async () => (await import('./cycle/edge-contradictions.ts')).edgeContradictionsCyclePhase(engine, dryRun)],
       ['claim_conflicts', async () => (await import('./facts/claim-conflicts.ts')).claimConflictsCyclePhase(engine, dryRun)]] as const) {
@@ -2815,6 +2836,7 @@ async function runCycleUnscoped(
             brainDir: brainDir ?? undefined,
             forceEnabled: opts.onceForPhase === 'drift',
             cycleDate,
+            sourceId: cycleSourceId,
           });
           const status: PhaseStatus =
             r.status === 'complete' ? 'ok' :

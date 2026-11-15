@@ -21,7 +21,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { OperationTimeoutError, withTimeout } from '../timeout.ts';
 import type { BrainEngine, SynthesisEvidenceInput } from '../engine.ts';
 import type { SearchResult } from '../types.ts';
-import { runGather, renderPagesBlockDetailed, pagesBlockExcerptLen, takesHitToTakeForPrompt, selectRelevantExcerpt } from './gather.ts';
+import { isNonFatalPrivateThinkWarning, runGather, renderPagesBlockDetailed, pagesBlockExcerptLen, takesHitToTakeForPrompt, selectRelevantExcerpt } from './gather.ts';
 import { readThinkPagesBudget } from './pages-budget.ts';
 import { stampPageTrust, stampRowTrust } from '../eligibility/stamp.ts';
 import { fenceTranscriptText, neutralizeToolCalls, quoteLabel } from '../search/transcript-quote.ts';
@@ -45,6 +45,9 @@ import { classifyIntent } from './intent.ts';
 import { deriveTrust, type TaintRef } from '../trust/taint.ts';
 import { withGuestAnswer, type GuestStamp } from '../guests/marker.ts';
 import { publishSinglePage, THINK_SYNTHESIS_KIND } from '../generations/adapters/single-page.ts';
+import { withPrivateThink, proposeCodexThink, rethrowPrivateThinkFailure } from './codex.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { OperationError } from '../ops/contract.ts';
 
 /** Anthropic Messages client interface — same shape used by subagent.ts so test stubs can be shared. */
 export interface ThinkLLMClient {
@@ -157,11 +160,17 @@ export interface RunThinkOpts {
    * question date. Invalid or future values throw ReferenceDateError.
    */
   referenceDate?: string;
+  /** Native private Codex route selected by the enclosing trusted operation. */
+  privateRole?: 'think' | 'auto-think' | 'calibration-think-ab';
+  /** Trusted operation context used to bind retained publication authority. */
+  publicationContext?: import('../ops/contract.ts').OperationContext;
 }
 
 
 /** Structured response from the LLM (matches the schema declared in prompt.ts). */
 export interface ThinkResponse {
+  /** Native private-Codex digest binding this proposal to its exact prompt. */
+  evidence_hash?: string;
   answer: string;
   citations: Array<{ page_slug: string; row_num: number | null; citation_index?: number }>;
   gaps: string[];
@@ -183,6 +192,8 @@ export type ThinkSynthesisStatus =
   | 'llm_error';        // client.create() threw (429 / timeout / 5xx / network)
 
 export interface ThinkResult {
+  /** Verified native evidence digest, retained for private A/B comparison storage. */
+  codex_evidence_hash?: string;
   question: string;
   answer: string;
   citations: ParsedCitation[];
@@ -276,6 +287,8 @@ export interface ThinkResult {
   fallback_reason?: string;
   /** PR #5086: who bounded the evidence, when a window applied: the caller's `since`/`until`, or the one explicit date the question named (`WINDOW_FROM_QUESTION` warning). */
   window_source?: 'caller' | 'question';
+  /** Reference to a durable, retained private-Codex publication plan. */
+  codex_publication?: { plan_id: string; payload_hash: string };
 }
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 4000;
@@ -603,7 +616,12 @@ async function renderThinkPages(engine: BrainEngine, opts: RunThinkOpts, pages: 
  * QUESTION_EMBED_SKIPPED_EMBEDDING_DISABLED); a failing embedder degrades to
  * QUESTION_EMBED_FAILED with the raw error on stderr only (D6).
  */
-async function embedThinkQuestion(engine: BrainEngine, opts: RunThinkOpts, warnings: string[]): Promise<Float32Array | undefined> {
+async function embedThinkQuestion(
+  engine: BrainEngine,
+  opts: RunThinkOpts,
+  warnings: string[],
+  onCompleted?: () => void,
+): Promise<Float32Array | undefined> {
   if (!opts.embedQuestion) return undefined;
   const { factEmbeddingDisabled } = await import('../embedding-disabled.ts');
   if (await factEmbeddingDisabled(engine)) {
@@ -611,8 +629,11 @@ async function embedThinkQuestion(engine: BrainEngine, opts: RunThinkOpts, warni
     return undefined;
   }
   try {
-    return (await opts.embedQuestion(opts.question)) ?? undefined;
+    const embedding = (await opts.embedQuestion(opts.question)) ?? undefined;
+    onCompleted?.();
+    return embedding;
   } catch (e) {
+    if (readPrivateCodexConfig()) rethrowPrivateThinkFailure(e);
     warnings.push('QUESTION_EMBED_FAILED');
     process.stderr.write(`[think] question embed failed: ${e instanceof Error ? e.message : String(e)}\n`);
     return undefined;
@@ -626,6 +647,14 @@ export async function runThink(
   engine: BrainEngine,
   opts: RunThinkOpts,
 ): Promise<ThinkResult> {
+  return withPrivateThink(engine, opts, () => runThinkPipeline(engine, opts));
+}
+
+async function runThinkPipeline(
+  engine: BrainEngine,
+  opts: RunThinkOpts,
+): Promise<ThinkResult> {
+  const privateMode = !!readPrivateCodexConfig();
   const rounds = Math.max(1, opts.rounds ?? 1);
   const warnings: string[] = [];
   // PR #5086: caller bounds are authoritative; with none, the one explicit date the question names bounds the synthesis.
@@ -637,6 +666,7 @@ export async function runThink(
 
   // Resolve the model through the 6-tier chain.
   const modelUsed = await resolveModel(engine, {
+    ...(privateMode ? { privateRole: opts.privateRole ?? 'think' } : {}),
     cliFlag: opts.model,
     configKey: 'models.think',
     tier: 'deep',
@@ -663,7 +693,8 @@ export async function runThink(
     revision: (await engine.readPageSnapshot(persistSlug, { sourceId: opts.sourceId ?? 'default', includeDeleted: true }))?.revision ?? null };
 
   // Optional question embedding — caller decides whether to pay the embedder; an opted-out brain never does.
-  const questionEmbedding = await embedThinkQuestion(engine, opts, warnings);
+  let auxiliaryEmbeddingCompleted = false;
+  const questionEmbedding = await embedThinkQuestion(engine, opts, warnings, () => { auxiliaryEmbeddingCompleted = true; });
 
   const thinkDecide = await startThinkDecide(engine, opts, classifyIntent(opts.question)).catch(() => undefined); // System One S2/S4; undefined when both are off
   // GATHER
@@ -683,6 +714,16 @@ export async function runThink(
   // raw error text stays on stderr. Distinguishes an errored stream from a
   // legitimately-empty one for MCP/remote callers.
   for (const w of gather.warnings) warnings.push(w);
+  // A deliberate embedding opt-out is not a retrieval failure: hybrid search
+  // still completed its keyword path, and no query was sent to an embedder.
+  // A zero-keyword-hit marker is likewise an empty result, not a failed read.
+  // Every actual stream failure and every other degraded retrieval reason stays
+  // fail-closed for native private synthesis.
+  const requiredRetrievalFailures = gather.warningDetails.filter(warning =>
+    !isNonFatalPrivateThinkWarning(warning, { auxiliaryEmbeddingCompleted }));
+  if (privateMode && requiredRetrievalFailures.length > 0) {
+    rethrowPrivateThinkFailure(new Error('Private think retrieval was degraded.'));
+  }
   if (gather.diagnostics.window?.dropped) warnings.push(`WINDOW_EXCLUDED_${gather.diagnostics.window.dropped}_PAGES`);
   // #5575 A6: every page and take reaches the prompt with its trust tier.
   await stampPageTrust(engine, gather.pages);
@@ -716,6 +757,10 @@ export async function runThink(
           override: opts.calibrationHolder,
           configValue: await engine.getConfig('emotional_weight.user_holder'),
         }),
+        ...(opts.allowedSources !== undefined
+          ? { sourceIds: opts.allowedSources }
+          : { sourceId: opts.sourceId ?? 'default' }),
+        ...(opts.remote !== false ? { publishedOnly: true } : {}),
       });
       if (profile) {
         calibrationBlockOpts = {
@@ -787,7 +832,7 @@ export async function runThink(
                   5000,
                   'findTrajectory',
                 ).catch((err: unknown) => {
-                  if (err instanceof OperationTimeoutError) return [];
+                  if (err instanceof OperationTimeoutError && !privateMode) return [];
                   throw err;
                 });
                 const windowed = window ? trajectoryPointsInWindow(points, window) : { kept: points, excluded: 0 };
@@ -803,6 +848,7 @@ export async function runThink(
               }),
             );
             for (const s of settled) {
+              if (s.status === 'rejected' && privateMode) throw s.reason;
               if (s.status !== 'fulfilled' || s.value === null) continue;
               allBlocks.push(s.value.rendered);
               totalPoints += s.value.points;
@@ -815,6 +861,7 @@ export async function runThink(
         }
       }
     } catch (err) {
+      if (privateMode) rethrowPrivateThinkFailure(err);
       // Defensive: trajectory injection is best-effort. Any unexpected
       // error degrades to "no trajectory block" + a warning. The think
       // call itself never fails because of trajectory wiring.
@@ -859,7 +906,26 @@ export async function runThink(
   let fallback: { answered_by: string; reason?: string } | undefined;
   // Initialized to the llm_error shape; every non-throwing branch overwrites it.
   let response: ThinkResponse = { answer: '', citations: [], gaps: [] };
-  if (opts.stubResponse) {
+  if (privateMode) {
+    try {
+      await (await import('./publication.ts')).captureThinkPublicationEvidence(gather);
+      const proposed = await proposeCodexThink({
+        privateRole: opts.privateRole ?? 'think',
+        model: modelUsed,
+        system: systemPrompt,
+        prompt: userMessage,
+        gather,
+      });
+      response = proposed.response;
+      usage = proposed.usage;
+      if (!/^[a-f0-9]{64}$/.test(response.evidence_hash ?? '')) {
+        throw new OperationError('invalid_output', 'Private think omitted its evidence binding.', 'Retry with the native private think runtime.');
+      }
+    } catch (error) {
+      rethrowPrivateThinkFailure(error);
+      throw error;
+    }
+  } else if (opts.stubResponse) {
     response = opts.stubResponse;
   } else {
     // Build a ThinkLLMClient. Three sources, in priority order:
@@ -1038,7 +1104,8 @@ export async function runThink(
 
   return {
     question: opts.question,
-    ...withGuestAnswer(gather.pages, { answer: response.answer, ...(synthesisStatus === 'ok' ? await groundThinkAnswer(engine, response.answer, [opts.question, pagesBlock, takesBlock, graphBlock ?? '', trajectoryBlock], warnings) : {}) }),
+    ...(privateMode ? { codex_evidence_hash: response.evidence_hash } : {}),
+    ...withGuestAnswer(gather.pages, { answer: response.answer, ...(synthesisStatus === 'ok' ? await groundThinkAnswer(engine, response.answer, [pagesBlock, takesBlock, graphBlock ?? '', trajectoryBlock], warnings) : {}) }),
     citations: resolved.citations,
     gaps: response.gaps,
     pagesGathered: gather.pages.length,
@@ -1147,6 +1214,9 @@ export async function persistSynthesis(
   result: ThinkResult,
   scope: { sourceId?: string; allowedSources?: string[] } = {},
 ): Promise<{ slug: string; evidenceInserted: number; warnings: string[] }> {
+  if (result.codex_publication || result.modelUsed?.startsWith('codex-cli:') || readPrivateCodexConfig()) {
+    return (await import('./publication-execute.ts')).publishThinkPage(engine, result, scope);
+  }
   // #1698: never persist an empty synthesis. Returned signal (NOT a throw, F3) so
   // the MCP `think` op can return the gather result + warning instead of a bare error
   // envelope; the CLI keys off this warning to exit non-zero. Guard on `=== false` so
@@ -1240,10 +1310,10 @@ async function readThinkTrajectoryEnabled(engine: BrainEngine): Promise<boolean>
 
 /**
  * Ground every quoted span of a synthesized answer against the evidence blocks
- * the prompt carried, the user's question included (quoting the question back
- * is supported). Empty when think.quote_verify is off or the answer has no
- * quotes; otherwise the safe answer, what the model wrote, the counts, and the
- * body persistSynthesis saves (failing claim units removed).
+ * the prompt carried. The question itself is deliberately excluded: asking a
+ * question containing a quote does not establish that quote as evidence.
+ * Empty when think.quote_verify is off or the answer has no quotes; otherwise
+ * returns the safe answer and body persistSynthesis saves.
  */
 async function groundThinkAnswer(engine: BrainEngine, answer: string, blocks: string[], warnings: string[]):
   Promise<Partial<Pick<ThinkResult, 'answer' | 'answer_raw' | 'quote_check' | 'unverified_quotes' | 'persist'>>> {

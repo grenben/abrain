@@ -9,7 +9,7 @@ import type { Action } from '../agent-output.ts';
 import { catalogFix, policyFix, skillHeadFix } from './fixes.ts';
 import { enforceClientSlugFence, enforceSubagentSlugFence } from '../ops/context.ts';
 import { authorizeStoredRequest, authorizeWrite, submissionAuthority } from '../persistence/authority.ts';
-import { admitWrite, assertReplayIntent, getWriteRequest, intentDigest } from '../persistence/journal.ts';
+import { assertReplayIntent, getWriteRequest, intentDigest } from '../persistence/journal.ts';
 import { initializeLocalPersistence, pageMutationSource, requestPrincipalForContext } from '../persistence/page-mutations.ts';
 import { getWorktreeBinding } from '../persistence/ownership.ts';
 import { assertSharedSkillPersistence } from '../persistence/protocol.ts';
@@ -24,6 +24,7 @@ import { normalizeSkillFiles, skillMetadata, skillName, skillPath } from './mani
 import { forgetSharedPacks } from './knowledge-guard.ts';
 import { assertSkillCapability, assertStoredSkillCapability, publicationEnabled, readSharedSkillPolicy, setSharedSkillPolicy } from './policy.ts';
 import { SHARED_SKILL_LIMITS, type SharedSkillFile, type SharedSkillPolicy, type SharedSkillPutInput, type SkillMetadata, type StoredSkillFile, type StoredSkillRevision } from './model.ts';
+import { admitSharedOptimizerWrite } from './codex-optimizer-publication.ts';
 import { assertSharedSkillRetentionCapacity, pruneSharedSkillRevisionsInTransaction, sharedSkillRetentionCapacity, sharedSkillRetentionStatus } from './retention.ts';
 
 interface PackRow { pack_id: string; revision: string; manifest: Record<string, unknown>; manifest_hash: string; }
@@ -411,14 +412,14 @@ export async function submitSharedSkillMutation(ctx: OperationContext, operation
   const intent: PublicationIntent = { pack_id: packId, name, expected_revision: expected, policy_epoch: policy.epoch,
     affected: affected.map(r => ({ name: r.name, revision: r.revision ?? null })), expected_pack_revision: pack?.revision ?? null,
     manifest_before_hash: manifestBytes ? sha256(manifestBytes) : null, original_manifest: manifestMetadata, before_hashes: beforeHashes, proposals, extra_files: extraFiles };
-  const row = await admitWrite(ctx.engine, { origin: ctx.admissionOrigin, principal, operation, sourceId, sourceIncarnation: source.incarnation, slug, requestId,
+  const row = await admitSharedOptimizerWrite(ctx.engine, { origin: ctx.admissionOrigin, principal, operation, sourceId, sourceIncarnation: source.incarnation, slug, requestId,
     targetKind: 'skill_bundle', protocolVersion: 2, callerIntent, intent: intent as unknown as Record<string, unknown>, authority,
     worktreeId: binding.worktree_id, topologyGeneration: binding.topology_generation });
   return writeResponse(await waitForWrite(ctx.engine, row, ctx.config, ctx.writeWaitMs));
 }
 
 export async function prepareSharedSkillMutation(engine: BrainEngine, row: WriteRequest, config: GBrainConfig): Promise<PreparedMutation> {
-  if (!['put_skill', 'delete_skill'].includes(row.operation) || row.target_kind !== 'skill_bundle' || row.protocol_version !== 2 || !row.intent) {
+  if (!['put_skill', 'delete_skill'].includes(row.operation) || row.target_kind !== 'skill_bundle' || ![2, 6].includes(row.protocol_version ?? 0) || !row.intent) {
     throw opError('unsupported_mutation_protocol', 'Unsupported shared skill publication target.',
       `Write request ${row.request_id} is not a shared-skill publication this gbrain can prepare; it was probably accepted by another gbrain version. Run gbrain upgrade on every host that serves this brain; the request stays journaled for inspection.`);
   }

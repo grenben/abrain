@@ -100,7 +100,7 @@ export async function runPhaseStandingQuestions(engine: BrainEngine, opts: Stand
   return {
     phase: 'standing_questions', status, duration_ms: 0,
     summary: `${tally.refreshed} refreshed, ${tally.blocked} blocked, ${tally.failed} failed, ${tally.conflicts} conflicts of ${candidates.length} due; ` +
-      `$${meter.totalSpent.toFixed(4)} / $${budgetUsd.toFixed(2)}`,
+      `${meter.totalSpent === null ? 'unknown (subscription)' : `$${meter.totalSpent.toFixed(4)}`} / $${budgetUsd.toFixed(2)}`,
     details: { ...tally, spend_usd: meter.totalSpent, budget_usd: budgetUsd, max_per_cycle: maxPerCycle, max_output_tokens: maxTokens, outcomes },
   };
 }

@@ -1,0 +1,14 @@
+import { test } from 'bun:test';
+import { verifyCrashRecovery } from '../helpers/codex-actions-process-crash-runner.ts';
+import { verifyOptimizerCrashRecovery } from '../helpers/codex-optimizer-process-crash-runner.ts';
+
+test('SIGKILL after private read retention resumes the same action on a new worker', () => verifyCrashRecovery('read'), 120_000);
+test('SIGKILL before private write admission resumes one canonical effect on a new worker', () => verifyCrashRecovery('write-before'), 180_000);
+test('SIGKILL after committed private write reconciles one canonical effect on a new worker', () => verifyCrashRecovery('write-after'), 180_000);
+
+for (const point of ['checkpoint', 'result', 'file'] as const) {
+  test(`SIGKILL after optimizer ${point} resumes the original queued workflow without duplicate effects`, () => verifyOptimizerCrashRecovery(point), 240_000);
+}
+for (const point of ['shared-result', 'shared-committed', 'cycle-file', 'cycle-complete'] as const) {
+  test(`SIGKILL at ${point} preserves managed publication or scheduled cycle receipts`, () => verifyOptimizerCrashRecovery(point), 600_000);
+}

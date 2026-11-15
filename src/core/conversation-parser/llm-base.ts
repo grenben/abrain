@@ -35,9 +35,12 @@ import { createHash } from 'node:crypto';
 import { chat as gatewayChat, type ChatOpts, type ChatResult } from '../ai/gateway.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
 import { AIConfigError } from '../ai/errors.ts';
+import { CodexProposalError } from '../ai/providers/codex-contract.ts';
+import { assertPrivateRoute, readPrivateCodexConfig } from '../ai/private-policy.ts';
 import { normalizeModelId } from '../model-id.ts';
 import { hasAnthropicKey } from '../ai/anthropic-key.ts';
 import type { BrainEngine } from '../engine.ts';
+import { runPrivateParserCall } from './llm-codex.ts';
 
 /**
  * Test-seam transport. Real callers pass undefined → `gatewayChat`.
@@ -98,6 +101,14 @@ function cacheKey(shape: CallShape, modelId: string, content: string): string {
  */
 export function probeLlmAvailability(modelStr: string): string | null {
   const normalized = normalizeModelId(modelStr);
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) {
+    // This probe belongs to the legacy provider path. Under strict private
+    // routing, reject public/incorrect pins here and never treat a native
+    // Codex model as an ordinary gateway recipe.
+    assertPrivateRoute(normalized, 'conversation-parser:model', privatePolicy);
+    throw new CodexProposalError('invalid_input');
+  }
   let providerId: string;
   try {
     const { parsed } = resolveRecipe(normalized);
@@ -146,6 +157,10 @@ export interface RunLlmCallOpts<TOutput> {
   signal?: AbortSignal;
   /** Max output tokens. Default 4000. */
   maxTokens?: number;
+  /** Required together to opt into the private native Codex proposal path. */
+  cacheVersion?: string;
+  /** Native structured-output contract; unsupported schemas fail closed. */
+  responseSchema?: unknown;
   /** Parse the LLM's text output into the typed shape. */
   parse: (text: string) => TOutput | null;
   /** Engine for DB cache (optional; in-process always works). */
@@ -163,6 +178,17 @@ export interface RunLlmCallOpts<TOutput> {
 export async function runLlmCall<TOutput>(
   opts: RunLlmCallOpts<TOutput>,
 ): Promise<TOutput | null> {
+  const isPrivateCodex = /^codex-cli:/.test(opts.modelStr);
+  if (opts.cacheVersion !== undefined || opts.responseSchema !== undefined) {
+    if (!opts.cacheVersion || !opts.responseSchema || opts.chatTransport) {
+      throw new CodexProposalError('invalid_input');
+    }
+    // Native Codex calls are fail-closed: the proposal contract, cache IO,
+    // cancellation, and subscription errors must not fall through to legacy
+    // regex-only parsing or an ordinary provider.
+    return runPrivateParserCall(opts);
+  }
+  if (isPrivateCodex) throw new CodexProposalError('invalid_input');
   const modelStr = probeLlmAvailability(opts.modelStr);
   if (modelStr === null) {
     // Once-per-process warn: future calls in this process won't pay

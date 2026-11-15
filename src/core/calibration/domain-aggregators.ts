@@ -122,7 +122,8 @@ async function aggregateScalarBrier(
        AND t.active = TRUE
        AND t.resolved_outcome IS NOT NULL
        AND p.type = ANY($3::text[])
-       AND p.source_id = $4`,
+       AND p.source_id = $4
+       AND p.deleted_at IS NULL`,
     [domain.name, holder, domain.page_types, sourceId],
   );
   const row = rows[0] ?? { n: 0, brier: null, accuracy: null };
@@ -166,7 +167,8 @@ async function aggregateWeightedBrier(
          AND t.resolved_outcome IS NOT NULL
          AND p.type = ANY($3::text[])
          AND p.source_id = $4
-     )
+         AND p.deleted_at IS NULL
+       )
      SELECT
        COUNT(*)::int AS n,
        (SUM(sq_err * conviction) / NULLIF(SUM(conviction), 0))::real AS brier,
@@ -208,7 +210,8 @@ async function aggregateCountBased(
        AND t.active = TRUE
        AND t.resolved_outcome IS NOT NULL
        AND p.type = ANY($3::text[])
-       AND p.source_id = $4`,
+       AND p.source_id = $4
+       AND p.deleted_at IS NULL`,
     [domain.name, holder, domain.page_types, sourceId],
   );
   const row = rows[0] ?? { n: 0, accuracy: null };

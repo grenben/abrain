@@ -42,7 +42,12 @@ export const CONCEPT_HOLD_CODES = new Set(['source_changed', CONCEPT_PRESERVATIO
 function conceptHoldError(message: string): Error { return Object.assign(new Error(message), { code: CONCEPT_PRESERVATION_CODE }); }
 
 /** One concept page a managed run publishes: its synthesized frontmatter and narrative over the revision it was synthesized from. */
-export interface ManagedConcept { slug: string; synthesized: Record<string, unknown>; narrative: string; expectedRevision: string | null; members?: readonly string[] }
+export interface ManagedConcept {
+  slug: string; synthesized: Record<string, unknown>; narrative: string; expectedRevision: string | null; members?: readonly string[];
+  evidence?: readonly { slug: string; revision: string }[];
+  privateAuthority?: { role: 'concepts'; policyFingerprint: string };
+  beforeAdmission?: (tx: BrainEngine) => Promise<void>;
+}
 
 /**
  * Publish a run's concept pages through the maintenance coordinator as one batch (GBRA-60: one publication group on
@@ -66,7 +71,11 @@ export async function publishManagedConcepts(engine: BrainEngine, authority: Mai
 }
 
 async function prepareManagedConcept(engine: BrainEngine, authority: MaintenanceAuthority,
-  { slug, synthesized, narrative, expectedRevision, members }: ManagedConcept, brainDir?: string) {
+  { slug, synthesized, narrative, expectedRevision, members, evidence, privateAuthority, beforeAdmission }: ManagedConcept, brainDir?: string) {
+  for (const item of evidence ?? []) {
+    const current = await engine.readPageSnapshot(item.slug, { sourceId: authority.writer.sourceId, excludePrivate: true });
+    if (!current || current.revision !== item.revision) throw Object.assign(new Error('Private concept evidence changed before publication.'), { code: 'revision_conflict' });
+  }
   const derivation = members ? await conceptDerivation(engine, authority.writer.sourceId, members) : null;
   const snapshot = await engine.readPageSnapshot(slug, { sourceId: authority.writer.sourceId, includeDeleted: true });
   // The narrative was synthesized from the revision read before the model call
@@ -87,7 +96,7 @@ async function prepareManagedConcept(engine: BrainEngine, authority: Maintenance
   const markdown = snapshot && !snapshot.page.deleted_at
     ? composeConceptRepublication(snapshot.page, snapshot.tags, synthesized, narrative)
     : serializeMarkdown(synthesized, narrative, '', { type: 'concept', title, tags: [] });
-  return { slug, content: markdown, expectedRevision: snapshot?.revision ?? null, file: !dbOnly,
+  return { slug, content: markdown, expectedRevision: snapshot?.revision ?? null, file: !dbOnly, evidence, privateAuthority, beforeAdmission,
     ...(derivation ? { derivation: declareDerivation(derivation.trust, derivation.inputs) } : {}) };
 }
 
@@ -113,10 +122,11 @@ export async function conceptProvenanceCovers(engine: BrainEngine, sourceId: str
  * concept that moved since changes no edge (`moved`) and the next run reconciles it.
  */
 export async function replaceConceptProvenanceLinks(engine: BrainEngine, sourceId: string, conceptSlug: string, links: LinkBatchInput[],
-  opts: { expectedRevision: string | null; managed: boolean }): Promise<{ inserted: number; retired: number } | 'moved'> {
+  opts: { expectedRevision: string | null; managed: boolean; beforeWrite?: (tx: BrainEngine) => Promise<void> }): Promise<{ inserted: number; retired: number } | 'moved'> {
   const members = [...new Set(links.filter(link => link.from_slug === conceptSlug).map(link => link.to_slug))];
   const expectedRevision = opts.expectedRevision ?? (await engine.readPageSnapshot(conceptSlug, { sourceId }))?.revision ?? null;
   const write = async (tx: BrainEngine) => {
+    await opts.beforeWrite?.(tx);
     const [current] = await tx.executeRaw<{ revision: string }>(
       'SELECT knowledge_revision::text AS revision FROM pages WHERE source_id = $1 AND slug = $2 AND deleted_at IS NULL FOR SHARE', [sourceId, conceptSlug]);
     if (!current || current.revision !== expectedRevision) return 'moved' as const;

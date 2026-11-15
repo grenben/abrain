@@ -70,6 +70,15 @@ export const QUOTA_MAX_WAITING_DEFAULT: Readonly<Record<string, number>> = {};
 export const PARAM_HASH_EXCLUDED_KEYS: ReadonlySet<string> = new Set(['__param_hash', '__submitter']);
 
 /**
+ * The canonical semantic payload: all caller-controlled job data, excluding
+ * exactly the two queue-owned metadata fields. Callers validate metadata and
+ * authority separately before using this for identity comparisons.
+ */
+export function semanticJobPayload(data: Record<string, unknown> | undefined): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(data ?? {}).filter(([key]) => !PARAM_HASH_EXCLUDED_KEYS.has(key)));
+}
+
+/**
  * error_text prefix stamped by the waiting-TTL sweep. The 24h-cancellation
  * surfaces (jobs stats, doctor) LIKE-match on this exact prefix — keep the
  * sweep's reason string and the consumers' patterns derived from ONE constant
@@ -150,12 +159,7 @@ function stableStringify(v: unknown): string {
  * forward-safe — old rows just stop matching, which means "no coalesce".
  */
 export function computeParamHash(data: Record<string, unknown>): string {
-  const filtered: Record<string, unknown> = {};
-  for (const k of Object.keys(data)) {
-    if (PARAM_HASH_EXCLUDED_KEYS.has(k)) continue;
-    filtered[k] = data[k];
-  }
-  return createHash('sha256').update(stableStringify(filtered)).digest('hex');
+  return createHash('sha256').update(stableStringify(semanticJobPayload(data))).digest('hex');
 }
 
 export interface AdmissionPolicy {

@@ -47,6 +47,28 @@ import { PINNED_QUESTIONS_SCHEMA_SQL } from '../src/core/questions/schema.ts';
 import { CORE_EDIT_NOTICES_SCHEMA_SQL } from '../src/core/core-memory-schema.ts';
 import { FACT_PURGE_LOOKUP_INDEX_SQL, MEMORY_PURGE_SCHEMA_SQL } from '../src/core/facts/purge-schema.ts';
 import { WRITE_GATE_SCHEMA_SQL } from '../src/core/write-gate-schema.ts';
+import { CODEX_SKILLOPT_BATCH_SCHEMA_SQL } from '../src/core/skillopt/codex-batch-schema.ts';
+import { CODEX_SKILLOPT_CYCLE_SCHEMA_SQL } from '../src/core/skillopt/codex-cycle-schema.ts';
+import { CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL } from '../src/core/skillopt/codex-batch-job-schema.ts';
+import { SUBSCRIPTION_TREE_SCHEMA_SQL } from '../src/core/ai/subscription-tree-schema.ts';
+import { CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL } from '../src/core/brainstorm/codex-fixture-schema.ts';
+import { SUBSCRIPTION_GROUP_SCHEMA_SQL } from '../src/core/ai/subscription-group-schema.ts';
+import { CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL } from '../src/core/skillopt/codex-rollout-schema.ts';
+import { CODEX_SKILLOPT_RUN_SCHEMA_SQL } from '../src/core/skillopt/codex-run-schema.ts';
+import { CODEX_SKILLOPT_JOB_SCHEMA_SQL } from '../src/core/skillopt/codex-job-schema.ts';
+import { CODEX_BOOTSTRAP_RUN_SCHEMA_SQL } from '../src/core/skillopt/codex-bootstrap-schema.ts';
+import { CODEX_SHARED_OPTIMIZER_SCHEMA_SQL } from '../src/core/shared-skills/codex-optimizer-schema.ts';
+import { CODEX_BRAINSTORM_SCHEMA_SQL } from '../src/core/brainstorm/codex-schema.ts';
+import { THINK_AB_SCHEMA_SQL } from '../src/core/calibration/think-ab-schema.ts';
+import { CODEX_EVAL_SCHEMA_SQL } from '../src/core/ai/codex-eval-schema.ts';
+import { CODEX_PROPOSAL_CACHE_SCHEMA_SQL } from '../src/core/ai/codex-proposal-cache-schema.ts';
+import { AUTO_THINK_SCHEMA_SQL } from '../src/core/cycle/auto-think-schema.ts';
+import { THINK_PUBLICATION_SCHEMA_SQL } from '../src/core/think/publication-schema.ts';
+import { CODEX_UPGRADE_SCHEMA_SQL } from '../src/core/ai/private-upgrade-schema.ts';
+import { CODEX_JOB_UPGRADE_SCHEMA_SQL } from '../src/core/minions/codex-upgrade-schema.ts';
+import { CODEX_ACTION_WRITE_BOOTSTRAP_SQL } from '../src/core/persistence/codex-action-schema.ts';
+import { SUBSCRIPTION_JOB_BOOTSTRAP_SQL } from '../src/core/minions/subscription-job-schema.ts';
+import { SUBSCRIPTION_SCHEMA_SQL } from '../src/core/ai/subscription-schema.ts';
 import { BELIEF_LEDGER_SCHEMA_SQL } from '../src/core/belief/schema.ts';
 import { GIT_CANONICAL_SCHEMA_SQL } from '../src/core/persistence/git-canonical-schema.ts';
 import { FUNCTION_SEARCH_PATH_HARDENING_SQL } from '../src/core/function-search-path.ts';
@@ -120,6 +142,28 @@ export const FRAGMENTS: readonly Fragment[] = [
   { source: 'src/core/facts/purge-schema.ts', expr: 'FACT_PURGE_LOOKUP_INDEX_SQL', postgres: FACT_PURGE_LOOKUP_INDEX_SQL, pglite: FACT_PURGE_LOOKUP_INDEX_SQL },
   { source: 'src/core/write-gate-schema.ts', expr: 'WRITE_GATE_SCHEMA_SQL', postgres: WRITE_GATE_SCHEMA_SQL, pglite: WRITE_GATE_SCHEMA_SQL },
   { source: 'src/core/questions/schema.ts', expr: 'PINNED_QUESTIONS_SCHEMA_SQL', postgres: PINNED_QUESTIONS_SCHEMA_SQL, pglite: PINNED_QUESTIONS_SCHEMA_SQL },
+  { source: 'src/core/ai/subscription-schema.ts', expr: 'SUBSCRIPTION_SCHEMA_SQL', postgres: SUBSCRIPTION_SCHEMA_SQL, pglite: SUBSCRIPTION_SCHEMA_SQL },
+  { source: 'src/core/minions/subscription-job-schema.ts', expr: 'SUBSCRIPTION_JOB_BOOTSTRAP_SQL', postgres: SUBSCRIPTION_JOB_BOOTSTRAP_SQL, pglite: SUBSCRIPTION_JOB_BOOTSTRAP_SQL },
+  { source: 'src/core/persistence/codex-action-schema.ts', expr: 'CODEX_ACTION_WRITE_BOOTSTRAP_SQL', postgres: CODEX_ACTION_WRITE_BOOTSTRAP_SQL, pglite: CODEX_ACTION_WRITE_BOOTSTRAP_SQL },
+  { source: 'src/core/ai/private-upgrade-schema.ts', expr: 'CODEX_UPGRADE_SCHEMA_SQL', postgres: CODEX_UPGRADE_SCHEMA_SQL, pglite: CODEX_UPGRADE_SCHEMA_SQL },
+  { source: 'src/core/minions/codex-upgrade-schema.ts', expr: 'CODEX_JOB_UPGRADE_SCHEMA_SQL', postgres: CODEX_JOB_UPGRADE_SCHEMA_SQL, pglite: CODEX_JOB_UPGRADE_SCHEMA_SQL },
+  { source: 'src/core/think/publication-schema.ts', expr: 'THINK_PUBLICATION_SCHEMA_SQL', postgres: THINK_PUBLICATION_SCHEMA_SQL, pglite: THINK_PUBLICATION_SCHEMA_SQL },
+  { source: 'src/core/cycle/auto-think-schema.ts', expr: 'AUTO_THINK_SCHEMA_SQL', postgres: AUTO_THINK_SCHEMA_SQL, pglite: AUTO_THINK_SCHEMA_SQL },
+  { source: 'src/core/calibration/think-ab-schema.ts', expr: 'THINK_AB_SCHEMA_SQL', postgres: THINK_AB_SCHEMA_SQL, pglite: THINK_AB_SCHEMA_SQL },
+  { source: 'src/core/brainstorm/codex-schema.ts', expr: 'CODEX_BRAINSTORM_SCHEMA_SQL', postgres: CODEX_BRAINSTORM_SCHEMA_SQL, pglite: CODEX_BRAINSTORM_SCHEMA_SQL },
+  { source: 'src/core/brainstorm/codex-fixture-schema.ts', expr: 'CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL', postgres: CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL, pglite: CODEX_BRAINSTORM_FIXTURE_SCHEMA_SQL },
+  { source: 'src/core/ai/codex-eval-schema.ts', expr: 'CODEX_EVAL_SCHEMA_SQL', postgres: CODEX_EVAL_SCHEMA_SQL, pglite: CODEX_EVAL_SCHEMA_SQL },
+  { source: 'src/core/ai/codex-proposal-cache-schema.ts', expr: 'CODEX_PROPOSAL_CACHE_SCHEMA_SQL', postgres: CODEX_PROPOSAL_CACHE_SCHEMA_SQL, pglite: CODEX_PROPOSAL_CACHE_SCHEMA_SQL },
+  { source: 'src/core/ai/subscription-group-schema.ts', expr: 'SUBSCRIPTION_GROUP_SCHEMA_SQL', postgres: SUBSCRIPTION_GROUP_SCHEMA_SQL, pglite: SUBSCRIPTION_GROUP_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-rollout-schema.ts', expr: 'CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL', postgres: CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL, pglite: CODEX_SKILLOPT_ROLLOUT_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-run-schema.ts', expr: 'CODEX_SKILLOPT_RUN_SCHEMA_SQL', postgres: CODEX_SKILLOPT_RUN_SCHEMA_SQL, pglite: CODEX_SKILLOPT_RUN_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-job-schema.ts', expr: 'CODEX_SKILLOPT_JOB_SCHEMA_SQL', postgres: CODEX_SKILLOPT_JOB_SCHEMA_SQL, pglite: CODEX_SKILLOPT_JOB_SCHEMA_SQL },
+  { source: 'src/core/shared-skills/codex-optimizer-schema.ts', expr: 'CODEX_SHARED_OPTIMIZER_SCHEMA_SQL', postgres: CODEX_SHARED_OPTIMIZER_SCHEMA_SQL, pglite: CODEX_SHARED_OPTIMIZER_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-bootstrap-schema.ts', expr: 'CODEX_BOOTSTRAP_RUN_SCHEMA_SQL', postgres: CODEX_BOOTSTRAP_RUN_SCHEMA_SQL, pglite: CODEX_BOOTSTRAP_RUN_SCHEMA_SQL },
+  { source: 'src/core/ai/subscription-tree-schema.ts', expr: 'SUBSCRIPTION_TREE_SCHEMA_SQL', postgres: SUBSCRIPTION_TREE_SCHEMA_SQL, pglite: SUBSCRIPTION_TREE_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-batch-schema.ts', expr: 'CODEX_SKILLOPT_BATCH_SCHEMA_SQL', postgres: CODEX_SKILLOPT_BATCH_SCHEMA_SQL, pglite: CODEX_SKILLOPT_BATCH_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-cycle-schema.ts', expr: 'CODEX_SKILLOPT_CYCLE_SCHEMA_SQL', postgres: CODEX_SKILLOPT_CYCLE_SCHEMA_SQL, pglite: CODEX_SKILLOPT_CYCLE_SCHEMA_SQL },
+  { source: 'src/core/skillopt/codex-batch-job-schema.ts', expr: 'CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL', postgres: CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL, pglite: CODEX_SKILLOPT_BATCH_JOB_SCHEMA_SQL },
   { source: 'src/core/belief/schema.ts', expr: 'BELIEF_LEDGER_SCHEMA_SQL', postgres: BELIEF_LEDGER_SCHEMA_SQL, pglite: BELIEF_LEDGER_SCHEMA_SQL },
   // Its region must stay the last statement of src/schema.sql (regions render where their markers sit, not in this
   // array's order): a replay's CREATE OR REPLACE resets each function's search_path, so pg_temp is appended after every one (#7632).

@@ -125,6 +125,7 @@ describe('runExtractExplain --json', () => {
       expect(sql).toMatch(new RegExp(`SUM\\(${col}\\)::text`));
     }
     expect(sql).not.toMatch(/SUM\(cost_usd\)::text/);
+    expect(sql).toContain('SUM(COALESCE((to_jsonb(extract_rollup_7d)->>\'subscription_run_count\')::integer, 0)) AS subscription_run_count');
   });
 
   it('Number()-coerces the ::text-cast rollup columns for --json (matches extract-status.ts)', async () => {
@@ -150,6 +151,47 @@ describe('runExtractExplain --json', () => {
       expect(typeof parsed.rollup_7d.halt_count).toBe('number');
       expect(parsed.rollup_7d.round_completed_count).toBe(5);
       expect(parsed.rollup_7d.cost_7d_usd).toBe(12.5);
+    });
+  });
+
+  it('keeps subscription totals unknown while exposing the API-metered subtotal', async () => {
+    const engine = stubEngine({
+      cost_7d_usd: 12.5,
+      subscription_run_count: '2',
+      eval_pass_count: '0',
+      eval_fail_count: '0',
+      halt_count: '0',
+      round_completed_count: '2',
+      last_updated_at: null,
+    });
+
+    await withEnv({ GBRAIN_HOME: tmpDir, GBRAIN_SCHEMA_PACK: undefined }, async () => {
+      const output = await runAndCapture(engine, ['--json']);
+      const parsed = JSON.parse(output);
+      expect(parsed.rollup_7d.cost_7d_usd).toBeNull();
+      expect(parsed.rollup_7d.api_metered_cost_7d_usd).toBe(12.5);
+      expect(parsed.rollup_7d.subscription_run_count).toBe(2);
+
+      const textOutput = await runAndCapture(engine);
+      expect(textOutput).toContain('cost_usd:         unknown');
+    });
+  });
+
+  it('preserves ordinary API cost totals when no subscription runs were recorded', async () => {
+    const engine = stubEngine({
+      cost_7d_usd: 12.5,
+      subscription_run_count: 0,
+      eval_pass_count: '0',
+      eval_fail_count: '0',
+      halt_count: '0',
+      round_completed_count: '2',
+      last_updated_at: null,
+    });
+
+    await withEnv({ GBRAIN_HOME: tmpDir, GBRAIN_SCHEMA_PACK: undefined }, async () => {
+      const parsed = JSON.parse(await runAndCapture(engine, ['--json']));
+      expect(parsed.rollup_7d.cost_7d_usd).toBe(12.5);
+      expect(parsed.rollup_7d.api_metered_cost_7d_usd).toBeUndefined();
     });
   });
 

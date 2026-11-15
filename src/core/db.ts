@@ -12,6 +12,7 @@ import { verifySchema } from './schema-verify.ts';
 import { POOL_END_TIMEOUT_SECONDS } from './pool-end-timeout.ts';
 import { isConnectTimeoutError, isRetryableConnError } from './retry-matcher.ts';
 import { loadSharedParameterTypes, sharedArrayTypes, sharedParameterTypes, type SharedArrayTypes, type SharedParameterTypes } from './pg-type-cache.ts';
+import { acquireInitSchemaAdvisoryLock, INIT_SCHEMA_LOCK_KEY, type InitSchemaLockOpts } from './postgres-engine/init-schema-lock.ts';
 
 let sql: ReturnType<typeof postgres> | null = null;
 let connectedUrl: string | null = null;
@@ -593,12 +594,41 @@ export async function disconnect(): Promise<void> {
   if (s) await endPoolBounded(s);
 }
 
-export async function initSchema(): Promise<void> {
-  const conn = getConnection();
-  // Advisory lock prevents concurrent initSchema() calls from deadlocking
-  // Lock-census (PR6 D5): INTENTIONALLY brain-global (session lock, fixed key 42) — schema replay mutates the whole database, not one source.
-  await conn`SELECT pg_advisory_lock(42)`;
+/**
+ * Reserve one client connection for the complete schema bootstrap/replay and
+ * run the advisory-lock polling on that connection too. This keeps acquire,
+ * DDL and unlock backend-affine on direct Postgres and session poolers. A
+ * transaction-mode pooler does NOT provide session affinity between these
+ * autocommit statements; reserving a postgres.js client cannot change that.
+ */
+export async function withInitSchemaConnection<T>(
+  pool: ReturnType<typeof postgres>,
+  fn: (conn: ReturnType<typeof postgres>) => Promise<T>,
+  lockOpts: InitSchemaLockOpts = {},
+): Promise<T> {
+  const conn = await pool.reserve();
+  let acquired = false;
   try {
+    // Lock-census (PR6 D5): brain-global because schema replay mutates the
+    // whole database, not one source. Session locks are not backend-affine
+    // through transaction-mode poolers.
+    await acquireInitSchemaAdvisoryLock(
+      async (query) => conn.unsafe(query) as Promise<Array<Record<string, unknown>>>,
+      lockOpts,
+    );
+    acquired = true;
+    return await fn(conn);
+  } finally {
+    try {
+      if (acquired) await conn.unsafe(`SELECT pg_advisory_unlock(${INIT_SCHEMA_LOCK_KEY})`);
+    } finally {
+      conn.release();
+    }
+  }
+}
+
+export async function initSchema(): Promise<void> {
+  await withInitSchemaConnection(getConnection(), async (conn) => {
     // #4477: run the same forward-reference bootstrap as
     // PostgresEngine.initSchema BEFORE replaying the schema blob. Without
     // it, an older brain whose tables predate the blob's forward-referenced
@@ -607,9 +637,7 @@ export async function initSchema(): Promise<void> {
     // installs and modern brains.
     await applyPostgresForwardReferenceBootstrap(conn);
     await conn.unsafe(SCHEMA_SQL);
-  } finally {
-    await conn`SELECT pg_advisory_unlock(42)`;
-  }
+  });
 }
 
 export { verifySchema } from './schema-verify.ts';

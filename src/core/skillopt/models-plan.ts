@@ -39,6 +39,7 @@ import { DEFAULT_COLUMN_NAME, resolveEmbeddingColumn } from '../search/embedding
 import { loadSearchModeConfig, resolveSearchMode } from '../search/mode.ts';
 import type { ReflectCap } from './output-cap.ts';
 import type { BenchmarkTask } from './types.ts';
+import type { PrivateRole } from '../ai/private-roles.ts';
 
 export type ModelSource = ResolveSource | 'file_config' | 'benchmark' | 'unknown';
 
@@ -110,23 +111,40 @@ export async function resolveSkillOptModels(
   engine: ConfigReader | null,
   flags: SkillOptModelFlags = {},
 ): Promise<SkillOptModels> {
-  const flagFor: Record<SkillOptRole, string | undefined> = {
-    optimizer: flags.optimizerModel,
-    target: flags.targetModel,
-    judge: flags.judgeModel,
-  };
   const out = {} as SkillOptModels;
   for (const role of ['optimizer', 'target', 'judge'] as const) {
-    const { tier, flag } = ROLE_RESOLUTION[role];
-    const r = await resolveModelDetailed(engine, { cliFlag: flagFor[role], tier, fallback: TIER_DEFAULTS[tier] });
-    out[role] = {
-      model: sanitizeEcho(r.model),
-      source: r.source,
-      origin: describeResolveOrigin(r.source, { tier, flag }),
-      ...(r.substituted_from ? { substituted_from: sanitizeEcho(r.substituted_from), substitution_reason: r.substitution_reason } : {}),
-    };
+    out[role] = await resolveSkillOptModelRole(engine, flags, role);
   }
   return out;
+}
+
+/**
+ * Resolve only a role required by the selected operation (for example,
+ * bootstrap uses optimizer inputs under `skillopt-bootstrap`). The override
+ * changes only private authorization identity; tier and CLI-pin provenance
+ * still come from the selected SkillOpt role.
+ */
+export async function resolveSkillOptModelRole(
+  engine: ConfigReader | null,
+  flags: SkillOptModelFlags,
+  role: SkillOptRole,
+  privateRoleOverride?: PrivateRole,
+): Promise<ModelResolution> {
+  const { tier, flag } = ROLE_RESOLUTION[role];
+  const privateRole = privateRoleOverride ?? (role === 'optimizer' ? 'skillopt-optimizer'
+    : role === 'target' ? 'iterative-minions' : 'skillopt-judge');
+  const cliFlag = role === 'optimizer' ? flags.optimizerModel
+    : role === 'target' ? flags.targetModel : flags.judgeModel;
+  const r = await resolveModelDetailed(engine, {
+    privateRole, cliFlag, tier, fallback: TIER_DEFAULTS[tier],
+    ...(role === 'target' ? { configKey: 'models.subagent' } : {}),
+  });
+  return {
+    model: sanitizeEcho(r.model),
+    source: r.source,
+    origin: describeResolveOrigin(r.source, { tier, flag, ...(role === 'target' ? { configKey: 'models.subagent' } : {}) }),
+    ...(r.substituted_from ? { substituted_from: sanitizeEcho(r.substituted_from), substitution_reason: r.substitution_reason } : {}),
+  };
 }
 
 /** Role provenance for models handed over without one (programmatic callers, legacy jobs): fail-closed `unknown`. */

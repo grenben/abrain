@@ -36,6 +36,7 @@ export const GUEST_DERIVED_PRODUCERS = {
   propose_takes: { guest: 'skip', sites: [CYCLE, 'src/core/cycle/propose-takes.ts'] },
   grade_takes: { guest: 'none', reason: NO_ROWS },
   calibration_profile: { guest: 'none', reason: NO_ROWS },
+  auto_think: { guest: 'skip', sites: [CYCLE] },
   edge_contradictions: { guest: 'none', reason: NO_ROWS },
   claim_conflicts: { guest: 'none', reason: NO_ROWS },
   drift: { guest: 'none', reason: NO_ROWS },

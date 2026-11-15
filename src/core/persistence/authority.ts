@@ -1,4 +1,5 @@
 import type { BrainEngine } from '../engine.ts';
+import { authorizeCodexRequest } from './codex-action-guard.ts';
 import type { OperationContext } from '../ops/contract.ts';
 import { opError, OperationError } from '../ops/contract.ts';
 import { readFix } from '../ops/op-fix.ts';
@@ -214,6 +215,7 @@ export async function authorizeWrite(engine: SqlEngine, a: WriteAuthority, opera
 }
 /** `pageVisibility: false` is for a caller that checks the target's visibility itself after locking the page. */
 export async function authorizeStoredRequest(engine: SqlEngine, row: WriteRequest, lock = false, opts: { pageVisibility?: boolean } = {}): Promise<void> {
+  await authorizeCodexRequest(engine, row, lock);
   // #5984: one membership read per source per transaction; a FOR SHARE read also answers a plain one.
   // The source lock and the writer check are sent together in lock order; a source refusal is reported first.
   await pipelined(engine, [

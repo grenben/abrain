@@ -5,8 +5,8 @@
  * are uncalibrated until a calibration row exists for this model. Spend is
  * recorded once, by chat(), as kind `chat` with purpose `decide:<slot>`.
  *
- * Capability: only openai-compatible recipes that declare
- * `supports_structured_outputs` enforce the schema server-side; other routes
+ * Capability: openai-compatible recipes enforce schemas server-side; the
+ * Codex CLI route enforces them at the host admission boundary. Other routes
  * are `prompted` (strictly validated, but `on` refuses them). Model identity
  * is the provider-reported snapshot, else the requested id plus an endpoint
  * fingerprint.
@@ -26,7 +26,8 @@ export function llmCapability(provider: string): LlmCapability {
   try {
     const { recipe } = resolveRecipe(llmChatModel(provider));
     if (!recipe.touchpoints.chat) return 'unknown';
-    return recipe.implementation === 'openai-compatible' && recipe.touchpoints.chat.supports_structured_outputs ? 'structured' : 'prompted';
+    return (recipe.implementation === 'openai-compatible' || recipe.implementation === 'codex-cli') &&
+      recipe.touchpoints.chat.supports_structured_outputs ? 'structured' : 'prompted';
   } catch {
     return 'unknown';
   }
@@ -86,6 +87,28 @@ export function parseLlmReply(text: string, questions: readonly DecideQuestion[]
   const answers = (parsed as { answers?: unknown })?.answers;
   if (!answers || typeof answers !== 'object') throw new DecideError('malformed_response', 'decide: llm reply has no answers');
   return Object.fromEntries(questions.map((q) => [q.id, parseAnswer(q, (answers as Record<string, unknown>)[q.id])]));
+}
+
+/** Codex requires a closed schema and host validation before subscription admission. */
+export function codexDecideSchema(questions: readonly DecideQuestion[]) {
+  const probability = { type: 'number', minimum: 0, maximum: 1 };
+  const closed = (properties: Record<string, unknown>) => ({
+    type: 'object', properties, required: Object.keys(properties), additionalProperties: false,
+  });
+  const answer = (q: DecideQuestion) => {
+    if (q.kind === 'noul') return closed({ type: { type: 'string', const: 'noul' }, noul: probability });
+    const labels = q.kind === 'choice' ? Object.keys(q.options) : q.levels.map((_, i) => String(i));
+    if (labels.length === 0) throw new DecideError('malformed_response', `decide: ${q.id} has no answer labels`);
+    const probabilities = closed(Object.fromEntries(labels.map(label => [label, probability])));
+    return q.kind === 'choice'
+      ? closed({ type: { type: 'string', const: 'choice' }, choice: { type: 'string', enum: labels }, confidence: probability, probabilities })
+      : closed({ type: { type: 'string', const: 'score' }, score: { type: 'number', minimum: 0, maximum: q.levels.length - 1 }, confidence: probability, probabilities });
+  };
+  return {
+    name: 'codex-decide-v1',
+    schema: closed({ answers: closed(Object.fromEntries(questions.map(q => [q.id, answer(q)]))) }),
+    validateCodexProposal: (text: string) => { parseLlmReply(text, questions); },
+  };
 }
 
 export function llmModelIdentity(requested: string, responseModel: string | undefined, baseUrl: string | undefined): string {

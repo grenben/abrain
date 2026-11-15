@@ -31,6 +31,9 @@ import type { SearchResult } from '../../core/types.ts';
 import { renderChatBlock, type ChatSessionForPrompt } from './sanitize.ts';
 import { rawSessionId, sessionIdFromSlug, type SlugToRawMap } from './metrics.ts';
 import { sha256Hex, stableStringify } from './run-config.ts';
+import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { codexReader } from './codex-reader.ts';
+import { CODEX_READER_PROTOCOL } from './codex-protocols.ts';
 
 /** Re-exported for existing importers; the definition lives in metrics.ts (the SlugToRawMap owner). */
 export { rawSessionId } from './metrics.ts';
@@ -90,7 +93,8 @@ export function resolveReaderConfig(input: { mode?: string; maxTokens?: number }
 }
 
 export function readerConfigHash(config: ReaderConfig, model: string): string {
-  return sha256Hex(stableStringify({ mode: config.mode, max_tokens: config.maxTokens, prompt_version: config.promptVersion, prompt_sha: config.promptSha, model }));
+  return sha256Hex(stableStringify({ mode: config.mode, max_tokens: config.maxTokens, prompt_version: config.promptVersion, prompt_sha: config.promptSha, model,
+    ...(model.startsWith('codex-cli:') ? { native_protocol: CODEX_READER_PROTOCOL } : {}) }));
 }
 
 /** --retrieval-only: a text block of retrieved sessions for downstream graders. */
@@ -182,6 +186,7 @@ export function readerUsageFromMessage(message: Anthropic.Message & { gbrain_usa
 }
 
 export interface ReaderAnswer {
+  native?: { protocol: string; cache_hit: boolean; status: 'answered' | 'abstained'; citations: Array<{ session_id: string; quote: string }> };
   text: string;
   finish_reason: string | null;
   /** A1: provider usage for this reader call; null when no call was made or none was reported. */
@@ -230,6 +235,11 @@ export async function generateAnswer(
     rendered,
   }, model, config);
 
+  if (readPrivateCodexConfig()) return {
+    ...await codexReader({ client, model, system: request.system, prompt: request.messages[0]!.content,
+      maxTokens: config.maxTokens, sessions, maxSessionChars: READER_MAX_SESSION_CHARS }),
+    context_chars: rendered.length, context_sessions: sessions.length, sessions_truncated: truncatedCount,
+  };
   const response = await client.create(request);
   const reported = typeof response.model === 'string' && response.model.length > 0 && response.model !== model
     ? response.model

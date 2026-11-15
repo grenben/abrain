@@ -1,5 +1,5 @@
 import type { Migration } from './types.ts';
-import { LINK_ASSERTION_TENSE_SQL, LINK_TEMPORAL_SCHEMA_SQL } from '../link-temporal-schema.ts';
+import { LINK_ASSERTION_TENSE_SQL, LINK_TEMPORAL_SCHEMA_V204_SQL } from '../link-temporal-schema.ts';
 
 // Applied by src/core/migrate.ts on the next initSchema(); see docs/ENGINES.md
 // ("Canonical schema sources") for when schema.sql or a TS fragment also changes.
@@ -15,5 +15,5 @@ export const v204: Migration = {
   name: 'links_temporal_state',
   idempotent: true,
   sql: `${LINK_ASSERTION_TENSE_SQL}
-${LINK_TEMPORAL_SCHEMA_SQL}`,
+${LINK_TEMPORAL_SCHEMA_V204_SQL}`,
 };

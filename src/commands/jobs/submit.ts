@@ -7,6 +7,7 @@ import { MinionWorker } from '../../core/minions/worker.ts';
 import { reportInlineWorkerConfiguration } from '../jobs-readiness.ts';
 import { intFlagValue, numberFlagValue } from '../../cli/flag-values.ts';
 import { spendSubmitSummary, type SpendAuthorization } from '../../core/minions/spend-authorization.ts';
+import { prepareCodexJobSubmit, codexSubmitSummary } from './subscription.ts';
 
 export async function runJobsSubmit({ args, engine, queue }: JobsCommandContext): Promise<void> {
   // Lazy: jobs.ts imports this module statically, so a static import back would be a cycle.
@@ -62,6 +63,12 @@ export async function runJobsSubmit({ args, engine, queue }: JobsCommandContext)
     data.redact_secrets = true;
   }
 
+  // Subscription authority is derived only from explicit local CLI flags and
+  // strict private policy; it is never accepted from --params or --yes.
+  // Prepare before the dry-run branch so previews validate the actual
+  // admission, but do not create a run or enqueue work.
+  const codex = await prepareCodexJobSubmit(engine, name, data, args);
+
   // Dry-run reports real admission; follow starts and awaits an inline worker.
   const trusted = {
     ...(isProtectedJobName(name) ? { allowProtectedSubmit: true } : {}),
@@ -91,6 +98,7 @@ export async function runJobsSubmit({ args, engine, queue }: JobsCommandContext)
     if (idempotencyKey) console.log(`  Idempotency key: ${idempotencyKey}`);
     if (delay > 0) console.log(`  Delay: ${delay}ms`);
     console.log(`  Data: ${JSON.stringify(data)}`);
+    if (codex.codexSubscription) console.log(`  Codex: ${codexSubmitSummary(codex.codexSubscription)}`);
     return;
   }
 
@@ -113,7 +121,7 @@ export async function runJobsSubmit({ args, engine, queue }: JobsCommandContext)
   }
 
   // A4 + T8: queued paid enrich/subagent work needs the user's authorization; it is stored on the row and the worker enforces its cap.
-  let spendAuthorization: SpendAuthorization | undefined;
+  let spendAuthorization: SpendAuthorization | undefined = codex.spendAuthorization;
   // W4.5: a re-embedding reindex job carries the user's authorization too; its handler refuses a job without one.
   if (name === 'reindex' && data.dryRun !== true && data.noEmbed !== true) {
     const { requireReindexConsent } = await import('../../core/reindex-consent.ts');
@@ -133,7 +141,7 @@ export async function runJobsSubmit({ args, engine, queue }: JobsCommandContext)
       return;
     }
   }
-  if (PAID_SUBMIT_NAMES.has(name)) {
+  if (PAID_SUBMIT_NAMES.has(name) && !codex.codexSubscription) {
     const authorized = await authorizePaidSubmit(engine, name, data, args);
     if (!authorized) return;
     spendAuthorization = authorized;
@@ -176,7 +184,8 @@ export async function runJobsSubmit({ args, engine, queue }: JobsCommandContext)
     lock_duration_ms: lockDurationMs,
     idempotency_key: idempotencyKey,
     queue: queueName,
-  }, { ...trusted, ...(spendAuthorization ? { spendAuthorization } : {}) });
+  }, { ...trusted, ...(codex.codexSubscription ? { codexSubscription: codex.codexSubscription } : {}),
+    ...(spendAuthorization ? { spendAuthorization } : {}) });
   if (spendAuthorization) {
     for (const line of spendSubmitSummary(spendAuthorization, [job], spendAuthorization.argv ?? []).lines) process.stderr.write(`${line}\n`);
   }

@@ -39,9 +39,8 @@ import { BaseCyclePhase, effectivePhaseDeadlineMs, type ScopedReadOpts, type Bas
 import { hybridSearch } from '../search/hybrid.ts';
 import { INTERNAL_BREADTH_SEARCH_OPTS } from '../search/internal-breadth.ts';
 import type { SearchResult } from '../types.ts';
-import { chat as gatewayChat, getChatModel } from '../ai/gateway.ts';
+import { chat as gatewayChat } from '../ai/gateway.ts';
 import { createGlobalLlmHaltTracker, haltedClassOf, type GlobalLlmErrorClass } from '../ai/errors.ts';
-import { splitProviderModelId } from '../model-id.ts';
 import { GBrainError } from '../types.ts';
 import type { OperationContext } from '../operations.ts';
 import type { BrainEngine, Take, TakeResolution } from '../engine.ts';
@@ -52,6 +51,9 @@ import { submitPageMutation } from '../persistence/page-mutations.ts';
 import { maintenanceTransaction } from '../persistence/attribution.ts';
 import { utcDate } from './cycle-date.ts';
 import { isConfigTruthy } from '../config.ts';
+import { resolveGradeIdentity, codexGradeSchema, sequentialJudges } from './grade-takes-codex.ts';
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
+import { formatCycleCost } from './budget-meter.ts';
 
 /**
  * Bump when the judge prompt or the JSON output shape changes. Old verdicts
@@ -475,9 +477,11 @@ export async function defaultJudge(input: {
     .replace('{EVIDENCE_BLOCK}', input.evidence);
 
   const result = await chatFn({
+    privateRole: 'take-grading',
     messages: [{ role: 'user', content: prompt }],
     ...(input.modelHint ? { model: input.modelHint } : {}),
     maxTokens: 600,
+    responseSchema: codexGradeSchema(input.evidence),
     allowFallback: false,
   });
   const parsed = parseJudgeOutput(result.text);
@@ -499,10 +503,11 @@ export async function defaultJudge(input: {
  * (which stay unresolved while auto-resolve is off) leave room for the ones
  * behind them. takeIsOldEnough still runs on each take for dates SQL cannot read.
  */
-function listGradeWindow(engine: BrainEngine, opts: { minAgeMonths: number; promptVersion: string; judgeModelId: string; limit: number }): Promise<Take[]> {
+function listGradeWindow(engine: BrainEngine, opts: { minAgeMonths: number; promptVersion: string; judgeModelId: string; limit: number } & ScopedReadOpts): Promise<Take[]> {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - opts.minAgeMonths);
   return engine.listTakes({
+    ...opts,
     resolved: false, active: true, sortBy: 'since_date', oldestFirst: true, sinceOnOrBefore: utcDate(cutoff),
     ungradedFirst: { promptVersion: opts.promptVersion, judgeModelId: opts.judgeModelId }, limit: opts.limit,
   });
@@ -545,6 +550,7 @@ function verdictToResolution(verdict: JudgeVerdict, resolvedByLabel: string): Ta
 const GRADE_TAKES_PHASE_DEADLINE_MS = 30 * 60 * 1000;
 
 class GradeTakesPhase extends BaseCyclePhase {
+  protected readonly privateRoles = ['take-grading'] as const;
   readonly name = 'grade_takes' as CyclePhase;
   protected readonly budgetUsdKey = 'cycle.grade_takes.budget_usd';
   protected readonly budgetUsdDefault = 3.0;
@@ -564,13 +570,11 @@ class GradeTakesPhase extends BaseCyclePhase {
     _ctx: OperationContext,
     opts: GradeTakesOpts,
   ): Promise<{ summary: string; details: Record<string, unknown>; status?: PhaseStatus }> {
-    const judge = opts.judge ?? defaultJudge;
     // #2811: bind the engine here so the injected-seam type stays
     // (take, scope) => Promise<string>.
     const evidenceRetriever: EvidenceRetrieverFn =
       opts.evidenceRetriever ??
       ((take: Take, takeScope: ScopedReadOpts) => defaultEvidenceRetriever(engine, take, takeScope));
-    const promptVersion = opts.promptVersion ?? GRADE_TAKES_PROMPT_VERSION;
     const minAgeMonths = opts.minAgeMonths ?? 6;
     const takeLimit = opts.takeLimit ?? 50;
     const autoResolve = opts.autoResolve // D17 default OFF; an unreadable key stays off
@@ -584,14 +588,16 @@ class GradeTakesPhase extends BaseCyclePhase {
     // into judge_model_id, the evidence signature, and budget metering — on
     // brains with a different chat_model, telemetry priced and recorded a
     // model that never ran.
-    const judgeModelFull = opts.model ?? getChatModel();
+    const { judgeModelFull, judgeModelId, privateMode, promptVersion } = await resolveGradeIdentity(
+      engine, opts.model, opts.ensembleJudges, opts.promptVersion ?? GRADE_TAKES_PROMPT_VERSION,
+    );
+    const judge = privateMode ? defaultJudge : opts.judge ?? defaultJudge;
     // Bare tail for the stored judge_model_id + evidence signature
     // (historical convention). Stock installs are unchanged: getChatModel()
     // defaults to 'anthropic:claude-sonnet-4-6', whose tail equals the old
     // hardcoded value — zero verdict-cache invalidation. A genuinely
     // different chat_model invalidates, which is correct: the judge really
     // changed.
-    const judgeModelId = splitProviderModelId(judgeModelFull).model || judgeModelFull;
 
     const useEnsemble = opts.useEnsemble ?? false;
     const ensembleThreshold = opts.ensembleThreshold ?? 0.85;
@@ -638,7 +644,7 @@ class GradeTakesPhase extends BaseCyclePhase {
     // streak; auth/billing halt on the first hit.
     const llmHalt = createGlobalLlmHaltTracker();
 
-    const takes = await listGradeWindow(engine, { minAgeMonths, promptVersion, judgeModelId, limit: takeLimit });
+    const takes = await listGradeWindow(engine, { minAgeMonths, promptVersion, judgeModelId, limit: takeLimit, ...scope });
 
     if (opts.reporter) {
       opts.reporter.start('grade_takes.takes' as never, takes.length);
@@ -699,7 +705,7 @@ class GradeTakesPhase extends BaseCyclePhase {
       if (!budget.allowed) {
         result.budget_exhausted = true;
         result.warnings.push(
-          `budget exhausted at take ${result.takes_scanned}/${takes.length} (cumulative $${budget.cumulativeCostUsd.toFixed(4)} / cap $${budget.budgetUsd.toFixed(2)})`,
+          `budget exhausted at take ${result.takes_scanned}/${takes.length} (cumulative ${formatCycleCost(budget.cumulativeCostUsd)} / cap $${budget.budgetUsd.toFixed(2)})`,
         );
         break;
       }
@@ -741,9 +747,13 @@ class GradeTakesPhase extends BaseCyclePhase {
 
       if (useEnsemble && inBorderlineBand && opts.ensembleJudges && opts.ensembleJudges.length > 0) {
         result.ensemble_invoked += 1;
-        const ensembleResults = await Promise.allSettled(
-          opts.ensembleJudges.map(j => j.fn({ take, evidence, modelHint: j.modelId })),
-        );
+        const calls = opts.ensembleJudges.map(j => () => j.fn({ take, evidence, modelHint: j.modelId }));
+        const ensembleResults = privateMode ? await sequentialJudges(calls) : await Promise.allSettled(calls.map(call => call()));
+        if (privateMode && ensembleResults.some(r => r.status === 'rejected')) {
+          result.judge_calls_failed += 1;
+          result.warnings.push(`ensemble proposal failed on take ${take.id}; no verdict cached`);
+          continue;
+        }
 
         // #3044: Promise.allSettled flattens judge rejections into null
         // verdicts below, so a whole-run condition (revoked key, exhausted
@@ -961,7 +971,7 @@ export async function runPhaseGradeTakes(
   ctx: OperationContext,
   opts: GradeTakesOpts = {},
 ) {
-  return new GradeTakesPhase().run(ctx, opts);
+  return withPrivateRoleScope(['take-grading'], () => new GradeTakesPhase().run(ctx, opts));
 }
 
 export const __testing = {

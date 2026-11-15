@@ -36,9 +36,13 @@ import { PENDING_WRITE_EXIT_CODE } from '../core/exit-codes.ts';
 import { randomBytes } from 'crypto';
 import { legacyNestedErrorDocument } from '../core/agent-output.ts';
 import { CapFlagError, mergeCapFlag, parseCapFlag, type CapFlag } from '../core/budget/cap-flag.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
+import { brainstormAllowanceRequestId, withBrainstormAllowance } from '../core/brainstorm/codex-local-grant.ts';
+import { resolveSourceWithTier, localFederatedSourceIds, ALL_SOURCES } from '../core/source-resolver.ts';
 
 export interface BrainstormCliArgs {
   question?: string;
+  source?: string;
   json: boolean;
   save?: boolean;
   yes: boolean;
@@ -74,6 +78,13 @@ export function parseBrainstormArgs(args: string[]): BrainstormCliArgs {
     const arg = args[i];
     if (arg === '--help' || arg === '-h') {
       out.help = true;
+    } else if (arg === '--source') {
+      const value = args[++i];
+      if (!value || value.startsWith('--') || out.source !== undefined) {
+        out.error = '--source requires one source ID';
+        return out;
+      }
+      out.source = value;
     } else if (arg === '--json') {
       out.json = true;
     } else if (arg === '--save') {
@@ -132,6 +143,11 @@ export function parseBrainstormArgs(args: string[]): BrainstormCliArgs {
         return out;
       }
       out.resume = v;
+    } else if (arg.startsWith('--codex-') || arg === '--aux-max-usd') {
+      // These are consumed and validated by withBrainstormAllowance before
+      // this parser runs. Reaching this branch means a wrapper was bypassed.
+      out.error = `private allowance flag must be handled before brainstorm parsing: ${arg}`;
+      return out;
     } else if (arg === '--force-resume') {
       out.forceResume = true;
     } else if (arg === '--list-runs') {
@@ -159,6 +175,7 @@ them, judges with a 5-axis rubric. Output cites close + far slugs with a
 
 Options:
   --json                          Emit BrainstormResult as JSON (for agents)
+  --source ID                     Limit evidence to one registered source
   --save                          Save to wiki/ideas/<date>-brainstorm-<slug>.md (default ON)
   --no-save                       Don't save; print only
   --yes, -y                       Skip the 10s cost-preview wait (TTY only)
@@ -175,6 +192,9 @@ Options:
   --resume RUN_ID                 Resume a previously-crashed run (uses --list-runs ids)
   --force-resume                  Bypass the 7-day staleness gate on --resume
   --list-runs                     Print saved run_ids and exit
+  --codex-max-attempts N --codex-max-turns N --codex-deadline UTC
+  --codex-request-id UUID         Private Codex allowance and stable recovery identity
+  --aux-max-usd N                 Separate paid embedding/reranking allowance
   --help, -h                      Show this help
 
 Examples:
@@ -199,6 +219,7 @@ implicit axiom. Output is ephemeral by default — pass --save if an idea lands.
 
 Options:
   --json                          Emit BrainstormResult as JSON
+  --source ID                     Limit evidence to one registered source
   --save                          Persist to wiki/ideas/<date>-lsd-<slug>.md (default OFF)
   --yes, -y                       Skip the 10s cost-preview wait (TTY only)
   --limit N                       Override the far-bank size (default 12)
@@ -214,6 +235,9 @@ Options:
   --resume RUN_ID                 Resume a previously-crashed run (uses --list-runs ids)
   --force-resume                  Bypass the 7-day staleness gate on --resume
   --list-runs                     Print saved run_ids and exit
+  --codex-max-attempts N --codex-max-turns N --codex-deadline UTC
+  --codex-request-id UUID         Private Codex allowance and stable recovery identity
+  --aux-max-usd N                 Separate paid embedding/reranking allowance
   --help, -h                      Show this help
 
 Examples:
@@ -269,6 +293,23 @@ async function runBrainstormCli(
   }
 
   const config = loadConfig() ?? {};
+  const privateMode = !!readPrivateCodexConfig();
+  let sourceId = parsed.source;
+  let sourceIds: string[] | undefined;
+  // Resolve explicit source names before querying. In private mode also resolve
+  // the implicit local scope and only federate sources allowed by that tier;
+  // never let an omitted flag silently become an unscoped native read.
+  if (parsed.source !== undefined || privateMode) {
+    const resolved = await resolveSourceWithTier(engine, parsed.source ?? null);
+    if (resolved.source_id === ALL_SOURCES) {
+      sourceId = undefined;
+      const available = await engine.executeRaw<{ id: string }>('SELECT id FROM sources WHERE NOT archived ORDER BY id');
+      sourceIds = available.map(source => source.id);
+    } else {
+      sourceId = resolved.source_id;
+      sourceIds = await localFederatedSourceIds(engine, sourceId, resolved.tier);
+    }
+  }
   // Honor env-var skip for scripted environments that can't easily pass --yes.
   const skipPreview = parsed.yes || process.env.GBRAIN_NO_BRAINSTORM_PREVIEW === '1';
 
@@ -292,17 +333,22 @@ async function runBrainstormCli(
   // under, and the re-scored page overwrites it instead of forking a second
   // page under a fresh nonce.
   const shouldSave = parsed.save ?? profile.default_save;
-  const freshSlug = buildIdeaSlug(parsed.question, profile.label);
+  const requestId = brainstormAllowanceRequestId();
+  // Exact allowance replays must bind the same publication target. Ordinary
+  // invocations retain the random suffix so separate runs cannot clobber.
+  const freshSlug = buildIdeaSlug(parsed.question, profile.label, requestId?.replace(/-/g, ''));
   let result;
   try {
     result = await runBrainstorm(engine, config, {
       question: parsed.question,
+      sourceId,
+      sourceIds,
       profile: effectiveProfile,
       skipCostPreview: skipPreview,
       ideaSlug: shouldSave ? freshSlug : undefined,
-      // v0.39.0.0 T10 cost-cap surface — wired in master, preserved here.
-      maxCostUsd: parsed.maxCost,
-      maxCostFlag: parsed.maxCostFlag,
+      // Native subscription calls have unknown USD costs; --max-usd is not
+      // an auxiliary allowance and must not be converted into one.
+      ...(privateMode ? {} : { maxCostUsd: parsed.maxCost, maxCostFlag: parsed.maxCostFlag }),
       maxFarSet: parsed.maxFarSet,
       strictBudget: parsed.strictBudget,
       judgeModel: parsed.judgeModel,
@@ -562,10 +608,10 @@ export function buildIdeaSlug(
 
 /** CLI entry: `gbrain brainstorm`. */
 export async function runBrainstormCommand(engine: BrainEngine, args: string[]): Promise<void> {
-  return runBrainstormCli(engine, args, BRAINSTORM_PROFILE, BRAINSTORM_HELP);
+  return withBrainstormAllowance(engine, args, (clean: string[]) => runBrainstormCli(engine, clean, BRAINSTORM_PROFILE, BRAINSTORM_HELP));
 }
 
 /** CLI entry: `gbrain lsd`. */
 export async function runLsdCommand(engine: BrainEngine, args: string[]): Promise<void> {
-  return runBrainstormCli(engine, args, LSD_PROFILE, LSD_HELP);
+  return withBrainstormAllowance(engine, args, (clean: string[]) => runBrainstormCli(engine, clean, LSD_PROFILE, LSD_HELP));
 }

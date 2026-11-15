@@ -315,6 +315,36 @@ import { v311 } from './v311-concept-inputs-private.ts';
 import { v312 } from './v312-guest-notes.ts';
 import { v313 } from './v313-wake-events.ts';
 import { v314 } from './v314-guest-notes-fail-closed.ts';
+import { v315 } from './v315-codex-subscription-admission.ts';
+import { v316 } from './v316-codex-subscription-jobs.ts';
+import { v317 } from './v317-extract-subscription-cost.ts';
+import { v318 } from './v318-codex-publication-plans.ts';
+import { v319 } from './v319-codex-action-write-bindings.ts';
+import { v320 } from './v320-codex-upgrade-receipts.ts';
+import { v321 } from './v321-codex-job-parking.ts';
+import { v322 } from './v322-codex-take-proposal-evidence.ts';
+import { v323 } from './v323-codex-calibration-evidence.ts';
+import { v324 } from './v324-codex-think-publications.ts';
+import { v325 } from './v325-codex-auto-think-runs.ts';
+import { v326 } from './v326-codex-think-ab-trials.ts';
+import { v327 } from './v327-precise-auxiliary-spend.ts';
+import { v328 } from './v328-codex-proposal-cache.ts';
+import { v329 } from './v329-codex-eval-results.ts';
+import { v330 } from './v330-codex-brainstorm-runs.ts';
+import { v331 } from './v331-codex-brainstorm-fixtures.ts';
+import { v332 } from './v332-codex-subscription-groups.ts';
+import { v333 } from './v333-codex-skillopt-rollouts.ts';
+import { v334 } from './v334-codex-skillopt-runs.ts';
+import { v335 } from './v335-codex-skillopt-submissions.ts';
+import { v336 } from './v336-codex-shared-skill-optimization.ts';
+import { v337 } from './v337-codex-bootstrap-runs.ts';
+import { v338 } from './v338-codex-subscription-tree.ts';
+import { v339 } from './v339-codex-skillopt-batches.ts';
+import { v340 } from './v340-codex-skillopt-cycles.ts';
+import { v341 } from './v341-codex-skillopt-batch-submissions.ts';
+import { v342 } from './v342-codex-bootstrap-jobs.ts';
+import { v343 } from './v343-edge-proposal-snapshot.ts';
+import { v344 } from './v344-codex-eval-input-clock.ts';
 
 // Array order is historical (see HISTORICAL_ARRAY_ORDER in the generator); the
 // runner sorts by version before applying.
@@ -628,4 +658,34 @@ export const MIGRATIONS: Migration[] = [
   v312,
   v313,
   v314,
+  v315,
+  v316,
+  v317,
+  v318,
+  v319,
+  v320,
+  v321,
+  v322,
+  v323,
+  v324,
+  v325,
+  v326,
+  v327,
+  v328,
+  v329,
+  v330,
+  v331,
+  v332,
+  v333,
+  v334,
+  v335,
+  v336,
+  v337,
+  v338,
+  v339,
+  v340,
+  v341,
+  v342,
+  v343,
+  v344,
 ];

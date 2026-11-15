@@ -61,8 +61,8 @@ export function isPersistenceDeclaration(statement: string): boolean {
 export const PERSISTENCE_PROTOCOL_PREDICATE = "set_config('gbrain.persistence_protocol','2',true)='2'";
 
 export function assertMutationProtocol(row: Pick<WriteRequest, 'target_kind' | 'protocol_version'>): void {
-  if (((row.target_kind ?? 'page') === 'page' && (row.protocol_version ?? 1) === 1)
-    || (row.target_kind === 'skill_bundle' && row.protocol_version === 2)) return;
+  if (((row.target_kind ?? 'page') === 'page' && [1, 3, 4, 5].includes(row.protocol_version ?? 1))
+    || (row.target_kind === 'skill_bundle' && [2, 6].includes(row.protocol_version ?? 0))) return;
   throw opError('unsupported_mutation_protocol', 'This consumer does not support the request target and protocol version.',
     `This gbrain process cannot apply ${row.target_kind ?? 'page'} requests at protocol ${row.protocol_version ?? 1}, so it left the request untouched. A newer gbrain wrote it: upgrading gbrain on this host (the user's call) lets it be applied.`);
 }

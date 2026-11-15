@@ -1,3 +1,4 @@
+import { resolveModel } from '../../core/model-config.ts';
 /**
  * synopsis-tier.ts — makes `gbrain eval longmemeval --mode tokenmax` measure
  * the vectors production builds for that mode.
@@ -9,7 +10,9 @@
  * this step a tokenmax run scores title-tier vectors. When the resolved mode's
  * tier is `per_chunk_synopsis`, the harness runs that same service on every
  * imported session (same model resolution, prompt, page-level fall-back and
- * guarded install), with two eval-only additions:
+ * guarded install). Private Codex uses codex-synopsis-tier.ts with host-owned
+ * proposal reuse, subscription accounting and separate embedding admission.
+ * Other providers retain two eval-only additions:
  *
  *   - a content-addressed on-disk synopsis cache keyed by the service's own
  *     cache-key shape (`buildSynopsisCacheKey`), so shards and reruns never
@@ -17,6 +20,11 @@
  *   - a spend meter and cap over uncached synopsis calls, priced from the
  *     provider-reported usage.
  */
+
+import { readPrivateCodexConfig } from '../../core/ai/private-policy.ts';
+import { codexSubscriptionContext } from '../../core/ai/subscription-context.ts';
+import { CODEX_SYNOPSIS_VERSION } from '../../core/ai/codex-versions.ts';
+import { applyPrivateSynopsisTier, validatePrivateSynopsisOptions } from './codex-synopsis-tier.ts';
 
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -49,6 +57,8 @@ export interface SynopsisTierOptions {
   maxUsd: number;
   concurrency: number;
   cachePath?: string;
+  concurrencyExplicit?: boolean;
+  maxUsdExplicit?: boolean;
 }
 
 export function newSynopsisTierOptions(): SynopsisTierOptions {
@@ -59,11 +69,12 @@ export const LME_SYNOPSIS_FLAGS: Array<{ name: string; arg?: string; help: strin
   { name: '--synopsis-max-usd', arg: 'N', help: [
       'Spend cap for uncached per-chunk synopses when the resolved mode\'s tier is',
       'per_chunk_synopsis (tokenmax; default 20). At the cap the run stops after',
-      'the current question; cached synopses are free.'],
-    apply: (o, v) => { const n = Number(v); if (!Number.isFinite(n) || n <= 0) throw new Error(`--synopsis-max-usd must be a positive number (got: ${v})`); o.synopsis.maxUsd = n; } },
-  { name: '--synopsis-concurrency', arg: 'N', help: ['Sessions synopsized in parallel per question (default 8; chunks within a session follow GBRAIN_CONTEXTUAL_CHUNK_CONCURRENCY).'],
-    apply: (o, v) => { const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > 64) throw new Error(`--synopsis-concurrency must be an integer from 1 to 64 (got: ${v})`); o.synopsis.concurrency = n; } },
-  { name: '--synopsis-cache', arg: 'FILE', help: ['Synopsis cache (JSONL). Default: ~/.cache/gbrain-eval/synopsis-<model>.jsonl.'],
+      'the current question; cached synopses are free. Private Codex uses its',
+      'host subscription allowance instead; omit this USD-only flag.'],
+    apply: (o, v) => { const n = Number(v); if (!Number.isFinite(n) || n <= 0) throw new Error(`--synopsis-max-usd must be a positive number (got: ${v})`); o.synopsis.maxUsd = n; o.synopsis.maxUsdExplicit = true; } },
+  { name: '--synopsis-concurrency', arg: 'N', help: ['Sessions synopsized in parallel per question (default 8; private Codex requires 1).', 'Non-private chunks follow GBRAIN_CONTEXTUAL_CHUNK_CONCURRENCY.'],
+    apply: (o, v) => { const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > 64) throw new Error(`--synopsis-concurrency must be an integer from 1 to 64 (got: ${v})`); o.synopsis.concurrency = n; o.synopsis.concurrencyExplicit = true; } },
+  { name: '--synopsis-cache', arg: 'FILE', help: ['Synopsis cache (JSONL). Default: ~/.cache/gbrain-eval/synopsis-<model>.jsonl.', 'Private Codex uses the host proposal cache; omit this flag.'],
     apply: (o, v) => { o.synopsis.cachePath = v; } },
 ];
 
@@ -79,13 +90,15 @@ export class SynopsisSpendCapReached extends Error {
 }
 
 export class SynopsisSpend {
-  usd = 0;
+  usd: number | null = 0;
   calls = 0;
   cacheHits = 0;
   inputTokens = 0;
   outputTokens = 0;
-  constructor(readonly maxUsd: number) {}
+  unknownUsageCalls = 0;
+  constructor(readonly maxUsd: number, readonly subscription = false) { if (subscription) this.usd = null; }
   add(model: string, usage: { input_tokens?: number; output_tokens?: number } | undefined): number {
+    if (this.subscription) throw new Error('subscription summaries require native accounting');
     this.calls++;
     if (!usage) return 0;
     this.inputTokens += usage.input_tokens ?? 0;
@@ -93,11 +106,19 @@ export class SynopsisSpend {
     const p = canonicalLookup(model);
     if (!p) return 0;
     const usd = ((usage.input_tokens ?? 0) * p.input + (usage.output_tokens ?? 0) * p.output) / 1_000_000;
-    this.usd += usd;
+    this.usd = (this.usd ?? 0) + usd;
     return usd;
   }
+  recordNative(usage: GeneratePerChunkSynopsisResult['usage'], cacheHit: boolean): void {
+    if (!this.subscription) throw new Error('native synopsis accounting requires subscription mode');
+    if (cacheHit) { this.cacheHits++; return; }
+    this.calls++;
+    if (!usage) { this.unknownUsageCalls++; return; }
+    this.inputTokens += usage.input_tokens + (usage.cache_read_tokens ?? 0) + (usage.cache_creation_tokens ?? 0);
+    this.outputTokens += usage.output_tokens;
+  }
   exhausted(): boolean {
-    return this.usd >= this.maxUsd;
+    return this.usd !== null && this.usd >= this.maxUsd;
   }
 }
 
@@ -143,7 +164,7 @@ export interface SynopsisTier {
 
 /** Pins folded into retrieval_config_hash for a synopsis-tier run. */
 export function synopsisPins(tier: SynopsisTier): Record<string, unknown> {
-  return { model: tier.model, prompt_version: SYNOPSIS_PROMPT_VERSION, doc_max_chars: SYNOPSIS_DOC_MAX_CHARS, max_tokens: tier.maxTokens };
+  return { model: tier.model, prompt_version: tier.spend.subscription ? CODEX_SYNOPSIS_VERSION : SYNOPSIS_PROMPT_VERSION, doc_max_chars: SYNOPSIS_DOC_MAX_CHARS, max_tokens: tier.maxTokens };
 }
 
 /**
@@ -154,14 +175,18 @@ export function synopsisPins(tier: SynopsisTier): Record<string, unknown> {
  */
 export async function resolveSynopsisTier(knobs: ResolvedSearchKnobs, keywordOnly: boolean, o: SynopsisTierOptions, pins: RetrievalPins): Promise<SynopsisTier | null> {
   if (keywordOnly || knobs.contextual_retrieval_disabled || knobs.contextual_retrieval !== 'per_chunk_synopsis') return null;
-  const model = await resolveContextualSynopsisModel(null);
+  const privateMode = !!readPrivateCodexConfig();
+  if (privateMode) validatePrivateSynopsisOptions(o);
+  const model = privateMode
+    ? await resolveModel(codexSubscriptionContext()?.engine ?? null, { privateRole: 'longmemeval-synopsis', configKey: 'models.contextual_synopsis', deprecatedConfigKey: 'contextual_retrieval.haiku_model', envVar: 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL', tier: 'utility', fallback: 'unused' })
+    : await resolveContextualSynopsisModel(null);
   const tier: SynopsisTier = {
     model,
     maxTokens: SYNOPSIS_MAX_TOKENS,
-    cachePath: o.cachePath ?? defaultSynopsisCachePath(model),
-    concurrency: o.concurrency,
-    chunkConcurrency: resolveContextualChunkConcurrency(),
-    spend: new SynopsisSpend(o.maxUsd),
+    cachePath: privateMode ? 'host:codex_proposal_cache' : o.cachePath ?? defaultSynopsisCachePath(model),
+    concurrency: privateMode ? 1 : o.concurrency,
+    chunkConcurrency: privateMode ? 1 : resolveContextualChunkConcurrency(),
+    spend: new SynopsisSpend(o.maxUsd, privateMode),
     stoppedAtCap: false,
   };
   pins.contextual_synopsis = synopsisPins(tier);
@@ -172,7 +197,11 @@ export async function resolveSynopsisTier(knobs: ResolvedSearchKnobs, keywordOnl
 export function reportSynopsisRunEnd(tier: SynopsisTier | null, questionsRun: number): boolean {
   if (!tier || questionsRun === 0) return false;
   const sp = tier.spend;
-  process.stderr.write(`[longmemeval] synopsis tier: ${tier.model}, ${sp.calls} call(s), ${sp.cacheHits} cache hit(s), ${sp.inputTokens} in / ${sp.outputTokens} out tokens, $${sp.usd.toFixed(4)} (cap $${sp.maxUsd.toFixed(2)}; cache ${tier.cachePath})\n`);
+  if (sp.subscription) {
+    process.stderr.write(`[longmemeval] synopsis tier: ${tier.model}, ${sp.calls} accepted response(s), ${sp.cacheHits} cache hit(s), ${sp.inputTokens} known input / ${sp.outputTokens} known output tokens, ${sp.unknownUsageCalls} response(s) with unknown usage; subscription cost and remaining quota unknown; durable attempt ledger is authoritative\n`);
+    return tier.stoppedAtCap;
+  }
+  process.stderr.write(`[longmemeval] synopsis tier: ${tier.model}, ${sp.calls} call(s), ${sp.cacheHits} cache hit(s), ${sp.inputTokens} in / ${sp.outputTokens} out tokens, $${sp.usd!.toFixed(4)} (cap $${sp.maxUsd.toFixed(2)}; cache ${tier.cachePath})\n`);
   if (!tier.stoppedAtCap) return false;
   process.stderr.write(`[longmemeval] FAIL --synopsis-max-usd: synopsis spend reached $${sp.maxUsd.toFixed(2)}; the run stopped early. Resume with a higher cap (cached synopses are free).\n`);
   return true;
@@ -191,10 +220,15 @@ export interface SynopsisTierResult {
   pages: number;
   pages_synopsis: number;
   pages_fallback: number;
+  pages_empty?: number;
   chunks: number;
   calls: number;
   cache_hits: number;
-  usd: number;
+  usd: number | null;
+  billing?: 'subscription';
+  input_tokens?: number;
+  output_tokens?: number;
+  usage_complete?: boolean;
 }
 
 /**
@@ -208,6 +242,10 @@ export async function applySynopsisTier(
   tier: SynopsisTier,
   generate: typeof generatePerChunkSynopsis = generatePerChunkSynopsis,
 ): Promise<SynopsisTierResult> {
+  if (readPrivateCodexConfig()) {
+    if (generate !== generatePerChunkSynopsis) throw new Error('private synopsis generation must use the native provider');
+    return applyPrivateSynopsisTier(engine, pages, tier);
+  }
   const cache = cacheFor(tier.cachePath);
   const out: SynopsisTierResult = { pages: pages.length, pages_synopsis: 0, pages_fallback: 0, chunks: 0, calls: 0, cache_hits: 0, usd: 0 };
   const cachedGenerate: typeof generatePerChunkSynopsis = async (args) => {
@@ -222,7 +260,7 @@ export async function applySynopsisTier(
     const res = await generate(args);
     if (!res.usage) return res;
     out.calls++;
-    out.usd += tier.spend.add(tier.model, res.usage);
+    out.usd = (out.usd ?? 0) + tier.spend.add(tier.model, res.usage);
     cache.set(key, res.kind === 'success' ? { kind: 'success', synopsis: res.synopsis } : { kind: res.kind, detail: res.detail });
     return res;
   };

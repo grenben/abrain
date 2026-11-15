@@ -45,11 +45,15 @@ import { sha8 } from './audit.ts';
 import { VERSION } from '../../version.ts';
 import { buildRemediation, errorCode } from './remediation.ts';
 import type { SkillOptOpts } from './types.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexCycleSkillopt } from './codex-cycle.ts';
 
 export interface SkilloptPhaseOpts {
   engine: BrainEngine;
   dryRun?: boolean;
   signal?: AbortSignal;
+  sourceId?: string;
+  deadlineAtMs?: number | null;
   /**
    * issue #2860 — `gbrain dream --phase skillopt --once`. Bypasses the
    * `cycle.skillopt.enabled` feature flag for THIS call only; never reads
@@ -95,13 +99,17 @@ const ERROR_RETRY_MS = 24 * 3600 * 1000;
 export async function runPhaseSkillopt(opts: SkilloptPhaseOpts): Promise<SkilloptPhaseResult> {
   const { engine } = opts;
   const start = Date.now();
+  const privateMode = !!readPrivateCodexConfig();
 
   // Read the feature flag. Default OFF.
   let enabled = false;
   try {
     const v = await engine.getConfig('cycle.skillopt.enabled');
     enabled = v === 'true';
-  } catch { /* default OFF */ }
+  } catch {
+    if (privateMode) return { phase: 'skillopt', status: 'fail', duration_ms: Date.now() - start,
+      summary: 'Scheduled skill optimization configuration is unavailable.', details: { reason: 'config_unavailable', cost_usd: null } };
+  }
   if (!enabled) {
     if (!opts.once) {
       return {
@@ -117,6 +125,8 @@ export async function runPhaseSkillopt(opts: SkilloptPhaseOpts): Promise<Skillop
       '--phase skillopt --once forces this run (config untouched)\n',
     );
   }
+
+  if (privateMode) return runCodexCycleSkillopt(opts);
 
   // Per-skill + brain-wide cost caps.
   const perSkillCap = await readNumericConfig(engine, 'cycle.skillopt.per_skill_cap_usd', DEFAULT_PER_SKILL_CAP_USD);

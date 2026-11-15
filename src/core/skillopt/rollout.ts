@@ -27,6 +27,8 @@ import type { BrainEngine } from '../engine.ts';
 import { SKILLOPT_PURPOSE, type BenchmarkTask, type Trajectory } from './types.ts';
 import { sharedSkillToolAccess } from '../shared-skills/tool-access.ts';
 import { authorizeSkillRead } from '../shared-skills/policy.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runCodexRollout, type CodexRolloutInvocation } from './codex-rollout.ts';
 import { parseSkillFrontmatter } from '../skill-frontmatter.ts';
 
 /** An op a rollout may call: it exists, is not mutating and is not local-only. */
@@ -56,6 +58,8 @@ export function rolloutToolsForSkill(skillText: string): ReadonlySet<string> {
 }
 
 export interface RolloutOpts {
+  /** Stable host evaluation identity and explicit scoped read grant for private Codex. */
+  codex?: CodexRolloutInvocation;
   operationContext?: OperationContext;
   engine: BrainEngine;
   skillText: string;
@@ -85,6 +89,7 @@ export interface RolloutOpts {
  * BudgetExhausted (which propagates via gateway → MUST_ABORT_ERROR_TAGS).
  */
 export async function runRollout(opts: RolloutOpts): Promise<Trajectory> {
+  if (readPrivateCodexConfig()) return runCodexRollout(opts);
   const { engine, skillText, task, targetModel } = opts;
   const startedAt = Date.now();
 

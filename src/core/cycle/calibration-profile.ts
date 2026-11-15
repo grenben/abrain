@@ -27,6 +27,8 @@
 
 import { BaseCyclePhase, effectivePhaseDeadlineMs, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
 import { resolveOwnerHolder } from '../owner-holder.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivateCalibration } from './calibration-codex.ts';
 import { chat as gatewayChat, getChatModel } from '../ai/gateway.ts';
 import { gateVoice, type VoiceGateGenerator, type VoiceGateJudge } from '../calibration/voice-gate.ts';
 import { patternStatementTemplate, type PatternStatementSlots } from '../calibration/templates.ts';
@@ -229,6 +231,7 @@ class CalibrationProfilePhase extends BaseCyclePhase {
     _ctx: OperationContext,
     opts: CalibrationProfileOpts,
   ): Promise<{ summary: string; details: Record<string, unknown>; status?: PhaseStatus }> {
+    if (readPrivateCodexConfig()) return runPrivateCalibration(_ctx, scope, opts);
     const holder = resolveOwnerHolder({
       override: opts.holder,
       configValue: await engine.getConfig('emotional_weight.user_holder'),

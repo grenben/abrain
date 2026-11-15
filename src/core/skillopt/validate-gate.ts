@@ -21,6 +21,13 @@
  */
 
 import { runWithLimit, type SettledItem } from '../worker-pool.ts';
+import { resolveModel } from '../model-config.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { readPrivateCodexConfig, assertPrivateRoute, PrivateRoutingError } from '../ai/private-policy.ts';
+import { CodexProposalError, type CodexProposalFailure } from '../ai/providers/codex-contract.ts';
+import { OperationError } from '../ops/contract.ts';
+import { digest } from '../persistence/digest.ts';
 import { createHash } from 'node:crypto';
 import { withoutBudgetTracker } from '../ai/gateway.ts';
 import { isSkilloptMustAbort, SKILLOPT_HOOK_INFRA_ERROR, SKILLOPT_RUNTIME_EXCEEDED } from './must-abort.ts';
@@ -32,6 +39,8 @@ import type { BrainEngine } from '../engine.ts';
 import type { OperationContext } from '../ops/contract.ts';
 
 export interface ValidateGateOpts extends Omit<GateInput, 'selSet'> {
+  /** Host-owned phase/candidate evaluation identity; repetitions derive distinct durable jobs. */
+  codex?: { evaluationId: string; allowedTools: string[]; allowedSlugPrefixes: string[]; readRegistry?: 'codex-discovery-v1' };
   operationContext?: OperationContext;
   selSet: BenchmarkTask[];
   engine: BrainEngine;
@@ -137,6 +146,63 @@ export const SKILLOPT_ALL_ROLLOUTS_FAILED = 'skillopt_all_rollouts_failed';
 export const SKILLOPT_ALL_JUDGE_ERRORS = 'skillopt_all_judge_errors';
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+type PrivateGateFailureCause =
+  | { kind: 'codex_proposal'; code: CodexProposalFailure }
+  | { kind: 'subscription'; code: SubscriptionAdmissionError['code'] }
+  | { kind: 'private_routing'; code: PrivateRoutingError['code'] }
+  | { kind: 'operation'; code: string }
+  | { kind: 'runtime_error'; type: 'Error' | 'TypeError' | 'RangeError' | 'SyntaxError' | 'AbortError' | 'other' }
+  | { kind: 'non_error' };
+
+export interface PrivateGateFailureDiagnostic {
+  stage: RolloutPhase;
+  executor: 'native_worker' | 'direct_rollout' | 'rollout_hook';
+  cause: PrivateGateFailureCause;
+  /** Tasks with no successful score, including work canceled after fail-closed abort. */
+  failedTasks: number;
+  totalTasks: number;
+}
+
+const privateGateFailureDiagnostics = new WeakMap<object, PrivateGateFailureDiagnostic>();
+
+/** Internal-only, content-free detail for trusted diagnostics; not included in public error serialization. */
+export function getPrivateGateFailureDiagnostic(error: unknown): PrivateGateFailureDiagnostic | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const diagnostic = privateGateFailureDiagnostics.get(error);
+  return diagnostic ? structuredClone(diagnostic) : undefined;
+}
+
+function classifyPrivateGateFailure(error: unknown): PrivateGateFailureCause {
+  if (error instanceof CodexProposalError) return { kind: 'codex_proposal', code: error.reason };
+  if (error instanceof SubscriptionAdmissionError) return { kind: 'subscription', code: error.code };
+  if (error instanceof PrivateRoutingError) return { kind: 'private_routing', code: error.code };
+  if (error instanceof OperationError) {
+    return { kind: 'operation', code: /^[a-z][a-z0-9_]{0,63}$/.test(error.code) ? error.code : 'other' };
+  }
+  if (error instanceof Error) {
+    const type = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'AbortError'].includes(error.name)
+      ? error.name as 'Error' | 'TypeError' | 'RangeError' | 'SyntaxError' | 'AbortError'
+      : 'other';
+    return { kind: 'runtime_error', type };
+  }
+  return { kind: 'non_error' };
+}
+
+function rememberPrivateGateFailure(
+  error: object,
+  opts: ValidateGateOpts,
+  failedTasks: number,
+  cause: PrivateGateFailureCause = classifyPrivateGateFailure(error),
+): void {
+  privateGateFailureDiagnostics.set(error, {
+    stage: opts.phase ?? 'sel_gate',
+    executor: opts.rolloutHook ? 'rollout_hook' : opts.rolloutFn ? 'direct_rollout' : 'native_worker',
+    cause,
+    failedTasks,
+    totalTasks: opts.selSet.length,
+  });
+}
+
 /**
  * Run the validation gate against a candidate skill. Returns GateResult
  * with accept/reject + per-task medians for the audit JSONL.
@@ -144,10 +210,28 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 export async function runValidationGate(opts: ValidateGateOpts): Promise<GateResult> {
   const rolloutFn = opts.rolloutFn ?? runRollout;
   const scoreFn = opts.scoreFn ?? scoreTrajectory;
-  const concurrency = opts.concurrency ?? 4;
+  const privateMode = !!readPrivateCodexConfig();
+  if (privateMode) opts = { ...opts, selSet: structuredClone(opts.selSet), codex: opts.codex ? structuredClone(opts.codex) : undefined };
+  const concurrency = privateMode ? 1 : opts.concurrency ?? 4;
   // Forward pass uses 1; sel/baseline use VALIDATION_RUNS_PER_TASK (3). Floor
   // at 1 (a runsPerTask of 0 would silently produce an empty median).
   const runsPerTask = Math.max(1, opts.runsPerTask ?? VALIDATION_RUNS_PER_TASK);
+  if (privateMode) {
+    if (!codexSubscriptionContext()) throw new SubscriptionAdmissionError('subscription_required');
+    if (!opts.selSet.length || opts.selSet.length > 1000 || !Number.isSafeInteger(runsPerTask) || runsPerTask > 9 ||
+      (opts.runsPerTask !== undefined && opts.runsPerTask < 1)) throw new CodexProposalError('invalid_input');
+    if (opts.codex && (!/^[A-Za-z0-9._:-]{1,160}$/.test(opts.codex.evaluationId) ||
+      new Set(opts.selSet.map(t => t.task_id)).size !== opts.selSet.length)) throw new CodexProposalError('invalid_input');
+    assertPrivateRoute(opts.targetModel, 'skillopt:target_model');
+    if (opts.judgeModel) assertPrivateRoute(opts.judgeModel, 'skillopt:judge_model');
+    for (const task of opts.selSet) if (task.judge.kind === 'llm' && task.judge.model) assertPrivateRoute(task.judge.model, 'skillopt:task.judge.model');
+    await resolveModel(opts.engine, { privateRole: 'iterative-minions', cliFlag: opts.targetModel, tier: 'subagent', fallback: 'sonnet' });
+    if (opts.selSet.some(t => t.judge.kind === 'llm')) {
+      await resolveModel(opts.engine, { privateRole: 'skillopt-judge', cliFlag: opts.judgeModel, tier: 'reasoning', fallback: 'sonnet' });
+    }
+  }
+  const privateAbort = new AbortController();
+  const signal = privateMode ? AbortSignal.any([privateAbort.signal, ...(opts.abortSignal ? [opts.abortSignal] : [])]) : opts.abortSignal;
 
   // Per sel-task, run N rollouts + N judges, take median.
   const settled: SettledItem<PerTask>[] = opts.rolloutHook
@@ -158,29 +242,48 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
       fn: async (task: BenchmarkTask): Promise<PerTask> => {
         const runs: number[] = [];
         const rollouts: ScoredRollout[] = [];
-        for (let i = 0; i < runsPerTask; i++) {
-          // #4119: in-rollout-loop deadline — see ValidateGateOpts.deadlineMs.
-          if (opts.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
-            throw new Error(SKILLOPT_RUNTIME_EXCEEDED);
+        try {
+          for (let i = 0; i < runsPerTask; i++) {
+            // #4119: in-rollout-loop deadline — see ValidateGateOpts.deadlineMs.
+            if (opts.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
+              throw new Error(SKILLOPT_RUNTIME_EXCEEDED);
+            }
+            const rolloutOpts: RolloutOpts = {
+              ...(opts.codex ? { codex: {
+                ...(opts.codex.readRegistry !== undefined ? { readRegistry: opts.codex.readRegistry } : {}),
+                allowedTools: opts.codex.allowedTools,
+                allowedSlugPrefixes: opts.codex.allowedSlugPrefixes,
+                invocationId: digest({ evaluation: opts.codex.evaluationId, taskId: task.task_id, repetition: i }),
+              } } : {}),
+              operationContext: opts.operationContext,
+              engine: opts.engine,
+              skillText: opts.candidateSkillText,
+              task,
+              targetModel: opts.targetModel,
+              abortSignal: signal,
+            };
+            const trajectory = await rolloutFn(rolloutOpts);
+            if (privateMode && trajectory.stop_reason !== 'end') throw new CodexProposalError('invalid_output');
+            const scored: ScoredRollout = await scoreFn(trajectory, task.judge, {
+              judgeModel: opts.judgeModel, abortSignal: signal,
+            });
+            if (privateMode && (scored.judge_error || !Number.isFinite(scored.score) || scored.score < 0 || scored.score > 1)) {
+              throw new CodexProposalError('invalid_output');
+            }
+            runs.push(scored.score);
+            rollouts.push(scored);
           }
-          const rolloutOpts: RolloutOpts = {
-            operationContext: opts.operationContext,
-            engine: opts.engine,
-            skillText: opts.candidateSkillText,
-            task,
-            targetModel: opts.targetModel,
-            abortSignal: opts.abortSignal,
-          };
-          const trajectory = await rolloutFn(rolloutOpts);
-          const scored: ScoredRollout = await scoreFn(trajectory, task.judge, {
-            judgeModel: opts.judgeModel,
-          });
-          runs.push(scored.score);
-          rollouts.push(scored);
+        } catch (error) {
+          // runWithLimit records ordinary failures and keeps claiming work.
+          // Private native gates instead fail closed on the first failed
+          // rollout/judge, while the combined signal cancels any active native
+          // judge and prevents the pool from starting another task.
+          if (privateMode && !privateAbort.signal.aborted) privateAbort.abort(error);
+          throw error;
         }
         return { task_id: task.task_id, median: median(runs), runs, rollouts };
       },
-      signal: opts.abortSignal,
+      signal,
     });
 
   // MUST-ABORT errors (budget exhaustion / no-pricing / spend-policy refusals) are NOT scoring noise —
@@ -193,7 +296,12 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
   const aborter = settled.find(
     (s) => s && !s.ok && (isSkilloptMustAbort(s.error) || isRuntimeExceeded(s.error)),
   );
-  if (aborter && !aborter.ok) throw aborter.error;
+  if (aborter && !aborter.ok) {
+    if (privateMode && aborter.error && typeof aborter.error === 'object') {
+      rememberPrivateGateFailure(aborter.error, opts, opts.selSet.length - settled.filter((s) => s?.ok).length);
+    }
+    throw aborter.error;
+  }
 
   // #4741: a 100%-failed gate is not a measurement. Any plain (non-tagged)
   // provider error — a logged-out claude-cli child, a dead endpoint — lands
@@ -201,6 +309,14 @@ export async function runValidationGate(opts: ValidateGateOpts): Promise<GateRes
   // finish the whole run as a plausible `no_improvement` / 0.000. Partial
   // failure below keeps the pessimistic per-task 0 (scoring noise).
   const failed = settled.filter((s) => s && !s.ok);
+  if (privateMode && failed.length) {
+    const failure = failed[0]!;
+    const error = new CodexProposalError('invalid_output');
+    rememberPrivateGateFailure(error, opts, opts.selSet.length - settled.filter((s) => s?.ok).length,
+      classifyPrivateGateFailure(failure.ok ? undefined : failure.error));
+    throw error;
+  }
+  if (privateMode && (signal?.aborted || settled.filter(Boolean).length !== opts.selSet.length)) throw new CodexProposalError('aborted');
   if (settled.length > 0 && failed.length === settled.length) {
     const first = failed[0]!.ok ? undefined : failed[0]!.error;
     throw new Error(

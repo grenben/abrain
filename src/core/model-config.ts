@@ -20,6 +20,8 @@
  * AND lose to new-key config when both are set.
  */
 
+import { privateModelForTier, readPrivateCodexConfig, requirePrivateRole, resolvePrivateModel } from './ai/private-policy.ts';
+import type { PrivateRole } from './ai/private-roles.ts';
 import type { ConfigReader } from './config-snapshot.ts';
 import { openrouterModelSupportsSubagentLoop } from './ai/openrouter-families.ts';
 import { splitProviderModelId } from './model-id.ts';
@@ -32,6 +34,8 @@ import { latestOpenAITiers, rankOpenAIChatModels } from './ai/openai-latest.ts';
 export type ModelTier = 'utility' | 'reasoning' | 'deep' | 'subagent';
 
 export interface ResolveModelOpts {
+  /** Trusted feature identity for strict private activation and tier selection. */
+  privateRole?: PrivateRole;
   /** CLI flag value (e.g. `--model opus` → 'opus'). Highest precedence. */
   cliFlag?: string;
   /** New-key config name (e.g. 'models.dream.synthesize'). */
@@ -185,6 +189,11 @@ export function resolveTierDefault(
   tier: ModelTier,
   env?: Record<string, string | undefined>,
 ): string {
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) {
+    requirePrivateRole(privatePolicy, undefined);
+    return privateModelForTier(privatePolicy, tier);
+  }
   const fileCfg = env ? null : throwSafeLoadConfig();
   const merged = env ? realEnv(env) : mergedProviderEnv(fileCfg, process.env);
   for (const entry of PROVIDER_TIER_DEFAULTS) {
@@ -399,7 +408,8 @@ export type ResolveSource =
   | 'tier_config'
   | 'env'
   | 'tier_default'
-  | 'fallback';
+  | 'fallback'
+  | 'private_default';
 
 /**
  * A resolved model plus the chain step that produced it. When the subagent
@@ -432,6 +442,7 @@ export function describeResolveOrigin(
     case 'tier_config': return `models.tier.${opts.tier}`;
     case 'models_default': return 'models.default';
     case 'env': return opts.envVar ?? 'GBRAIN_MODEL';
+    case 'private_default': return 'file:private_codex';
     case 'tier_default':
     case 'fallback': return 'built-in default';
   }
@@ -450,6 +461,12 @@ export async function resolveModelDetailed(
   engine: ConfigReader | null,
   opts: ResolveModelOpts,
 ): Promise<ResolvedModel> {
+  const privatePolicy = readPrivateCodexConfig();
+  if (privatePolicy) {
+    // A tiered rollout never infers permission from config keys or tiers.
+    requirePrivateRole(privatePolicy, opts.privateRole);
+    return resolvePrivateModel(engine, opts, privatePolicy);
+  }
   const envVar = opts.envVar ?? 'GBRAIN_MODEL';
 
   // 1. CLI flag wins

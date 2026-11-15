@@ -17,6 +17,7 @@ import { loadConfigSnapshot } from '../core/config-snapshot.ts';
 import { configureGateway, configureGatewayIfUninitialized, requireConfig } from '../core/ai/gateway.ts';
 import { buildGatewayConfig } from '../core/ai/build-gateway-config.ts';
 import { typesafeApiKey } from '../core/ai/recipes/typesafe.ts';
+import { readPrivateCodexConfig } from '../core/ai/private-policy.ts';
 import {
   DEFAULT_TYPESAFE_PROVIDER, isTypesafeAlias, isValidProvider, providerKind, readDecideConfig, type DecideConfig,
 } from '../core/ai/decide/config.ts';
@@ -88,6 +89,13 @@ export function flagValue(args: string[], flag: string): string | undefined {
   return i >= 0 && i + 1 < args.length && !args[i + 1]!.startsWith('--') ? args[i + 1] : undefined;
 }
 
+export function decideTypesafeApiKey(
+  env: Record<string, string | undefined>,
+  privateCodexActive = Boolean(readPrivateCodexConfig()),
+): ReturnType<typeof typesafeApiKey> {
+  return privateCodexActive ? null : typesafeApiKey(env);
+}
+
 const has = (args: string[], flag: string) => args.includes(flag);
 
 // ---------------------------------------------------------------------------
@@ -112,7 +120,7 @@ export async function loadDecideState(engine: BrainEngine): Promise<DecideState>
   for (const r of recent) lastResolved[r.provider] ??= r.model_resolved;
   let env: Record<string, string | undefined> = process.env;
   try { env = requireConfig().env; } catch { /* unconfigured gateway: process env */ }
-  const key = typesafeApiKey(env);
+  const key = decideTypesafeApiKey(env);
   const cfg = readDecideConfig(snapshot, { typesafeKey: key !== null });
   const { loadSearchModeConfig, resolveSearchMode } = await import('../core/search/mode.ts');
   const modeInput = await loadSearchModeConfig(engine);

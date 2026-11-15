@@ -95,7 +95,13 @@ export const RACY_DIFF_MS = 75;
  * the range). When omitted, compares HEAD against
  * working tree (uncommitted changes only).
  */
-export function filesDriftedSince(repoRoot: string, commitSha?: string, racyDiffMs = RACY_DIFF_MS, diffTimeoutMs = 5000): string[] | null {
+export function filesDriftedSince(
+  repoRoot: string,
+  commitSha?: string,
+  racyDiffMs = RACY_DIFF_MS,
+  diffTimeoutMs = 5000,
+  paths?: ReadonlyArray<string>,
+): string[] | null {
   if (!existsSync(repoRoot)) return null;
   if (commitSha !== undefined && (commitSha === '' || commitSha.startsWith('-'))) return null;
   const refreshIndex = () => {
@@ -107,9 +113,14 @@ export function filesDriftedSince(repoRoot: string, commitSha?: string, racyDiff
   };
   const startedAt = Date.now();
   try {
+    // The doctor watches only a small set of retrieval paths. Restrict Git's
+    // diff itself so unrelated files in a large checkout cannot exhaust the
+    // probe timeout. Literal pathspecs retain exact-file/prefix matching
+    // semantics without interpreting watch-list characters as Git patterns.
+    const pathspecs = paths?.length ? ['--', ...paths.map((path) => `:(literal)${path}`)] : [];
     const args = commitSha
-      ? ['diff', '--name-only', '--end-of-options', `${commitSha}..HEAD`]
-      : ['diff', '--name-only', 'HEAD'];
+      ? ['diff', '--name-only', '--end-of-options', `${commitSha}..HEAD`, ...pathspecs]
+      : ['diff', '--name-only', 'HEAD', ...pathspecs];
     const out = execFileSync('git', args, {
       env: gitChildEnv(),
       cwd: repoRoot,
@@ -117,7 +128,9 @@ export function filesDriftedSince(repoRoot: string, commitSha?: string, racyDiff
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: diffTimeoutMs,
     });
-    if (!commitSha && Date.now() - startedAt >= racyDiffMs) refreshIndex();
+    // A successful scoped diff answered the watcher's question; elapsed
+    // time cannot imply anything about unrelated index entries.
+    if (!commitSha && !paths?.length && Date.now() - startedAt >= racyDiffMs) refreshIndex();
     return out
       .split('\n')
       .map(s => s.trim())
@@ -139,6 +152,6 @@ export function watchedFilesDrifted(
   commitSha?: string,
   patterns: ReadonlyArray<string> = RETRIEVAL_WATCH_PATTERNS,
 ): string[] | null {
-  const files = filesDriftedSince(repoRoot, commitSha);
+  const files = filesDriftedSince(repoRoot, commitSha, RACY_DIFF_MS, 5000, patterns);
   return files === null ? null : files.filter((p) => matchesWatchPattern(p, patterns));
 }

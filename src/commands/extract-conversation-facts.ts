@@ -398,7 +398,7 @@ import { CONVERSATION_WINDOW_BYTES, type ConversationWindow } from '../core/page
 import { setExtractionReceipt } from '../core/extraction-watermark.ts';
 import { conversationSkip } from '../core/facts/conversation-skip.ts';
 import { runLlmFallback } from '../core/conversation-parser/llm-fallback.ts';
-import { resolveModel, resolveTierDefault } from '../core/model-config.ts';
+import { resolveModel, TIER_DEFAULTS } from '../core/model-config.ts';
 import { FAILED_EXIT_CODE } from '../core/exit-codes.ts';
 import { usageError } from '../cli/cli-error.ts';
 import { intFlagValue } from '../cli/flag-values.ts';
@@ -1142,9 +1142,12 @@ export async function runExtractConversationFactsCore(
     (await engine.getConfig('conversation_parser.llm_fallback_enabled')) === 'true';
   const llmFallbackModel = llmFallbackEnabled
     ? await resolveModel(engine, {
+        privateRole: 'parser-fallback',
         tier: 'utility',
-        // #3813: last-resort fallback stays key-aware, never hardcoded Anthropic.
-        fallback: resolveTierDefault('utility'),
+        // resolveModel handles key-aware tier routing. This terminal fallback
+        // is only used after that tier path; use a static default so resolving
+        // it cannot infer permission outside the parser-fallback role.
+        fallback: TIER_DEFAULTS.utility,
       })
     : null;
 

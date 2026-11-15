@@ -61,6 +61,8 @@ import { sealPageTextProjection } from '../page-state/projections.ts';
 import { currentSubmissionAuthority } from '../minions/submission-authority.ts';
 import { VERSION } from '../../version.ts';
 import { parseFenceRepairReceipt, type FenceRepairReceipt } from '../fence-repair/receipt.ts';
+import { PrivateRoutingError, privatePolicyFingerprint, readPrivateCodexConfig, requirePrivateRole } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { parseContentRepairReceipt, type ContentRepairReceipt } from '../content-repair/receipt.ts';
 import { prepareCanonicalProjections } from './canonical-projections.ts';
 import { digest, sha256 } from './digest.ts';
@@ -391,7 +393,15 @@ export async function prepareManagedFileRepairMutation(engine: BrainEngine, row:
       ...(adoptNote ? { commit: adoptNote }
         : fenceRepair ? { commit: fenceRepairCommit(p.path, fenceRepair.classes, fenceRepair.tier) } : contentRepair ? { commit: contentRepairCommit(p.path, contentRepair) } : {}) } } : {}),
     ...(adoptNote ? { afterEffects: (tx: BrainEngine, outcome: Record<string, unknown>) => commitAdoptedLocalEdit(tx, row.source_id, binding, target, adoptNote, outcome) } : {}),
-    validate: async tx => {
+     validate: async tx => {
+      if (fenceRepair?.private_policy_fingerprint) {
+        await codexSubscriptionContext()?.checkAuthorityInTransaction?.(tx);
+        const policy = readPrivateCodexConfig();
+        if (!policy || privatePolicyFingerprint(policy) !== fenceRepair.private_policy_fingerprint) {
+          throw new PrivateRoutingError('fence-repair:policy_changed');
+        }
+        requirePrivateRole(policy, 'fence-repair');
+      }
       const current = await getWorktreeBinding(tx, row.source_id);
       if (!current || current.worktree_id !== row.worktree_id || String(current.owner_epoch) !== p.ownerEpoch) throw opError('owner_unavailable', 'The repair owner changed.',
         `Source ${row.source_id}'s canonical owner changed while repair request ${row.request_id} was prepared, so it published nothing. Check the owner, then preview the repair again.`,

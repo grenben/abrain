@@ -17,6 +17,8 @@
  * `--allow-mixed-run-config`.
  */
 
+import { redactSecrets } from './run-config.ts';
+import { JUDGE_RAW_MAX_CHARS } from './judge.ts';
 import { runWithLimit } from '../../core/worker-pool.ts';
 import { estimateTokens } from '../../core/search/token-budget.ts';
 import { BudgetLedger, isJudgeModelPriced } from '../shared/judge-runner.ts';
@@ -120,6 +122,8 @@ export function selectBackfillRows(
 }
 
 export interface JudgePreflightInput {
+  /** Host enclosing subscription scope; never inferred from --yes or a USD cap. Dispatch verifies the durable grant. */
+  subscriptionAuthorized?: boolean;
   judgeModel: string;
   maxUsd: number | null;
   yes: boolean;
@@ -142,6 +146,10 @@ export type JudgePreflightResult =
  * or the estimate exceeds the cap without `--yes` (eval-cross-modal pattern).
  */
 export function judgePreflight(input: JudgePreflightInput): JudgePreflightResult {
+  if (input.subscriptionAuthorized && input.judgeModel.startsWith('codex-cli:')) return {
+    ok: true, estUsd: null, ledger: new BudgetLedger(input.maxUsd, null),
+    lines: [`[longmemeval] judge: ${input.judgeModel}, durable subscription admission; monetary cost and remaining quota unknown`],
+  };
   if (!input.available) {
     return {
       ok: false, exitCode: 1,
@@ -246,4 +254,17 @@ export async function runJudgeBackfill(
     opts.onRow?.(row);
   }
   return result;
+}
+
+/** The same inline judge outcome handling for new and retained reader answers. */
+export async function judgeLiveRow(row: RowLike, q: LongMemEvalQuestion, ctx: JudgeLaneContext, configHash: string): Promise<void> {
+  try {
+    Object.assign(row, await judgeRow({ ...row, question_id: q.question_id, question_type: q.question_type,
+      question: q.question, answer: String(q.answer ?? ''), hypothesis: row.hypothesis as string }, ctx));
+  } catch (error) {
+    stripJudgeFields(row);
+    Object.assign(row, { judge_error: 'provider_error',
+      judge_error_detail: redactSecrets(String(error instanceof Error ? error.message : error)).slice(0, JUDGE_RAW_MAX_CHARS),
+      judge_model: ctx.model, judge_prompt_version: JUDGE_PROMPT_VERSION, judge_config_hash: configHash });
+  }
 }

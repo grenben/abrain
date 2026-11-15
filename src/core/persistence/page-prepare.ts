@@ -89,6 +89,8 @@ import { assertRetirementStampUnchanged } from './derived-retirement-hold.ts';
 import { fenceWhere } from '../fence-repair/refusal.ts';
 import { pageFencesNormalized } from '../fence-repair/report.ts';
 import { parseFenceRepairReceipt } from '../fence-repair/receipt.ts';
+import { PrivateRoutingError, privatePolicyFingerprint, readPrivateCodexConfig, requirePrivateRole } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
 import { fenceRepairCommit } from './effect-model.ts';
 import { withoutSafetyAssessments } from './reconcile-safety.ts';
 import { POLICY_KEYS } from './reconcile-additive.ts';
@@ -1070,6 +1072,16 @@ async function prepareInlineOrSegmentedMutation(unbounded: BrainEngine, row: Wri
   if (row.operation === 'delete_page') return prepareDeletePageMutation(engine, row, snapshot, { activePack, clock, allowMissingFile: options.allowMissingFile });
   // #6188: a trusted local fence repair's receipt (admission refuses it from every other caller) rides the outcome and the file's commit.
   const fenceRepair = row.operation === 'put_page' && !row.authority.remote ? parseFenceRepairReceipt(p.fence_repair) : null;
+  const subscription = fenceRepair?.private_policy_fingerprint ? codexSubscriptionContext() : undefined;
+  const checkFenceRepairPolicy = async (tx: BrainEngine) => {
+    if (!fenceRepair?.private_policy_fingerprint) return;
+    await subscription?.checkAuthorityInTransaction?.(tx);
+    const policy = readPrivateCodexConfig();
+    if (!policy || privatePolicyFingerprint(policy) !== fenceRepair.private_policy_fingerprint) {
+      throw new PrivateRoutingError('fence-repair:policy_changed');
+    }
+    requirePrivateRole(policy, 'fence-repair');
+  };
   const fenceRepairOutcome = fenceRepair ? { fence_repair: fenceRepair } : {};
   // #5616: edits apply to the caller's view of the locked snapshot (revision checked above).
   const edited = row.operation === 'edit_page' ? editLockedPage(row, snapshot) : undefined;
@@ -1251,7 +1263,7 @@ async function prepareInlineOrSegmentedMutation(unbounded: BrainEngine, row: Wri
   const pinMode = sourcePath && mintMode && scannerSourcePath(file!.root, file!.root) && !await readSlugRootMode(engine, row.source_id) ? mintMode : undefined;
   const publication: PreparedMutation = { observedRevision, noop, additionalPageKeys:links?.pageKeys, file, ...databaseOnly,
     ...(core ? { exclusiveSources: core.exclusiveSources } : {}), ...(trust ? { trust } : {}), ...(ready.afterCommit ? { afterCommit: ready.afterCommit } : {}),
-    validate: async tx => { await ready.validate(tx); await core?.validate(tx); await assertLabelGuardUnchanged(tx, row, trust, snapshot?.page ?? null, storedTier, incoming, labelGuard); },
+     validate: async tx => { await checkFenceRepairPolicy(tx); await ready.validate(tx); await core?.validate(tx); await assertLabelGuardUnchanged(tx, row, trust, snapshot?.page ?? null, storedTier, incoming, labelGuard); },
     apply: async (tx, preimage) => {
     let autoLinks: Awaited<ReturnType<NonNullable<typeof links>['apply']>> | undefined;
     let removedTimeline: TimelineRowsRemoved | null = null;

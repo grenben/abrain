@@ -30,11 +30,13 @@
  * loop and handles page-level fall-back.
  */
 
+import { readPrivateCodexConfig } from './ai/private-policy.ts';
+import { codexSynopsis } from './ai/codex-synopsis.ts';
 import { readProviderFailureSignals } from './ai/errors.ts';
 import { chat, type ChatOpts, type ChatResult } from './ai/gateway.ts';
 import { logSynopsisFailure, type SynopsisFailureKind } from './audit-synopsis.ts';
 import { sanitizeSynopsis } from './embedding-context.ts';
-import { resolveTierDefault } from './model-config.ts';
+import { resolveModel, resolveTierDefault } from './model-config.ts';
 import { reservationCostUsd } from './budget/reservation-cost.ts';
 import { safeSplitIndex } from './text-safe.ts';
 
@@ -110,6 +112,7 @@ export const SYNOPSIS_SYSTEM_PROMPT = [
 ].join('\n');
 
 export interface GeneratePerChunkSynopsisArgs {
+  privateRole?: 'page-summary' | 'contextual-synopsis' | 'longmemeval-synopsis';
   /** The full document text (source file, chunk-concat, or chunk-alone per D11). */
   documentText: string;
   /** The chunk for which we're generating the synopsis. */
@@ -141,7 +144,7 @@ export interface GeneratePerChunkSynopsisArgs {
  *   - failure variants → see D27 P1-2 dispatch in the service layer
  */
 export type GeneratePerChunkSynopsisResult =
-  | { kind: 'success'; synopsis: string; usage?: ChatResult['usage'] }
+  | { kind: 'success'; synopsis: string; usage?: ChatResult['usage']; cacheHit?: boolean }
   | { kind: SynopsisFailureKind; detail?: string; usage?: ChatResult['usage'] };
 
 /**
@@ -164,11 +167,26 @@ export async function generatePerChunkSynopsis(
   args: GeneratePerChunkSynopsisArgs,
 ): Promise<GeneratePerChunkSynopsisResult> {
   const maxTokens = args.maxTokens ?? SYNOPSIS_MAX_TOKENS;
+  const privateConfig = readPrivateCodexConfig();
+  const privateRole = args.privateRole ?? 'page-summary';
+  const contextualRole = privateRole === 'contextual-synopsis' || privateRole === 'longmemeval-synopsis';
+  const model = privateConfig
+    ? await resolveModel(null, {
+      privateRole,
+      cliFlag: args.model,
+      configKey: contextualRole ? 'models.contextual_synopsis' : undefined,
+      deprecatedConfigKey: contextualRole ? 'contextual_retrieval.haiku_model' : undefined,
+      envVar: contextualRole ? 'GBRAIN_CONTEXTUAL_SYNOPSIS_MODEL' : 'GBRAIN_MODEL',
+      tier: 'utility',
+      fallback: DEFAULT_SYNOPSIS_MODEL,
+    })
+    : args.model ?? resolveTierDefault('utility');
 
   const chatOpts: ChatOpts = {
+    privateRole,
     // #3813: key-aware tier default, not the hardcoded hash anchor above —
     // an OPENAI_API_KEY-only install must not route to Anthropic.
-    model: args.model ?? resolveTierDefault('utility'),
+    model,
     system: SYNOPSIS_SYSTEM_PROMPT,
     // PR #6341: the title + document block is the only prefix every chunk of
     // a page shares (the ~190-token system prompt is below every published
@@ -188,6 +206,10 @@ export async function generatePerChunkSynopsis(
     abortSignal: args.abortSignal,
     cacheSystem: true,
   };
+
+  // Private inference is evidence-validated and fail-closed; its typed
+  // errors must not become a public title-tier fallback.
+  if (privateConfig) return codexSynopsis(chatOpts, args.chunkText);
 
   let result: ChatResult;
   try {

@@ -87,6 +87,10 @@ import {
   type CheckpointCross,
 } from './checkpoint.ts';
 import { resolveOwnerHolder } from '../owner-holder.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { SubscriptionAdmissionError } from '../ai/subscription-admission.ts';
+import { runCodexBrainstorm } from './codex-run.ts';
 
 export { BudgetExhausted };
 
@@ -240,6 +244,10 @@ export interface BrainstormIdea {
   close_slug: string;
   /** Citation: far-set page slug. */
   far_slug: string;
+  close_source_id?: string | null;
+  far_source_id?: string;
+  /** Verbatim source snapshots supporting native Codex proposals. */
+  evidence?: Array<{ source_id: string; slug: string; page_id: number; revision: string; quote: string }>;
   /** D6 transparency badge — how far this collision actually traveled. */
   distance_score: number;
   /** Scoring from the judge. Absent when `judge_failed === true`. */
@@ -258,9 +266,9 @@ export interface BrainstormResult {
   /** All generated ideas (passed + filtered). Callers can render only `.filter(i => i.passes)`. */
   ideas: BrainstormIdea[];
   /** Close-set citations for the run header. */
-  close_set: Array<{ slug: string; title: string | null }>;
+  close_set: Array<{ slug: string; title: string | null; source_id?: string }>;
   /** Far-set citations for the run header. */
-  far_set: Array<{ slug: string; title: string | null; distance_score: number; source: 'prefix-stratified' | 'corpus-sample' }>;
+  far_set: Array<{ slug: string; title: string | null; distance_score: number; source: 'prefix-stratified' | 'corpus-sample'; source_id?: string }>;
   /** Calibration context applied during judging; `null` on cold-start. */
   active_bias_tags: string[] | null;
   /** D11 sparse signal — true when domain-bank couldn't fill m_far. */
@@ -274,15 +282,17 @@ export interface BrainstormResult {
   idea_slug?: string;
   /** Cost actuals (codex r2 #10). */
   cost: {
-    estimated_usd: number;
-    actual_usd: number;
+    estimated_usd: number | null;
+    actual_usd: number | null;
     input_tokens: number;
     output_tokens: number;
     /** The USD cap the run held, or null when the user turned it off. */
     cap_usd: number | null;
     /** `user` for a cap flag (including off), `default` for the $5 default. */
-    cap_source: 'user' | 'default';
+    cap_source: 'user' | 'default' | 'subscription';
   };
+  generation_status?: 'complete' | 'empty' | 'failed';
+  codex_run?: { run_id: string; request_hash: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +603,8 @@ export async function runBrainstorm(
   // through unchanged. Per A3: reuses StructuredAgentError (the v0.19.0
   // envelope) rather than introducing a new BrainstormError class.
   try {
+    if (codexSubscriptionContext()) return await runCodexBrainstorm(engine, config, opts);
+    if (readPrivateCodexConfig()) throw new SubscriptionAdmissionError('subscription_required');
     return await runBrainstormImpl(engine, config, opts);
   } catch (err) {
     // classifyBrainstormError returns the original error unchanged when
@@ -1120,15 +1132,21 @@ export function formatBrainstormMarkdown(
     }
     lines.push(`**Close set** (${result.close_set.length}):`);
     for (const c of result.close_set) {
-      lines.push(`- \`${c.slug}\`${c.title ? ` — ${c.title}` : ''}`);
+      lines.push(`- \`${c.slug}\`${c.title ? ` — ${c.title}` : ''}${c.source_id ? ` (source: ${c.source_id})` : ''}`);
     }
     lines.push('');
     lines.push(`**Far set** (${result.far_set.length}, ${result.far_set.filter((f) => f.source === 'corpus-sample').length} via corpus-sample fallback):`);
     for (const f of result.far_set) {
-      lines.push(`- \`${f.slug}\` — distance ${f.distance_score.toFixed(2)}${f.title ? ` — ${f.title}` : ''}`);
+      lines.push(`- \`${f.slug}\` — distance ${f.distance_score.toFixed(2)}${f.title ? ` — ${f.title}` : ''}${f.source_id ? ` (source: ${f.source_id})` : ''}`);
     }
     lines.push('');
   }
+  if (result.cost.cap_source === 'subscription') {
+    lines.push(`**Cost**: subscription allowance; USD cost unknown (input ${result.cost.input_tokens}, output ${result.cost.output_tokens} tokens).`);
+  } else if (result.cost.actual_usd !== null) {
+    lines.push(`**Cost**: $${result.cost.actual_usd.toFixed(4)} actual${result.cost.estimated_usd === null ? '' : ` (estimated $${result.cost.estimated_usd.toFixed(4)})`}.`);
+  }
+  if (includeMeta) lines.push('');
 
   lines.push(`## Ideas (${ideasToShow.length}${onlyPassed && result.ideas.length !== ideasToShow.length ? ` of ${result.ideas.length}` : ''})`);
   lines.push('');
@@ -1140,7 +1158,9 @@ export function formatBrainstormMarkdown(
     lines.push('');
     lines.push(idea.text);
     lines.push('');
-    lines.push(`_Citation: \`${idea.close_slug}\` × \`${idea.far_slug}\` — distance ${idea.distance_score.toFixed(2)}_`);
+    const closeSource = idea.close_source_id ? ` (source: ${idea.close_source_id})` : '';
+    const farSource = idea.far_source_id ? ` (source: ${idea.far_source_id})` : '';
+    lines.push(`_Citation: \`${idea.close_slug}\`${closeSource} × \`${idea.far_slug}\`${farSource} — distance ${idea.distance_score.toFixed(2)}_`);
     if (idea.judge?.note) {
       lines.push(`_Judge note: ${idea.judge.note}_`);
     }
@@ -1165,7 +1185,7 @@ close_slugs: [${result.close_set.map((c) => `"${c.slug}"`).join(', ')}]
 far_slugs: [${result.far_set.map((f) => `"${f.slug}"`).join(', ')}]
 short_of_target: ${result.short_of_target}
 calibration_cold_start: ${result.active_bias_tags === null}${judgeFailed}${unscored}
-cost_usd: ${result.cost.actual_usd.toFixed(4)}
+cost_usd: ${result.cost.actual_usd === null ? 'null' : result.cost.actual_usd.toFixed(4)}
 ---
 
 `;
@@ -1191,7 +1211,7 @@ export function buildBrainstormFrontmatterObject(
     far_slugs: result.far_set.map((f) => f.slug),
     short_of_target: result.short_of_target,
     calibration_cold_start: result.active_bias_tags === null,
-    cost_usd: Number(result.cost.actual_usd.toFixed(4)),
+    cost_usd: result.cost.actual_usd === null ? null : Number(result.cost.actual_usd.toFixed(4)),
   };
   if (result.judge_failed) {
     obj.judge_failed = true;

@@ -1,6 +1,6 @@
 import type { BrainEngine } from '../engine.ts';
 import { getFactsExtractionModel } from './extract.ts';
-import { resolveModel, resolveTierDefault } from '../model-config.ts';
+import { resolveModel, TIER_DEFAULTS } from '../model-config.ts';
 import { normalizeModelId } from '../model-id.ts';
 import { isModelPriceable, type PricingOverrides } from '../budget/budget-tracker.ts';
 import { pricingSetCommand } from '../budget/no-pricing.ts';
@@ -19,7 +19,13 @@ export async function conversationFactsCostCap(
   if (explicit) return cap;
   const models = [await getFactsExtractionModel(engine)];
   if (await engine.getConfig('conversation_parser.llm_fallback_enabled') === 'true') {
-    models.push(normalizeModelId(await resolveModel(engine, { tier: 'utility', fallback: resolveTierDefault('utility') })));
+    models.push(normalizeModelId(await resolveModel(engine, {
+      privateRole: 'parser-fallback',
+      tier: 'utility',
+      // resolveModel handles key-aware tier routing; do not resolve a
+      // generic fallback outside the explicit parser-fallback role.
+      fallback: TIER_DEFAULTS.utility,
+    })));
   }
   const unpriced = models.find(model => !isModelPriceable(model, 'chat', overrides));
   if (!unpriced) return cap;

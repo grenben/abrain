@@ -35,6 +35,8 @@ import { callTier3, FENCE_REPAIR_PROMPT_VERSION, spliceTier3, tier3Requests, tie
 import { callTailClassifier, TAIL_PROMPT_VERSION, tailRequest, tailTokenBudget, type TailRequest } from './llm-tail.ts';
 import type { FenceCtx, FenceFix, FenceIssue, FencePage, FenceReason, GateLetter } from './types.ts';
 import type { FenceTarget } from './repair-io.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { runPrivateFenceRepair, privateFenceMemo } from './codex.ts';
 
 export type FenceAnalysis =
   | { status: 'clean' }
@@ -152,6 +154,7 @@ function scanIssue(page: FencePage): Pick<FenceIssue, 'fence' | 'section' | 'rea
 export function tier3Estimate(requests: readonly Tier3Request[], pricing: { model: string; overrides?: PricingOverrides; capSource: CapSource }, tails: readonly TailRequest[] = []):
   { ok: true; usd: number; estimated: boolean } | { ok: false; reason: 'no_pricing'; guidance: NoPricingGuidance } {
   let usd = 0;
+  if (readPrivateCodexConfig()) return { ok: true, usd: 0, estimated: false };
   let estimated = false;
   const budgets = [...tails.map(req => tailTokenBudget(req, pricing.model)), ...requests.map(req => tier3TokenBudget(req, pricing.model))];
   for (const budget of budgets) {
@@ -181,7 +184,7 @@ export interface Tier3Deps {
 }
 
 export type Tier3Outcome =
-  | { ok: true; after: FencePage; spentUsd: number; claim: AttemptClaim; cleared: FenceReason[] }
+  | { ok: true; after: FencePage; spentUsd: number; claim: AttemptClaim; cleared: FenceReason[]; privatePolicyFingerprint?: string }
   | { ok: false; reason: FenceReason | 'claimed_elsewhere'; spentUsd: number; message: string; gate?: GateLetter; rows?: number[];
     /** The whole run should stop (the daily ledger refused the call). */
     stop?: boolean; resetsAt?: string; memoHit?: boolean; guidance?: NoPricingGuidance };
@@ -192,7 +195,7 @@ export function attemptCandidate(target: FenceTarget, incarnation: string) {
 }
 
 export function tier3Memo(target: FenceTarget, model: string): string {
-  return attemptMemoKey({ contentSha256: target.before, model, fenceVersion: FENCE_RULES_VERSION, promptVersion: `${FENCE_REPAIR_PROMPT_VERSION}.${TAIL_PROMPT_VERSION}` });
+  return privateFenceMemo(attemptMemoKey({ contentSha256: target.before, model, fenceVersion: FENCE_RULES_VERSION, promptVersion: `${FENCE_REPAIR_PROMPT_VERSION}.${TAIL_PROMPT_VERSION}` }));
 }
 
 /**
@@ -204,6 +207,7 @@ export function tier3Memo(target: FenceTarget, model: string): string {
  * write lands, or marks it transient when the write could not run.
  */
 export async function runTier3(target: FenceTarget, initial: Extract<FenceAnalysis, { status: 'llm' }>, incarnation: string, deps: Tier3Deps): Promise<Tier3Outcome> {
+  if (readPrivateCodexConfig()) return runPrivateFenceRepair(target, initial, incarnation, deps, tier3Memo(target, deps.model));
   let analysis = initial;
   const claimed = await deps.store.claim(attemptCandidate(target, incarnation), tier3Memo(target, deps.model));
   if (!claimed.ok) {

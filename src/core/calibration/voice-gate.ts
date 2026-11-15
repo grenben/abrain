@@ -28,6 +28,8 @@
 import { chat as gatewayChat } from '../ai/gateway.ts';
 import type { VoiceGateMode } from './templates.ts';
 import { resolveTierDefault } from '../model-config.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { codexVoiceJudge, gateCodexVoice } from './voice-gate-codex.ts';
 
 /**
  * Verdict the Haiku judge returns for a candidate string. Pass-through
@@ -155,6 +157,7 @@ export async function defaultJudge(input: {
   mode: VoiceGateMode;
   rubric: string;
 }): Promise<VoiceGateJudgeVerdict> {
+  if (readPrivateCodexConfig()) return codexVoiceJudge(input);
   const prompt = HAIKU_GATE_PROMPT
     .replace('{RUBRIC}', input.rubric)
     .replace('{CANDIDATE}', input.candidate);
@@ -204,6 +207,10 @@ export function parseJudgeOutput(raw: string): VoiceGateJudgeVerdict {
  * audit info (pass/fail + attempts).
  */
 export async function gateVoice<S>(opts: VoiceGateOpts<S>): Promise<VoiceGateResult<S>> {
+  // Explicit template-only use stays deterministic; private model failure never falls back.
+  if (readPrivateCodexConfig() && opts.maxAttempts !== 0) {
+    return gateCodexVoice(opts, opts.rubric ?? DEFAULT_RUBRICS[opts.mode]);
+  }
   const judge = opts.judge ?? defaultJudge;
   const rubric = opts.rubric ?? DEFAULT_RUBRICS[opts.mode];
   const maxAttempts = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;

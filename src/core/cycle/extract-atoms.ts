@@ -64,7 +64,7 @@ import type { BrainEngine, LinkBatchInput } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
 import type { GBrainConfig } from '../config.ts';
 import type { ProgressReporter } from '../progress.ts';
-import { chat as gatewayChat, withBudgetTracker } from '../ai/gateway.ts';
+import { chat as gatewayChat, withBudgetTracker, withoutBudgetTracker } from '../ai/gateway.ts';
 import { createGlobalLlmHaltTracker, haltedClassOf, providerContentBlockReason, type GlobalLlmErrorClass } from '../ai/errors.ts';
 import { derivedWriteThrough, reportDerivedWriteThrough } from './derived-write-through.ts';
 import { emptySessionSourceRouting, keepSessionSourceTranscripts, withSessionSourceRouting } from './synthesize-source-routing.ts';
@@ -82,11 +82,17 @@ import { abortableSleep } from '../retry.ts';
 import { throwIfAborted } from '../abort-check.ts';
 import { createHash } from 'crypto';
 import { slugifySegment } from '../sync.ts';
-import { resolveAlias, resolveTierDefault } from '../model-config.ts';
+import { resolveTierDefault } from '../model-config.ts';
 import { isMissingSchemaObject, warnOncePerProcess } from '../utils.ts';
 import { utcDate } from './cycle-date.ts';
 import { atomSourceDate, transcriptAtomSourceDate } from './atom-source-date.ts';
 import { normalizeForGrounding, isGroundingQuoteMark } from './synthesize-verify.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
+import { codexSubscriptionContext } from '../ai/subscription-context.ts';
+import { codexAtomsResponseSchema, privateAtomsFailure, privateAtomsAdmission } from './extract-atoms-codex.ts';
+import { resolveExtractAtomsModel } from './extract-atoms-model.ts';
+export { resolveExtractAtomsModel, resolveExtractAtomsModelWithSource } from './extract-atoms-model.ts';
 import type { TranscriptPageIndex } from '../transcripts/discover.ts';
 import { atomOriginPin, atomWriteFailure, type AtomWriteFailure, concurrentAtomBatch, managedAtomSession, readAtomOrigin, resumeManagedAtoms, publishManagedAtoms, publishManagedAtomGeneration, resumeManagedGenerationMembers,
   MANAGED_ATOM_DISCOVERY_SQL, managedAtomDiscoverySql, type AtomOrigin } from '../persistence/atom-maintenance.ts';
@@ -112,6 +118,13 @@ export { DEFAULT_EXTRACT_MAX_INPUT_CHARS };
 export const DEFAULT_EXTRACT_MAX_OUTPUT_TOKENS = 4096;
 
 export { MAX_DETERMINISTIC_FAILURES };
+
+/** Capture the scoped transaction hook without wrapping/changing engine identity. */
+function atomPublicationAuthority(engine: BrainEngine): ((tx: BrainEngine) => Promise<void>) | undefined {
+  const subscription = codexSubscriptionContext();
+  if (subscription?.engine !== engine || !subscription.checkAuthorityInTransaction) return undefined;
+  return tx => subscription.checkAuthorityInTransaction!(tx);
+}
 
 /**
  * Transient provider/infra failure shapes — retryable, never counted.
@@ -191,7 +204,8 @@ async function resolveExtractableTypes(): Promise<string[]> {
     const { extractableTypesFromPack, nonExtractableTypesFromPack } = await import('../schema-pack/extractable.ts');
     const resolved = await loadActivePack({ cfg: loadConfig(), remote: false });
     packExtractable = extractableTypesFromPack(resolved.manifest); packExcluded = nonExtractableTypesFromPack(resolved.manifest);
-  } catch {
+  } catch (error) {
+    if (privateAtomsFailure(error)) throw error;
     // Pack unavailable (test seams, bootstrap) — legacy floor only.
   }
   return unionExtractableTypes(packExtractable, packExcluded);
@@ -677,25 +691,6 @@ export const EXTRACT_ATOMS_MODEL_KEY = 'models.dream.extract_atoms';
  * Values are trimmed and alias-resolved like `resolveModelDetailed`'s steps.
  * Fail-soft: a throwing config read routes to the tier default.
  */
-export async function resolveExtractAtomsModelWithSource(
-  engine: BrainEngine,
-): Promise<{ model: string; source: 'config' | 'tier_config' | 'tier_default'; label?: string }> {
-  try {
-    const own = (await engine.getConfig(EXTRACT_ATOMS_MODEL_KEY))?.trim();
-    if (own) return { model: await resolveAlias(engine, own), source: 'config', label: `config: ${EXTRACT_ATOMS_MODEL_KEY}` };
-    const tier = (await engine.getConfig('models.tier.utility'))?.trim();
-    if (tier) return { model: await resolveAlias(engine, tier), source: 'tier_config', label: 'config: models.tier.utility' };
-  } catch {
-    // Fail-soft — fall through to the tier default.
-  }
-  return { model: resolveTierDefault('utility'), source: 'tier_default' };
-}
-
-/** String-returning wrapper for runtime callers (`runPhaseExtractAtoms`). */
-export async function resolveExtractAtomsModel(engine: BrainEngine): Promise<string> {
-  return (await resolveExtractAtomsModelWithSource(engine)).model;
-}
-
 /**
  * v0.41 minimal extract_atoms body, rebuilt for v0.41.2.1.
  *
@@ -708,10 +703,15 @@ export async function runPhaseExtractAtoms(
   engine: BrainEngine,
   opts: ExtractAtomsOpts = {},
 ): Promise<PhaseResult> {
+  if (!opts.dryRun) return withPrivateRoleScope(['atoms'], () => extractAtoms(engine, opts));
+  return extractAtoms(engine, opts);
+}
+
+async function extractAtoms(engine: BrainEngine, opts: ExtractAtomsOpts): Promise<PhaseResult> {
   const sourceId = opts.sourceId ?? 'default';
   const guestSkip = await (await import('../guests/derived.ts')).guestSourceSkip(engine, 'extract_atoms', sourceId);
   if (guestSkip) return { phase: 'extract_atoms', status: 'skipped', duration_ms: 0, summary: `extract_atoms: ${guestSkip.summary}`, details: guestSkip.details };
-  const chat = opts._chat ?? gatewayChat;
+  const chat = readPrivateCodexConfig() ? gatewayChat : opts._chat ?? gatewayChat;
   const managed = await managedAtomSession(engine, sourceId, opts._managedRetry, opts.attempt?.writeWait, opts.signal);
   // v0.41.2.1: loadConfigWithEngine() so the dream.* DB-plane merge from Phase 1 reaches this phase.
   let transcriptDirs: { session_corpus_dir?: string; meeting_transcripts_dir?: string } | undefined;
@@ -919,10 +919,10 @@ export async function runPhaseExtractAtoms(
   let budgetExhausted = false;
   // #3813: key-aware tier default, not a hardcoded Anthropic model — an
   // OPENAI_API_KEY-only install must not route to an unservable provider.
-  // Pre-computed so a config-read failure inside the try below (caught, see
-  // "Keep safe defaults" comment) still leaves extractModel on this default,
-  // matching the pre-refactor fail-soft behavior exactly.
-  let extractModel = resolveTierDefault('utility');
+  // Resolve the role-specific model before selecting the generic tier
+  // fallback. A private routing/config failure must not silently fall through
+  // to a public utility model.
+  let extractModel: string | undefined;
   const dateGrounding = await isConsumerDateGroundingOn(engine, 'atoms');
   let budgetCap = DEFAULT_BUDGET_USD;
   let explicitBudget = false; // operator SET cycle.extract_atoms.budget_usd
@@ -953,20 +953,24 @@ export async function runPhaseExtractAtoms(
       const n = Number(configuredPacing);
       if (Number.isFinite(n) && n > 0) pacingMs = Math.min(60_000, Math.floor(n));
     }
-  } catch {
+  } catch (error) {
+    if (readPrivateCodexConfig() || privateAtomsFailure(error)) throw error;
     // Keep safe defaults on any config-read failure: key-aware utility-tier
     // model, $0.30 cap, default output cap.
+    extractModel = resolveTierDefault('utility');
   }
+  extractModel ??= resolveTierDefault('utility');
   // A cap is enforceable only when the tracker can price every call under it:
   // the extraction chat model AND the embed route importFromContent calls.
   // A default cap is dropped for an unpriced route (warn and run); a cap the
   // operator set refuses the run with no_pricing guidance (cost-gate module).
   const pricingOverrides = await loadPricingOverrides(engine);
-  const costGate = resolveExtractAtomsCostGate(extractModel, resolveEmbedModelForCostGate(), pricingOverrides, { explicitBudget });
+  const subscription = privateAtomsAdmission(extractModel);
+  const costGate = resolveExtractAtomsCostGate(extractModel, resolveEmbedModelForCostGate(), pricingOverrides, { explicitBudget, subscription });
   const refused = await settleExtractAtomsCostGate(engine, sourceId, costGate, { budgetCap, extractModel, dryRun: opts.dryRun ?? false });
   if (refused) return refused;
   const budgetTracker = opts.attempt?.budgetTracker ?? new BudgetTracker({
-    maxCostUsd: costGate.enforceCap ? budgetCap : undefined,
+        maxCostUsd: costGate.enforceCap ? budgetCap : undefined,
     label: 'cycle.extract_atoms',
     pricingOverrides,
   });
@@ -1127,12 +1131,16 @@ export async function runPhaseExtractAtoms(
       const cutLine = truncated ? inputTruncatedLine(originLabel, input, maxInputChars) : null; // A7: a complete appended-tail read prints nothing
       if (cutLine) { inputTruncated++; console.error(cutLine); } // counted only for a model call
 
-      const result = await chat({
+      const call = () => chat({
+        privateRole: 'atoms',
         model: extractModel,
         ...atomsPrompt(dateGrounding, originLabel, promptContent),
-        maxTokens: maxOutputTokens, responseSchema: ATOMS_RESPONSE_SCHEMA,
+        maxTokens: maxOutputTokens, responseSchema: codexAtomsResponseSchema(promptContent),
         abortSignal: opts.signal,
       });
+      const result = subscription
+        ? await withoutBudgetTracker(call)
+        : await call();
       // Post-await yield: closes the "long LLM call past TTL" hazard
       // codex flagged. The 30s throttle inside maybeYield bounds the
       // actual refresh rate so this is cheap when calls are fast.
@@ -1314,7 +1322,8 @@ export async function runPhaseExtractAtoms(
         if (managed && origin) {
           for (const atom of managedAtoms) atom.links = provenanceLinks.filter(link => link.to_slug === atom.slug);
           throwIfAborted(opts.signal, 'extract_atoms');
-          const generation = await publishManagedAtomGeneration(engine, managed, origin, managedAtoms, { ...atomGenerationOrigin(sourceId, item), content: item.content, runId });
+          const generation = await publishManagedAtomGeneration(engine, managed, origin, managedAtoms,
+            { ...atomGenerationOrigin(sourceId, item), content: item.content, runId }, atomPublicationAuthority(engine));
           if (generation.state === 'held') { console.error(heldLine(originLabel, atomGenerationOrigin(sourceId, item).key, generation.reason)); continue; }
           const published = generation.receipts;
           writeRequests.push(...published);
@@ -1363,6 +1372,11 @@ export async function runPhaseExtractAtoms(
       // outage check. Everything else gets a durable count for observability,
       // but an unknown error class must never permanently suppress a page's atoms.
       const message = err instanceof Error ? err.message : String(err);
+      if (privateAtomsFailure(err)) {
+        hardFailureCount++;
+        failures.push({ source: originLabel, error: message });
+        break;
+      }
       const blockReason = providerContentBlockReason(err);
       if (blockReason) {
         llmHalt.reset();
@@ -1410,7 +1424,8 @@ export async function runPhaseExtractAtoms(
         round: 'single',
         extracted_at: new Date().toISOString(),
         total_rows: totalAtomsExtracted,
-        cost_usd: estimatedSpendUsd,
+        cost_usd: subscription ? null : estimatedSpendUsd,
+        ...(subscription ? { billing: 'subscription' as const, api_metered_cost_usd: estimatedSpendUsd } : {}),
         summary:
           `Extracted ${totalAtomsExtracted} atoms from ` +
           `${transcriptsProcessed} transcripts + ${pagesProcessed} pages.`,
@@ -1430,6 +1445,7 @@ export async function runPhaseExtractAtoms(
       kind: 'atoms',
       source_id: sourceId,
       cost_delta: estimatedSpendUsd,
+      subscription,
       ...classifyRunStop({ deadline_hit: stoppedEarly, error: hardFailureCount > 0 ? providerHaltReason(abortedGlobalError) ?? 'item_error' : false }),
     });
   }
@@ -1474,7 +1490,8 @@ export async function runPhaseExtractAtoms(
       malformed_outputs: malformedOutputs, stopped_outputs: stoppedOutputs,
       tombstoned_for_failures: tombstonedForFailures,
       tombstoned_transcripts: tombstonedTranscripts,
-      estimated_spend_usd: estimatedSpendUsd,
+      estimated_spend_usd: subscription ? null : estimatedSpendUsd,
+      ...(subscription ? { billing: 'subscription', api_metered_cost_usd: estimatedSpendUsd, remaining_quota: null } : {}),
       budget_usd: budgetCap,
       model: extractModel,
       budget_exhausted: budgetExhausted,

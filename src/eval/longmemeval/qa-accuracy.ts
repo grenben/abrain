@@ -92,7 +92,9 @@ export type QaAccuracyBlock = {
   mixed_judge_config: boolean;
   est_cost_usd: number | null;
   /** Summed over every row's `judge_cost_usd` (the receipt's cumulative judge spend across resumes). */
-  actual_cost_usd: number;
+  actual_cost_usd: number | null;
+  known_priced_cost_usd?: number;
+  unpriced_judge_rows?: number;
   /** THIS run's judge spend from the ledger (null when the lane did not run). */
   run_cost_usd: number | null;
   methodology_note: string;
@@ -146,6 +148,7 @@ export function buildQaAccuracy(rows: ReadonlyArray<QaRowLike>, opts: QaAccuracy
   let nonAbsTotal = 0;
   let nonAbsCorrect = 0;
   let actual = 0;
+  let unpriced = 0;
   const hashes = new Set<string>();
 
   for (const row of deduped) {
@@ -158,6 +161,7 @@ export function buildQaAccuracy(rows: ReadonlyArray<QaRowLike>, opts: QaAccuracy
     const judgeError = typeof row.judge_error === 'string';
     const skipped = row.judge_skipped === 'budget';
     if (typeof row.judge_cost_usd === 'number' && Number.isFinite(row.judge_cost_usd)) actual += row.judge_cost_usd;
+    else if (!skipped && (judged || judgeError)) unpriced++;
     if (typeof row.judge_config_hash === 'string') hashes.add(row.judge_config_hash);
 
     for (const s of [t, agg]) {
@@ -208,7 +212,8 @@ export function buildQaAccuracy(rows: ReadonlyArray<QaRowLike>, opts: QaAccuracy
     judge_config_hash: hashes.size === 1 ? onlyHash : opts.judgeConfigHash,
     mixed_judge_config: hashes.size > 1,
     est_cost_usd: opts.estCostUsd,
-    actual_cost_usd: opts.actualCostUsd ?? actual,
+    actual_cost_usd: unpriced ? null : opts.actualCostUsd ?? actual,
+    ...(unpriced ? { known_priced_cost_usd: actual, unpriced_judge_rows: unpriced } : {}),
     run_cost_usd: opts.runCostUsd ?? null,
     methodology_note: opts.methodologyNote,
   };

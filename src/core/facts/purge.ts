@@ -571,7 +571,11 @@ export async function submitPurgeFactMutation(ctx: OperationContext, params: Rec
       const gateReceipts = (await tx.executeRaw(`DELETE FROM write_gate_receipts WHERE (target_table='facts' AND target_id=ANY($1::text[]))
           OR (target_table='takes' AND target_id=ANY($2::text[])) OR (target_table='write_gate_holds' AND target_id=ANY($3::text[])) RETURNING 1`,
         [ids.map(String), plan.takes.map(t => String(t.id)), holdIds])).length;
-      const proposals = (await tx.executeRaw('DELETE FROM take_proposals WHERE source_id=$1 AND gbrain_fact_fingerprint(claim_text)=$2 RETURNING 1', [p.sourceId, current.fact_hash])).length;
+      const proposals = (await tx.executeRaw(`DELETE FROM take_proposals WHERE source_id=$1
+        AND (gbrain_fact_fingerprint(claim_text)=$2
+          OR strpos(lower(COALESCE(codex_evidence::text,'')),$3)>0
+          OR strpos(lower(COALESCE(codex_evidence::text,'')),$4)>0) RETURNING 1`,
+      [p.sourceId, current.fact_hash, current.fact.toLowerCase(), JSON.stringify(current.fact).slice(1, -1).toLowerCase()])).length;
       const notices = (await tx.executeRaw(`UPDATE core_edit_notices SET base_text=NULL WHERE source_id=$1 AND strpos(lower(base_text),$2)>0 RETURNING 1`,
         [p.sourceId, current.fact.toLowerCase()])).length;
       const facts = (await tx.executeRaw('DELETE FROM facts WHERE id=ANY($1::bigint[]) AND source_id=$2 RETURNING id', [ids, p.sourceId])).length;

@@ -33,9 +33,15 @@ import { serializeMarkdown } from '../markdown.ts';
 import { OperationError } from '../ops/contract.ts';
 import { DRIFT_REPORT_KIND, publishSinglePage } from '../generations/adapters/single-page.ts';
 import { publishOrHold, type PublicationHold } from '../persistence/accepted-pending.ts';
+import { readPrivateCodexConfig } from '../ai/private-policy.ts';
+import { codexDriftJudge } from './drift-codex.ts';
+import { bindPrivateDriftSource, CODEX_DRIFT_VERSION } from './drift-codex.ts';
+import { withPrivateRoleScope } from '../ai/private-role-scope.ts';
 import { declareDerivation, deriveTrust } from '../trust/taint.ts';
+import { formatCycleCost } from './budget-meter.ts';
 
 export interface DriftPhaseOpts {
+  sourceId?: string;
   brainDir?: string;
   dryRun: boolean;
   /** Override the audit ledger path (tests). */
@@ -74,6 +80,8 @@ async function loadDriftConfig(engine: BrainEngine): Promise<DriftConfig> {
 }
 
 export interface DriftCandidate {
+  sourceId?: string;
+  pageRevision?: string;
   takeId: number;
   pageId: number;
   pageSlug: string;
@@ -86,6 +94,7 @@ export interface DriftCandidate {
 
 /** Judge verdict: has the claim drifted relative to the evidence? */
 export interface DriftVerdict {
+  source_quote?: string;
   drifted: boolean;
   confidence: number;
   reasoning: string;
@@ -173,8 +182,10 @@ export async function defaultDriftJudge(input: {
   modelHint?: string;
   maxOutputTokens?: number;
 }): Promise<DriftVerdict> {
+  if (readPrivateCodexConfig()) return codexDriftJudge(input);
   const { chat } = await import('../ai/gateway.ts');
   const result = await chat({
+    privateRole: 'drift',
     messages: [{ role: 'user', content: buildDriftPrompt(input.candidate, input.evidence) }],
     ...(input.modelHint ? { model: input.modelHint } : {}),
     maxTokens: input.maxOutputTokens ?? resolveSynthMaxOutputTokens(input.modelHint ?? ''),
@@ -198,16 +209,17 @@ async function findDriftCandidates(
   engine: BrainEngine,
   lookbackDays: number,
   cycleDate?: string,
+  sourceId?: string,
 ): Promise<DriftCandidate[]> {
   const cutoffIso = shiftCalendarDate(cycleDate ?? await resolveCycleDate(engine), -lookbackDays);
   // Only consider takes with weight in the "soft" middle band (0.3..0.85)
   // — facts (1.0) don't drift, very-low hunches (<0.3) aren't actionable yet.
   const rows = await engine.executeRaw<{
     take_id: number; page_id: number; page_slug: string; row_num: number;
-    claim: string; weight: number; recent_evidence: number;
+    claim: string; weight: number; recent_evidence: number; source_id: string; page_revision: string;
   }>(`
     SELECT t.id AS take_id, p.id AS page_id, p.slug AS page_slug, t.row_num,
-           t.claim, t.weight,
+           t.claim, t.weight, p.source_id, p.knowledge_revision::text AS page_revision,
            (SELECT count(*)::int FROM timeline_entries te
               WHERE te.page_id = p.id
                 AND te.date >= $1::date)
@@ -216,10 +228,10 @@ async function findDriftCandidates(
     JOIN pages p ON p.id = t.page_id
     WHERE t.active
       AND t.weight >= 0.3 AND t.weight <= 0.85
-      AND t.resolved_at IS NULL
+      AND t.resolved_at IS NULL AND ($2::text IS NULL OR (p.source_id=$2 AND p.deleted_at IS NULL))
     ORDER BY recent_evidence DESC, t.weight DESC
     LIMIT 200
-  `, [cutoffIso]);
+  `, [cutoffIso, sourceId ?? null]);
   return rows
     .filter(r => Number(r.recent_evidence) >= 1)
     .map(r => ({
@@ -230,6 +242,7 @@ async function findDriftCandidates(
       claim: String(r.claim),
       weight: Number(r.weight),
       recentEvidenceCount: Number(r.recent_evidence),
+      sourceId: r.source_id, pageRevision: r.page_revision,
     }));
 }
 
@@ -238,14 +251,19 @@ async function loadEvidence(
   engine: BrainEngine,
   pageId: number,
   cutoffIso: string,
+  bounded = false,
 ): Promise<{ text: string; ids: number[] }> {
   const rows = await engine.executeRaw<{ id: number | string; date: string; source: string; summary: string }>(
-    `SELECT id, date::text AS date, source, summary FROM timeline_entries
+    `SELECT id, date::text AS date, CASE WHEN $3 THEN left(source,128) ELSE source END AS source,
+       CASE WHEN $3 THEN left(summary,1800) ELSE summary END AS summary FROM timeline_entries
      WHERE page_id = $1 AND date >= $2::date
      ORDER BY date DESC LIMIT 12`,
-    [pageId, cutoffIso],
+    [pageId, cutoffIso, bounded],
   );
-  if (rows.length === 0) return { text: '(no timeline entries in window)', ids: [] };
+  if (rows.length === 0) {
+    if (bounded) throw new Error('private_drift_evidence_missing');
+    return { text: '(no timeline entries in window)', ids: [] };
+  }
   return { text: rows.map(r => `- ${r.date} [${r.source}] ${r.summary}`).join('\n'), ids: rows.map(r => Number(r.id)) };
 }
 
@@ -254,12 +272,15 @@ interface JudgedCandidate {
   verdict: DriftVerdict;
   /** The timeline rows the judge's prompt quoted. */
   evidenceIds: number[];
+  evidenceSnapshot: string;
 }
 
 function buildReportBody(
   judged: JudgedCandidate[],
   cfg: DriftConfig,
   modelId: string,
+  privateReport = false,
+  failed = 0,
 ): string {
   const drifted = judged.filter(j => j.verdict.drifted);
   const lines: string[] = [
@@ -272,12 +293,16 @@ function buildReportBody(
     `${drifted.length} of ${judged.length} judged take(s) look drifted.`,
     ``,
   ];
-  for (const { candidate: c, verdict: v } of judged) {
+  if (privateReport) lines.push(`Judgment protocol: ${CODEX_DRIFT_VERSION}. This report records the evidence snapshot supplied to the judge.`,
+    `Failed judgments: ${failed}. Missing judgments are not stability findings.`, '');
+  for (const { candidate: c, verdict: v, evidenceIds } of judged) {
     lines.push(`## ${v.drifted ? 'DRIFTED' : 'stable'} — ${c.pageSlug} (take #${c.rowNum})`);
     lines.push(`- Claim: ${c.claim}`);
     lines.push(`- Weight: ${c.weight}${v.suggested_weight !== undefined ? ` → suggested ${v.suggested_weight}` : ''}`);
     lines.push(`- Confidence: ${v.confidence.toFixed(2)}`);
     if (v.reasoning) lines.push(`- Reasoning: ${v.reasoning}`);
+    if (privateReport) lines.push(`- Evidence: [Source: [[${c.pageSlug}]], take ${c.takeId}, page revision ${c.pageRevision}, timeline entry IDs ${evidenceIds.join(', ')}]`,
+      `- Quotation: ${JSON.stringify(v.source_quote)}`);
     lines.push('');
   }
   return lines.join('\n');
@@ -291,6 +316,13 @@ export async function runPhaseDrift(
   engine: BrainEngine,
   opts: DriftPhaseOpts,
 ): Promise<DreamPhaseResult> {
+  return withPrivateRoleScope(['drift'], () => runPhaseDriftInner(engine, opts));
+}
+
+async function runPhaseDriftInner(
+  engine: BrainEngine,
+  opts: DriftPhaseOpts,
+): Promise<DreamPhaseResult> {
   const start = Date.now();
   const config = await loadDriftConfig(engine);
   if (!config.enabled && !opts.forceEnabled) {
@@ -298,7 +330,9 @@ export async function runPhaseDrift(
   }
 
   const cycleDate = opts.cycleDate ?? await resolveCycleDate(engine);
-  const candidates = await findDriftCandidates(engine, config.lookbackDays, cycleDate);
+  const privateMode = !!readPrivateCodexConfig(), sourceId = privateMode ? opts.sourceId ?? 'default' : undefined;
+  const sourceBinding = privateMode ? await bindPrivateDriftSource(engine, sourceId!) : undefined;
+  const candidates = await findDriftCandidates(engine, config.lookbackDays, cycleDate, sourceId);
   if (candidates.length === 0) {
     return {
       name: 'drift',
@@ -322,9 +356,9 @@ export async function runPhaseDrift(
   // #5280: a managed brain publishes the report through the maintenance
   // coordinator; the preflight refuses a missing canonical owner before any
   // judge spend. Null on an unmanaged brain.
-  const maintenance = await maintenancePreflight(engine, 'default');
+  const maintenance = await maintenancePreflight(engine, sourceId ?? 'default');
   const modelId = await resolveModel(engine, {
-    configKey: 'models.drift',
+    privateRole: 'drift', configKey: 'models.drift',
     deprecatedConfigKey: 'dream.drift.model',
     tier: 'reasoning',
     fallback: 'sonnet',
@@ -337,15 +371,29 @@ export async function runPhaseDrift(
     auditPath: opts.auditPath,
   });
   const maxOutputTokens = resolveSynthMaxOutputTokens(modelId);
-  const judge = opts.judge ?? defaultDriftJudge;
+  const judge = privateMode ? defaultDriftJudge : opts.judge ?? defaultDriftJudge;
   const cutoffIso = shiftCalendarDate(cycleDate, -config.lookbackDays);
 
-  const reportRevision = maintenance ? null : (await engine.readPageSnapshot(`reports/drift-${cycleDate}`, { sourceId: 'default', includeDeleted: true }))?.revision ?? null;
+  const reportRevision = maintenance ? null : (await engine.readPageSnapshot(`reports/drift-${cycleDate}`, { sourceId: sourceId ?? 'default', includeDeleted: true }))?.revision ?? null;
   const judged: JudgedCandidate[] = [];
   let budgetExhausted = false;
   let failed = 0;
   for (const candidate of candidates.slice(0, config.maxPerCycle)) {
-    const { text: evidence, ids: evidenceIds } = await loadEvidence(engine, candidate.pageId, cutoffIso);
+    let evidence: string, evidenceIds: number[];
+    try {
+      if (sourceBinding) {
+        await bindPrivateDriftSource(engine, sourceId!, sourceBinding);
+        const snapshot = await engine.readPageSnapshot(candidate.pageSlug, { sourceId: sourceId! });
+        if (!snapshot || snapshot.page.id !== candidate.pageId || snapshot.revision !== candidate.pageRevision ||
+            snapshot.sourceIncarnation !== sourceBinding.incarnation) throw new Error('private_drift_input_changed');
+      }
+      const loaded = await loadEvidence(engine, candidate.pageId, cutoffIso, privateMode);
+      evidence = loaded.text; evidenceIds = loaded.ids;
+    } catch (error) {
+      if (!privateMode) throw error;
+      failed++;
+      continue;
+    }
     const check = meter.check({
       modelId,
       // ~4 chars per token over the prompt the judge actually sends.
@@ -359,17 +407,37 @@ export async function runPhaseDrift(
     }
     try {
       const verdict = await judge({ candidate, evidence, modelHint: modelId, maxOutputTokens });
-      judged.push({ candidate, verdict, evidenceIds });
+      judged.push({ candidate, verdict, evidenceIds, evidenceSnapshot: evidence });
     } catch (e) {
       failed += 1;
-      process.stderr.write(`[drift] judge failed on take ${candidate.takeId}: ${(e as Error).message}\n`);
+      process.stderr.write(`[drift] judge failed on take ${candidate.takeId}: ${privateMode ? (e instanceof Error && e.message === 'private_drift_input_changed' ? 'input_changed' : 'judgment_failed') : (e as Error).message}\n`);
     }
   }
 
+  if (sourceBinding) {
+    await bindPrivateDriftSource(engine, sourceId!, sourceBinding);
+    for (let i = judged.length - 1; i >= 0; i--) {
+      const candidate = judged[i]!.candidate;
+      const current = await engine.readPageSnapshot(candidate.pageSlug, { sourceId: sourceId! });
+      let currentEvidence: { text: string; ids: number[] } | null = null;
+      try {
+        currentEvidence = current && current.page.id === candidate.pageId
+          ? await loadEvidence(engine, candidate.pageId, cutoffIso, true) : null;
+      } catch { /* the evidence snapshot can no longer be verified */ }
+      if (!current || current.page.id !== candidate.pageId || current.revision !== candidate.pageRevision ||
+          current.sourceIncarnation !== sourceBinding.incarnation || !currentEvidence ||
+          currentEvidence.text !== judged[i]!.evidenceSnapshot ||
+          currentEvidence.ids.join(',') !== judged[i]!.evidenceIds.join(',')) {
+        judged.splice(i, 1);
+        failed++;
+      }
+    }
+  }
   const driftedCount = judged.filter(j => j.verdict.drifted).length;
   let reportSlug: string | undefined;
   let reportHold: PublicationHold | null = null;
   if (judged.length > 0) {
+    if (sourceBinding) await bindPrivateDriftSource(engine, sourceId!, sourceBinding);
     reportSlug = `reports/drift-${cycleDate}`;
     // Report-only v1: the report page is the ONLY write this phase makes.
     // Typed `note` (+ report_type) so the default pack declares it (#5881).
@@ -379,8 +447,8 @@ export async function runPhaseDrift(
       { table: 'takes' as const, id: j.candidate.takeId }, ...j.evidenceIds.map(id => ({ table: 'timeline_entries' as const, id }))]),
       { channel: 'derive:drift' });
     if (maintenance) {
-      const snapshot = await engine.readPageSnapshot(reportSlug, { sourceId: 'default' });
-      const report = serializeMarkdown({ report_type: 'drift' }, buildReportBody(judged, config, modelId), '',
+      const snapshot = await engine.readPageSnapshot(reportSlug, { sourceId: sourceId ?? 'default' });
+      const report = serializeMarkdown({ report_type: 'drift', ...(privateMode ? { visibility: 'private', judgment_protocol: CODEX_DRIFT_VERSION } : {}) }, buildReportBody(judged, config, modelId, privateMode, failed), '',
         { type: 'note', title: `Drift report ${cycleDate}`, tags: [] });
       // #6052: a held report is not on the page yet, so it is neither linked nor counted as written.
       reportHold = await publishOrHold(() => publishMaintenancePage(engine, maintenance, reportSlug!, report,
@@ -388,8 +456,8 @@ export async function runPhaseDrift(
       if (reportHold) reportSlug = undefined;
     } else {
       try {
-        await publishSinglePage(engine, { kind: DRIFT_REPORT_KIND, sourceId: 'default', slug: reportSlug, expectedRevision: reportRevision, derivation,
-          page: { type: 'note', frontmatter: { report_type: 'drift' }, title: `Drift report ${cycleDate}`, compiled_truth: buildReportBody(judged, config, modelId) } });
+        await publishSinglePage(engine, { kind: DRIFT_REPORT_KIND, sourceId: sourceId ?? 'default', slug: reportSlug, expectedRevision: reportRevision, derivation,
+          page: { type: 'note', frontmatter: { report_type: 'drift', ...(privateMode ? { visibility: 'private', judgment_protocol: CODEX_DRIFT_VERSION } : {}) }, title: `Drift report ${cycleDate}`, compiled_truth: buildReportBody(judged, config, modelId, privateMode, failed) } });
       } catch (e) {
         if (!(e instanceof OperationError && e.code === 'generation_fenced')) throw e;
         process.stderr.write(`[drift] ${reportSlug} changed while this run composed it, so it was left as it is; the next cycle writes it.\n`);
@@ -405,7 +473,7 @@ export async function runPhaseDrift(
     (reportHold === 'contention' ? ' (report not admitted: database contention; the next cycle writes it)' : '') +
     (budgetExhausted ? ' (budget exhausted)' : '') +
     (failed > 0 ? ` (${failed} judge failure(s))` : '') +
-    `. Cumulative cost: $${meter.totalSpent.toFixed(4)} / $${config.budgetUsd.toFixed(2)}` +
+    `. Cumulative cost: ${formatCycleCost(meter.totalSpent)} / $${config.budgetUsd.toFixed(2)}` +
     `. Report-only: auto_update=${config.autoUpdate} mutates nothing in v1.`;
 
   return {

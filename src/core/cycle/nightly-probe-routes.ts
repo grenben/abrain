@@ -22,6 +22,7 @@
  */
 
 import type { ConfigReader } from '../config-snapshot.ts';
+import { readPrivateCodexConfig, resolvePrivateModel } from '../ai/private-policy.ts';
 import {
   TIER_DEFAULTS,
   resolveAlias,
@@ -109,6 +110,27 @@ export async function resolveNightlyProbeModelRoutes(
   engine: ConfigReader,
 ): Promise<NightlyProbeModelRoutes> {
   try {
+    const privatePolicy = readPrivateCodexConfig();
+    if (privatePolicy) {
+      const reader = await resolvePrivateModel(engine, {
+        ...NIGHTLY_PROBE_READER_ROUTE,
+        privateRole: 'longmemeval-reader',
+      }, privatePolicy);
+      const extractor = await resolvePrivateModel(engine, {
+        ...NIGHTLY_PROBE_EXTRACTOR_ROUTE,
+        privateRole: 'longmemeval-extractor',
+      }, privatePolicy);
+      const slots: NightlyProbeModelRoutes['slots'] = {};
+      for (const [id, configKey] of Object.entries(NIGHTLY_PROBE_SLOT_KEYS) as Array<[NightlyProbeSlotId, string]>) {
+        slots[id] = (await resolvePrivateModel(engine, {
+          privateRole: 'nightly-probes',
+          configKey,
+          tier: 'reasoning',
+          fallback: 'unused',
+        }, privatePolicy)).model;
+      }
+      return { reader, extractor, slots };
+    }
     const reader = await resolveModelDetailed(engine, NIGHTLY_PROBE_READER_ROUTE);
     const extractor = await resolveModelDetailed(engine, NIGHTLY_PROBE_EXTRACTOR_ROUTE);
     return { reader, extractor, slots: await readCrossModalSlotConfig(engine) };

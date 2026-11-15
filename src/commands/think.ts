@@ -6,13 +6,14 @@
  * degrades to gather-only output with a warning if missing.
  */
 import type { BrainEngine } from '../core/engine.ts';
-import { runThink, persistSynthesis, stripGapsSection } from '../core/think/index.ts';
+import { runThink, persistSynthesis, stripGapsSection, type RunThinkOpts } from '../core/think/index.ts';
 import { loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
 import { canonicalLookup } from '../core/model-pricing.ts';
 import { embedQueryWithPrefix } from '../core/search/query-prefix.ts';
 import { keylessThinkNotice, modelOverrideIgnoredNotice } from '../core/interop-notices.ts';
 import { applyCliOpNotices, captureOpNotice } from '../cli/op-notices.ts';
+import { withThinkSubscription, THINK_ALLOWANCE_FLAGS } from './think-subscription.ts';
 
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -91,7 +92,8 @@ prints what would have been the input (exit 0).
   // #4508: --source and --calibration-holder were MISSING here — the flag and
   // its value joined the positional question, so `think "q" --source X`
   // echoed `# --source X q` and silently ignored the scope.
-  const flagNames = ['--anchor', '--rounds', '--model', '--since', '--until', '--source', '--calibration-holder', '--reference-date'];
+  const flagNames = ['--anchor', '--rounds', '--model', '--since', '--until', '--source', '--calibration-holder', '--reference-date',
+    ...THINK_ALLOWANCE_FLAGS];
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -192,7 +194,7 @@ prints what would have been the input (exit 0).
         // ambient source, a connection failure, a genuine bug — propagates.
         if (source !== undefined || !isMissingSchemaObject(err, 'table', 'sources')) throw err;
       }
-      result = await runThink(engine, {
+      const thinkOpts: RunThinkOpts = {
         question, anchor, rounds, save, take, model, since, until,
         ...(referenceDate ? { referenceDate } : {}),
         // Fail-closed trust: local CLI must say so explicitly, or trajectory
@@ -212,44 +214,44 @@ prints what would have been the input (exit 0).
         withCalibration,
         ...(calibrationHolder ? { calibrationHolder } : {}),
         // Local CLI: no MCP allow-list filter — operator owns the brain.
+      };
+      result = await withThinkSubscription(engine, args, thinkOpts, async () => {
+        const answer = await runThink(engine, thinkOpts);
+
+        // Persist if --save (the runThink path doesn't auto-persist; CLI does it explicitly)
+        if (save) {
+          const persisted = await persistSynthesis(engine, answer, { sourceId, allowedSources });
+          savedSlug = persisted.slug || undefined;  // '' = persist-skip signal (#10)
+          evidenceInserted = persisted.evidenceInserted;
+          for (const w of persisted.warnings) answer.warnings.push(w);
+          // #1698 (F2): --save requested but no synthesis was produced (no LLM, empty,
+          // or malformed) → exit non-zero. Saving nothing with exit 0 when the user
+          // explicitly asked to save is itself a silent failure.
+          if (!persisted.slug) {
+            console.error(
+              'think: --save requested but no synthesis was produced (no LLM available ' +
+              'or empty result) — nothing saved.',
+            );
+            process.exit(1);
+          }
+        }
+
+        // #2556: --take persists through the canonical takes write-through.
+        if (take && anchor) {
+          const { persistTakeFromSynthesis } = await import('../core/think/persist-take.ts');
+          const persisted = await persistTakeFromSynthesis(engine, answer, { anchor, ...(sourceId ? { sourceId } : {}) });
+          takeRow = persisted.take_row;
+          takePath = persisted.path;
+          for (const w of persisted.warnings) answer.warnings.push(w);
+          if (persisted.take_row === null) {
+            console.error(
+              `think: --take requested but no take row was appended (${persisted.warnings.join(', ') || 'unknown reason'}).`,
+            );
+            process.exit(1);
+          }
+        }
+        return answer;
       });
-
-      // Persist if --save (the runThink path doesn't auto-persist; CLI does it explicitly)
-      if (save) {
-        const persisted = await persistSynthesis(engine, result, { sourceId, allowedSources });
-        savedSlug = persisted.slug || undefined;  // '' = persist-skip signal (#10)
-        evidenceInserted = persisted.evidenceInserted;
-        for (const w of persisted.warnings) result.warnings.push(w);
-        // #1698 (F2): --save requested but no synthesis was produced (no LLM, empty,
-        // or malformed) → exit non-zero. Saving nothing with exit 0 when the user
-        // explicitly asked to save is itself a silent failure.
-        if (!persisted.slug) {
-          console.error(
-            'think: --save requested but no synthesis was produced (no LLM available ' +
-            'or empty result) — nothing saved.',
-          );
-          process.exit(1);
-        }
-      }
-
-      // #2556: --take was documented (and parsed) since v0.28 but never
-      // executed — runThink ignored opts.take entirely. Persist md-first
-      // through the canonical takes write-through; a refusal (no repo, empty
-      // answer, failed synthesis, write error) exits non-zero (same F2
-      // posture as --save: the user explicitly asked for a persist).
-      if (take && anchor) {
-        const { persistTakeFromSynthesis } = await import('../core/think/persist-take.ts');
-        const persisted = await persistTakeFromSynthesis(engine, result, { anchor });
-        takeRow = persisted.take_row;
-        takePath = persisted.path;
-        for (const w of persisted.warnings) result.warnings.push(w);
-        if (persisted.take_row === null) {
-          console.error(
-            `think: --take requested but no take row was appended (${persisted.warnings.join(', ') || 'unknown reason'}).`,
-          );
-          process.exit(1);
-        }
-      }
     } catch (e) {
       // #1698: an unresolvable explicit --model throws here. Clean non-zero exit
       // with the actionable message, not a stack trace.
@@ -267,7 +269,9 @@ prints what would have been the input (exit 0).
   if (result.synthesis_status === 'no_llm') captureOpNotice(keylessThinkNotice());
   const ignoredModel = /^MODEL_OVERRIDE_IGNORED:(not_allowed|unusable)$/.exec((result.warnings as string[] | undefined)?.find(w => w.startsWith('MODEL_OVERRIDE_IGNORED:')) ?? '');
   if (ignoredModel) captureOpNotice(modelOverrideIgnoredNotice(ignoredModel[1] as 'not_allowed' | 'unusable'));
-  const { persist_base: _persistBase, ...visible } = result;
+  // The publication reference is an internal capability used by the
+  // persistence path, not part of the stable CLI response contract.
+  const { persist_base: _persistBase, codex_publication: _codexPublication, ...visible } = result;
   const { result: jsonDoc, stderr: noticeText } = applyCliOpNotices({
     ...visible,
     cost_usd: costUsd ?? null,
